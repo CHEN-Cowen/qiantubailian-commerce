@@ -24,6 +24,18 @@ Demo 链接以仓库根目录部署到 GitHub Pages 为前提，需先启用 Pag
 前端无需构建，部署说明见 [frontend/README.md](frontend/README.md)。
 
 
+## 本地运行
+
+M01 提供不依赖外部服务的本地工程底座。前置条件：Node.js `22.22.2`。
+
+```bash
+npm test
+npm run check
+npm start
+```
+
+启动后访问 `http://127.0.0.1:3000/`；存活检查为 `GET /healthz`，就绪检查为 `GET /readyz`。服务默认只监听 loopback 地址，当前 `/api/*` 仅返回 `501 NOT_IMPLEMENTED`，不会调用模型或产生费用。可复制 `.env.example` 为 `.env` 调整 `HOST`、`PORT` 和 `NODE_ENV`，真实密钥不要写入仓库。
+
 ## 安装与使用
 
 前置条件：已安装 PilotDeck、可运行 Node.js，并拥有可调用 Seedream 的 Paratera API Key。
