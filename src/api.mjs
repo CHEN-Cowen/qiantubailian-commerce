@@ -14,6 +14,10 @@ import { balanceOf, ledgerEntries } from './credits.mjs';
 import { RETRYABLE_CODES } from './provider.mjs';
 import { createProviderFromEnv } from './providers/index.mjs';
 import { createJobs, TERMINAL_STATES } from './jobs.mjs';
+import {
+  MAX_CANARY_PERCENT, MIN_CANARY_PERCENT, DEFAULT_CANARY_THRESHOLDS, summarizeDataset,
+  summarizeEvaluation, evaluateCanaryHealth, planCanary,
+} from './m09.mjs';
 
 const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
 const now = () => new Date().toISOString();
@@ -102,7 +106,7 @@ export function createApi({
 
     if (resource === 'tenant' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
-      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M07' });
+      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M09' });
     }
     if (resource === 'credits' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
@@ -175,6 +179,18 @@ export function createApi({
       if (rest.length === 3 && rest[2] === 'reviews') {
         requireMethod(method, ['POST']);
         return reviewQualityReportRoute(ctx, req, rest[1], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'eval') return handleEval(ctx, method, rest, req, query, send);
+    if (resource === 'models') {
+      if (rest.length === 1) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getModelRouting(ctx, send);
+      }
+      if (rest.length === 3 && rest[1] === 'canary' && rest[2] === 'health') {
+        requireMethod(method, ['POST']);
+        return evaluateCanaryRoute(ctx, req, send);
       }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
@@ -1143,6 +1159,261 @@ export function createApi({
     });
     req.on('close', cleanup);
     req.on('error', cleanup);
+  }
+
+  // ---------- M09：授权评测集、冠军—挑战者与灰度计划 ----------
+
+  /**
+   * 评测集只接受显式授权的样本：未授权或缺少授权凭据的条目直接拒绝，
+   * 不进入数据集，避免"用未授权素材算出评测结论"。
+   */
+  async function importEvalDataset(ctx, req, send) {
+    const body = await readJson(req);
+    const items = body.items;
+    if (!Array.isArray(items) || items.length === 0) {
+      throw new ApiError(422, 'DATASET_ITEMS_REQUIRED', '需要至少 1 条评测集条目');
+    }
+    if (items.length > 500) throw new ApiError(422, 'DATASET_TOO_LARGE', '单次最多导入 500 条，超过请分批');
+    const seen = new Set();
+    const prepared = items.map((item, index) => {
+      const skuId = String(item?.sku_id ?? '').trim();
+      if (!skuId) throw new ApiError(422, 'DATASET_ITEM_INVALID', `第 ${index + 1} 条缺少 sku_id`);
+      if (seen.has(skuId)) throw new ApiError(422, 'DATASET_DUPLICATE_SKU', `sku_id 重复：${skuId}`);
+      seen.add(skuId);
+      const split = String(item?.split ?? 'eval').trim();
+      if (!['eval', 'holdout'].includes(split)) {
+        throw new ApiError(422, 'DATASET_SPLIT_INVALID', `第 ${index + 1} 条 split 只能是 eval 或 holdout`);
+      }
+      if (item?.licensed !== true) {
+        throw new ApiError(422, 'DATASET_LICENSE_REQUIRED', `第 ${index + 1} 条未声明授权，不得进入评测集`);
+      }
+      const licenseRef = String(item?.license_ref ?? '').trim();
+      if (!licenseRef) {
+        throw new ApiError(422, 'DATASET_LICENSE_REQUIRED', `第 ${index + 1} 条缺少授权凭据 license_ref`);
+      }
+      return {
+        sku_id: skuId,
+        split,
+        licensed: true,
+        license_ref: licenseRef,
+        note: String(item?.note ?? '').slice(0, 200),
+      };
+    });
+
+    const result = await store.mutate(data => {
+      const timestamp = now();
+      for (const item of prepared) {
+        const key = `${ctx.tenantId}:${item.sku_id}`;
+        const existing = data.eval_dataset_items[key];
+        data.eval_dataset_items[key] = existing
+          ? { ...existing, ...item, updated_at: timestamp }
+          : {
+            id: newId('eds'),
+            tenant_id: ctx.tenantId,
+            ...item,
+            created_at: timestamp,
+            updated_at: timestamp,
+            created_by: ctx.actorId,
+          };
+      }
+      return datasetSnapshot(data, ctx.tenantId);
+    });
+    send(201, {
+      tenant_id: ctx.tenantId,
+      imported: prepared.length,
+      dataset_hash: result.hash,
+      summary: result.summary,
+      items: result.items,
+    });
+  }
+
+  async function listEvalDataset(ctx, query, send) {
+    const snapshot = await store.read(data => datasetSnapshot(data, ctx.tenantId));
+    const split = String(query?.get('split') ?? '').trim();
+    const items = split ? snapshot.items.filter(item => item.split === split) : snapshot.items;
+    send(200, {
+      tenant_id: ctx.tenantId,
+      dataset_hash: snapshot.hash,
+      summary: snapshot.summary,
+      items,
+    });
+  }
+
+  async function createEvalReport(ctx, req, send) {
+    const body = await readJson(req);
+    const championModelId = String(body.champion_model_id ?? provider.capabilities().id ?? '').trim();
+    const candidateModelId = String(body.candidate_model_id ?? '').trim();
+    if (!candidateModelId) throw new ApiError(422, 'CANDIDATE_MODEL_REQUIRED', '需要指定候选模型');
+    if (championModelId && candidateModelId === championModelId) {
+      throw new ApiError(422, 'CANDIDATE_EQUALS_CHAMPION', '候选模型不能与冠军相同');
+    }
+    const samples = body.samples;
+    if (!Array.isArray(samples)) throw new ApiError(422, 'SAMPLES_REQUIRED', '需要提供评测样本');
+    if (samples.length > 5_000) throw new ApiError(422, 'SAMPLES_TOO_LARGE', '单次最多 5000 条评测样本');
+
+    const report = await store.mutate(data => {
+      const snapshot = datasetSnapshot(data, ctx.tenantId);
+      const summary = summarizeEvaluation({
+        datasetItems: snapshot.items,
+        samples,
+        championModelId: championModelId || null,
+        candidateModelId,
+      });
+      const record = {
+        id: newId('evr'),
+        tenant_id: ctx.tenantId,
+        dataset_hash: snapshot.hash,
+        created_at: now(),
+        created_by: ctx.actorId,
+        ...summary,
+      };
+      data.eval_reports[record.id] = record;
+      return record;
+    });
+    send(201, { report });
+  }
+
+  async function listEvalReports(ctx, query, send) {
+    const status = String(query?.get('status') ?? '').trim();
+    const candidate = String(query?.get('candidate_model_id') ?? '').trim();
+    const reports = await store.read(data => Object.values(data.eval_reports)
+      .filter(item => item.tenant_id === ctx.tenantId)
+      .filter(item => (status ? item.status === status : true))
+      .filter(item => (candidate ? item.candidate_model_id === candidate : true))
+      .sort((left, right) => right.created_at.localeCompare(left.created_at))
+      .map(item => ({ ...item, dataset_stale: item.dataset_hash !== datasetHash(data, ctx.tenantId) })));
+    send(200, { tenant_id: ctx.tenantId, reports });
+  }
+
+  async function getEvalReport(ctx, reportId, send) {
+    const report = await store.read(data => {
+      const found = data.eval_reports[reportId];
+      if (!found || found.tenant_id !== ctx.tenantId) return null;
+      return { ...found, dataset_stale: found.dataset_hash !== datasetHash(data, ctx.tenantId) };
+    });
+    if (!report) throw new ApiError(404, 'NOT_FOUND', '评测报告不存在');
+    send(200, { report });
+  }
+
+  /**
+   * 模型路由视图。冠军永远是当前实际注册并按环境选中的 Provider；
+   * 候选只有在该 Provider 就是候选本身时才视为"Adapter 已注册"，否则灰度必须被阻断。
+   */
+  async function getModelRouting(ctx, send) {
+    const capabilities = provider.capabilities();
+    const championModelId = String(capabilities.id ?? 'unknown');
+    const data = await store.read(data => {
+      const currentHash = datasetHash(data, ctx.tenantId);
+      const byCandidate = new Map();
+      for (const report of Object.values(data.eval_reports)) {
+        if (report.tenant_id !== ctx.tenantId) continue;
+        const previous = byCandidate.get(report.candidate_model_id);
+        if (!previous || report.created_at > previous.created_at) byCandidate.set(report.candidate_model_id, report);
+      }
+      return { currentHash, byCandidate: [...byCandidate.values()] };
+    });
+
+    const candidates = data.byCandidate.map(report => {
+      const adapterRegistered = report.candidate_model_id === championModelId;
+      return {
+        model_id: report.candidate_model_id,
+        latest_report_id: report.id,
+        report_status: report.status,
+        dataset_stale: report.dataset_hash !== data.currentHash,
+        decision: report.decision,
+        adapter_registered: adapterRegistered,
+        canary: planCanary({
+          decision: report.dataset_hash !== data.currentHash ? { promote: false } : report.decision,
+          adapterAvailable: adapterRegistered,
+        }),
+      };
+    });
+    const championCanary = planCanary({ decision: { promote: false }, adapterAvailable: false });
+    send(200, {
+      tenant_id: ctx.tenantId,
+      champion: {
+        model_id: championModelId,
+        mode: providerInfo.mode,
+        acceptance: providerInfo.acceptance,
+        simulated: capabilities.simulated === true,
+        capabilities,
+      },
+      candidates,
+      canary: {
+        max_percent: MAX_CANARY_PERCENT,
+        min_percent: MIN_CANARY_PERCENT,
+        active: false,
+        plan: championCanary,
+      },
+      note: '灰度最多 5%；候选未胜出或没有真实 Adapter 时不启用灰度，也不能把候选写成默认模型。',
+    });
+  }
+
+  /** 灰度健康检查：任一阈值触达即要求回滚；样本不足同样不能判定健康。 */
+  async function evaluateCanaryRoute(ctx, req, send) {
+    const body = await readJson(req);
+    const samples = body.samples;
+    if (!Array.isArray(samples)) throw new ApiError(422, 'SAMPLES_REQUIRED', '需要提供灰度观测样本');
+    if (samples.length > 5_000) throw new ApiError(422, 'SAMPLES_TOO_LARGE', '单次最多 5000 条灰度样本');
+    const thresholds = { ...DEFAULT_CANARY_THRESHOLDS };
+    for (const key of Object.keys(thresholds)) {
+      if (body.thresholds?.[key] === undefined) continue;
+      const value = Number(body.thresholds[key]);
+      if (!Number.isFinite(value) || value < 0) {
+        throw new ApiError(422, 'CANARY_THRESHOLD_INVALID', `阈值 ${key} 必须是非负数`);
+      }
+      thresholds[key] = value;
+    }
+    const health = evaluateCanaryHealth({ samples, thresholds });
+    send(200, {
+      tenant_id: ctx.tenantId,
+      health,
+      rollback_required: health.healthy === false,
+      note: health.healthy
+        ? '灰度指标未触达回滚阈值；样本量足够前不得据此宣布候选可转正。'
+        : '灰度已触达回滚阈值，必须停止候选并回退到冠军模型。',
+    });
+  }
+
+  function datasetSnapshot(data, tenantId) {
+    const items = Object.values(data.eval_dataset_items)
+      .filter(item => item.tenant_id === tenantId)
+      .sort((left, right) => left.sku_id.localeCompare(right.sku_id))
+      .map(item => ({
+        sku_id: item.sku_id,
+        split: item.split,
+        licensed: item.licensed,
+        license_ref: item.license_ref,
+        note: item.note ?? '',
+        updated_at: item.updated_at,
+      }));
+    return { items, summary: summarizeDataset(items), hash: datasetHash(data, tenantId) };
+  }
+
+  function datasetHash(data, tenantId) {
+    const items = Object.values(data.eval_dataset_items)
+      .filter(item => item.tenant_id === tenantId)
+      .map(item => [item.sku_id, item.split, item.license_ref])
+      .sort((left, right) => left[0].localeCompare(right[0]));
+    return fingerprintOf(items);
+  }
+
+  function handleEval(ctx, method, rest, req, query, send) {
+    if (rest.length === 2 && rest[1] === 'dataset') {
+      if (method === 'POST') return importEvalDataset(ctx, req, send);
+      requireMethod(method, ['GET', 'HEAD']);
+      return listEvalDataset(ctx, query, send);
+    }
+    if (rest.length === 2 && rest[1] === 'reports') {
+      if (method === 'POST') return createEvalReport(ctx, req, send);
+      requireMethod(method, ['GET', 'HEAD']);
+      return listEvalReports(ctx, query, send);
+    }
+    if (rest.length === 3 && rest[1] === 'reports') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return getEvalReport(ctx, rest[2], send);
+    }
+    throw new ApiError(404, 'NOT_FOUND', '接口不存在');
   }
 
   function resolveSpecRecord(data, projectId, rawVersion) {

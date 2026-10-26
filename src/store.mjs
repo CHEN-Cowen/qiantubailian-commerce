@@ -18,12 +18,15 @@ const TABLES = Object.freeze([
   'quality_reports',
   // M08：正式导出记录（清单、摘要、包哈希），只增不改
   'exports',
+  // M09：授权评测集、评测报告与模型候选（冠军由当前 Provider 决定）
+  'eval_dataset_items', 'eval_reports', 'model_candidates', 'model_routing',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
   projects: {}, assets: {}, truth_versions: {}, brand_kits: {}, brand_kit_versions: {}, specs: {},
   quotes: {}, runs: {}, events: {}, credit_accounts: {}, credit_entries: {}, generation_records: {},
   quality_reports: {}, exports: {},
+  eval_dataset_items: {}, eval_reports: {}, model_candidates: {}, model_routing: {},
 });
 
 function normalize(raw) {
