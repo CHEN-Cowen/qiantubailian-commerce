@@ -17,10 +17,15 @@ import { createHash, randomBytes } from 'node:crypto';
 import { ApiError } from './errors.mjs';
 import { appendEntry, balanceOf } from './credits.mjs';
 import { isRetryable } from './provider.mjs';
+import { matchChannelRule } from './catalog.mjs';
 import {
   MASK_VERSION, buildReferencePlan, checkReferenceCapacity, checkSubjectProtection, compositeSubject,
   createSubjectMask, makeFailedGenerationRecord, makeGenerationRecord, makeRejectedGenerationRecord,
 } from './m06.mjs';
+import {
+  aggregateQualityStatus, applyHumanReview, computeReportValidity, evaluateGenerationQuality,
+  makeQaFailureReport, presentReport,
+} from './m07.mjs';
 
 export const RUN_SCHEMA_VERSION = 1;
 export const EVENT_SCHEMA_VERSION = 1;
@@ -34,7 +39,7 @@ export const TERMINAL_STATES = new Set(['completed', 'limit_reached', 'failed', 
 
 const RUN_STAGES = new Set([
   'spec_confirmed', 'budget_reserved', 'queued', 'generation',
-  'hard_check', 'revision', 'settled', 'cancelled',
+  'hard_check', 'revision', 'human_review', 'settled', 'cancelled',
 ]);
 
 function pushEvent(data, run, { stage, status, payload = {}, attemptId = null, iteration = run.iteration, at }) {
@@ -583,6 +588,107 @@ export function createJobs({
         format_satisfied: formatContract.satisfied,
       },
     }));
+
+    // M07：产出文件立刻做 Commerce QA；质量结论独立于"生成成功"，
+    // 检查结果写入 quality_reports 并驱动 run.quality_status。
+    await evaluateAttemptQuality(data, run, attempt, target, {
+      outputBytes, ext, outputHash, composite, recordId: record.id,
+    }, events, at);
+  }
+
+  // ---------- M07：生成后 Commerce QA 与人工复核 ----------
+  // QA 只读冻结快照和真实输出文件；不信任供应商"已完成"之类的口头状态。
+
+  function specOfRun(data, run) {
+    if (!run) return null;
+    return Object.values(data.specs ?? {}).find(item =>
+      item.tenant_id === run.tenant_id && item.project_id === run.project_id
+      && item.version === run.spec_ref?.version) ?? null;
+  }
+
+  function truthOfRun(data, run, spec) {
+    if (!run) return null;
+    const version = spec?.product_truth?.version ?? null;
+    if (!version) return null;
+    return Object.values(data.truth_versions ?? {}).find(item =>
+      item.tenant_id === run.tenant_id && item.project_id === run.project_id
+      && item.version === version) ?? null;
+  }
+
+  function channelOfRun(data, run, spec, at) {
+    const project = data.projects?.[run?.project_id] ?? null;
+    if (!spec?.channel?.platform) {
+      return { rule: null, status: 'missing', reasons: ['未选择目标平台，无法匹配平台规则'] };
+    }
+    return matchChannelRule({ platform: spec.channel.platform, category: project?.category ?? '', at });
+  }
+
+  function activeAssetsOf(data, run) {
+    return Object.values(data.assets ?? {}).filter(item =>
+      item.tenant_id === run.tenant_id && item.project_id === run.project_id
+      && item.role_status === 'active');
+  }
+
+  /** 任务级质量只汇总最新报告，并区分"还没有报告"与"检查通过"。 */
+  function refreshRunQuality(data, run) {
+    const reports = Object.values(data.quality_reports ?? {}).filter(item =>
+      item.tenant_id === run.tenant_id && item.run_id === run.id);
+    const succeeded = run.deliverables.filter(item => item.status === 'succeeded').length;
+    run.quality_status = aggregateQualityStatus(reports, {
+      requireAllDeliverables: true,
+      deliverableCount: succeeded,
+    });
+  }
+
+  async function evaluateAttemptQuality(data, run, attempt, target, {
+    outputBytes, ext, outputHash, composite, recordId,
+  }, events, at) {
+    const spec = specOfRun(data, run);
+    const truth = truthOfRun(data, run, spec);
+    const channel = channelOfRun(data, run, spec, at);
+    const maskBytes = run.subject_context?.mask_sha256
+      ? await store.readBlob(run.subject_context.mask_sha256, 'png') : null;
+    const cutoutBytes = run.subject_context?.cutout_sha256
+      ? await store.readBlob(run.subject_context.cutout_sha256, 'png') : null;
+    let report;
+    try {
+      report = evaluateGenerationQuality({
+        run, deliverable: target, attempt, spec, truth, channel,
+        output: {
+          bytes: outputBytes,
+          format: ext,
+          sha256: outputHash,
+          width: attempt.result?.output?.width,
+          height: attempt.result?.output?.height,
+        },
+        subject: { maskBytes, cutoutBytes, composite },
+        assets: activeAssetsOf(data, run),
+        now: at,
+      });
+    } catch (error) {
+      // 检查器自身异常同样不能算通过：落一条"待复核"，并由人工在修复后重检
+      report = makeQaFailureReport({ run, deliverable: target, attempt, spec, truth, error, now: at });
+    }
+    report.generation_record_id = recordId ?? null;
+    data.quality_reports[report.id] = report;
+    attempt.quality_report_id = report.id;
+    if (target) target.quality_report_id = report.id;
+    if (recordId && data.generation_records[recordId]) data.generation_records[recordId].qa_report_id = report.id;
+    refreshRunQuality(data, run);
+    events.push(pushEvent(data, run, {
+      stage: 'hard_check', status: report.decision, at, attemptId: attempt.id, iteration: attempt.iteration,
+      payload: {
+        deliverable_id: attempt.deliverable_id,
+        report_id: report.id,
+        machine_decision: report.machine_decision,
+        decision: report.decision,
+        blocked_codes: (report.decision_reasons?.blocked ?? []).map(item => item.code),
+        review_required: (report.decision_reasons?.review_required ?? []).map(item => item.code),
+        platform_compliance: report.platform_compliance,
+        quality_status: run.quality_status,
+      },
+    }));
+    return report;
   }
 
   async function settleAttemptFailure(data, run, attempt, error, events, at) {
@@ -821,6 +927,8 @@ export function createJobs({
       run.terminal_reason = 'attempt_or_budget_limit_reached';
     }
     run.pending_best = succeeded.map(item => item.deliverable_id);
+    // M07：终态前按最新报告重算质量结论，避免报告与任务状态不一致
+    refreshRunQuality(data, run);
     await releaseRemaining(data, run, events, at, '任务终态，释放未发生的额度');
     referenceCache.delete(run.id);
     events.push(pushEvent(data, run, {
@@ -1042,9 +1150,138 @@ export function createJobs({
     });
   }
 
+  // ---------- M07：质量报告读取与人工复核 ----------
+  function latestTruthOfProject(data, tenantId, projectId) {
+    let latest = null;
+    for (const item of Object.values(data.truth_versions ?? {})) {
+      if (item.tenant_id !== tenantId || item.project_id !== projectId) continue;
+      if (!latest || item.version > latest.version) latest = item;
+    }
+    return latest;
+  }
+
+  function reportSnapshotContext(data, report) {
+    const spec = Object.values(data.specs ?? {}).find(item =>
+      item.tenant_id === report.tenant_id && item.project_id === report.project_id
+      && item.version === report.spec_ref?.version) ?? null;
+    // 有效性判断必须对照*当前*事实与套件；报告里的 truth_ref 只是生成时的冻结证据。
+    const truth = latestTruthOfProject(data, report.tenant_id, report.project_id);
+    const project = data.projects?.[report.project_id] ?? null;
+    const channel = spec?.channel?.platform
+      ? matchChannelRule({ platform: spec.channel.platform, category: project?.category ?? '', at: clock() })
+      : { rule: null, status: 'missing', reasons: ['未选择目标平台，无法匹配平台规则'] };
+    const kit = report.brand_kit_ref ? data.brand_kits?.[report.brand_kit_ref.id] ?? null : null;
+    return {
+      spec,
+      truth,
+      channel,
+      brandKitVersion: kit?.version ?? null,
+      run: data.runs?.[report.run_id] ?? null,
+    };
+  }
+
+  async function buildQualityReportView(report) {
+    const context = await store.read(data => reportSnapshotContext(data, report));
+    let outputExists = false;
+    if (report.output_file?.hash) {
+      const blob = await store.readBlob(report.output_file.hash, report.output_file.format ?? 'png');
+      outputExists = Boolean(blob);
+    }
+    const validity = computeReportValidity({
+      report,
+      spec: context.spec,
+      truth: context.truth,
+      brandKitVersion: context.brandKitVersion,
+      channel: context.channel,
+      outputExists,
+    });
+    return {
+      report: presentReport(report, validity),
+      run: context.run
+        ? {
+          id: context.run.id,
+          status: context.run.status,
+          quality_status: context.run.quality_status,
+          terminal_reason: context.run.terminal_reason ?? null,
+        }
+        : null,
+    };
+  }
+
+  async function listQualityReports(ctx, { runId = null, projectId = null } = {}) {
+    const reports = await store.read(data => {
+      if (runId) findRun(data, ctx, runId);
+      return Object.values(data.quality_reports ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .filter(item => !runId || item.run_id === runId)
+        .filter(item => !projectId || item.project_id === projectId)
+        .sort((left, right) => String(right.checked_at).localeCompare(String(left.checked_at)));
+    });
+    const views = await Promise.all(reports.map(report => buildQualityReportView(report)));
+    return { reports: views.map(view => view.report), total: views.length };
+  }
+
+  async function getQualityReport(ctx, reportId) {
+    const report = await store.read(data => {
+      const found = data.quality_reports?.[reportId];
+      if (!found || found.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '质量报告不存在');
+      }
+      return found;
+    });
+    return buildQualityReportView(report);
+  }
+
+  /**
+   * 人工复核：只允许裁决"unknown 且可裁决"的检查项，并记录人、理由与证据。
+   * 报告若已失效（事实/规则/文件变化）必须先重新检查，不能对旧报告做确认。
+   */
+  async function reviewQualityReport(ctx, reportId, { decisions = [], note = null } = {}) {
+    const outcome = await store.mutate(async data => {
+      const report = data.quality_reports?.[reportId];
+      if (!report || report.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '质量报告不存在');
+      }
+      const context = reportSnapshotContext(data, report);
+      let outputExists = false;
+      if (report.output_file?.hash) {
+        outputExists = Boolean(await store.readBlob(report.output_file.hash, report.output_file.format ?? 'png'));
+      }
+      const validity = computeReportValidity({
+        report,
+        spec: context.spec,
+        truth: context.truth,
+        brandKitVersion: context.brandKitVersion,
+        channel: context.channel,
+        outputExists,
+      });
+      if (validity.validity !== 'current') {
+        throw new ApiError(409, 'REPORT_STALE', '质量报告已失效，需重新检查后再复核', { reasons: validity.reasons });
+      }
+      applyHumanReview(report, { reviewer: ctx.actorId, decisions, note, now: clock() });
+      const run = context.run;
+      if (run) {
+        refreshRunQuality(data, run);
+        pushEvent(data, run, {
+          stage: 'human_review', status: 'reviewed', at: clock(),
+          payload: {
+            report_id: report.id,
+            reviewer: ctx.actorId,
+            codes: decisions.map(item => item.code),
+            decision: report.decision,
+            quality_status: run.quality_status,
+          },
+        });
+      }
+      return { report_id: report.id };
+    });
+    return getQualityReport(ctx, outcome.report_id);
+  }
+
   return {
     start, stop, createRun, cancelRun, confirmBudget, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
     listGenerationRecords, getGenerationRecord,
+    listQualityReports, getQualityReport, reviewQualityReport,
     get activeSubscriptions() { return listeners.size; },
   };
 }

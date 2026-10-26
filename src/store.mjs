@@ -14,11 +14,14 @@ const TABLES = Object.freeze([
   'quotes', 'runs', 'events', 'credit_accounts', 'credit_entries',
   // M06：生成记录（模型、请求、用量、成本、版本与输出哈希），只增不改
   'generation_records',
+  // M07：Commerce QA 报告（检查项、证据、机器结论与人工复核），只增不改
+  'quality_reports',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
   projects: {}, assets: {}, truth_versions: {}, brand_kits: {}, brand_kit_versions: {}, specs: {},
   quotes: {}, runs: {}, events: {}, credit_accounts: {}, credit_entries: {}, generation_records: {},
+  quality_reports: {},
 });
 
 function normalize(raw) {

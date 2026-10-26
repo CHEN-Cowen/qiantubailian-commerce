@@ -355,7 +355,7 @@ test('M05 成功任务：全部交付成功、只结算成功尝试、余量释�
 
   const run = await waitTerminal(port, created.json.run.id);
   assert.equal(run.status, 'completed');
-  assert.equal(run.quality_status, 'not_checked', '完成不等于质量通过');
+  assert.notEqual(run.quality_status, 'publishable', '完成不等于质量通过：质量结论由 Commerce QA 单独给出');
   assert.equal(run.deliverables.length, quote.lines.length);
   assert.ok(run.deliverables.every(item => item.status === 'succeeded'));
   for (const attempt of run.attempts) {

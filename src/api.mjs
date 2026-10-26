@@ -100,7 +100,7 @@ export function createApi({
 
     if (resource === 'tenant' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
-      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M06' });
+      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M07' });
     }
     if (resource === 'credits' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
@@ -126,6 +126,25 @@ export function createApi({
       if (rest[2] === 'generation-records') {
         requireMethod(method, ['GET', 'HEAD']);
         return jobs.listGenerationRecords(ctx, { runId: rest[1] }).then(result => send(200, result));
+      }
+      if (rest[2] === 'quality-reports') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.listQualityReports(ctx, { runId: rest[1] }).then(result => send(200, result));
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'quality-reports') {
+      if (rest.length === 1) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return listQualityReportsRoute(ctx, query, send);
+      }
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.getQualityReport(ctx, rest[1]).then(result => send(200, result));
+      }
+      if (rest.length === 3 && rest[2] === 'reviews') {
+        requireMethod(method, ['POST']);
+        return reviewQualityReportRoute(ctx, req, rest[1], send);
       }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
@@ -873,6 +892,26 @@ export function createApi({
     const projectId = String(query?.get('project_id') ?? '').trim() || null;
     return jobs.listGenerationRecords(ctx, { runId, projectId })
       .then(result => send(200, { ...result, provider: providerInfo }));
+  }
+
+  // M07：质量报告与人工复核。人工裁决的校验与证据校验在 m07 内完成，
+  // 这里只负责解析请求体并禁止客户端伪造复核人（复核人取自租户上下文）。
+  function listQualityReportsRoute(ctx, query, send) {
+    const runId = String(query?.get('run_id') ?? '').trim() || null;
+    const projectId = String(query?.get('project_id') ?? '').trim() || null;
+    return jobs.listQualityReports(ctx, { runId, projectId }).then(result => send(200, result));
+  }
+
+  async function reviewQualityReportRoute(ctx, req, reportId, send) {
+    const body = await readJson(req);
+    if (body && Object.prototype.hasOwnProperty.call(body, 'reviewer')) {
+      throw new ApiError(400, 'REVIEWER_NOT_CLIENT_SUPPLIED', '复核人由租户上下文确定，不能由客户端填写');
+    }
+    const result = await jobs.reviewQualityReport(ctx, reportId, {
+      decisions: body?.decisions ?? [],
+      note: body?.note ?? null,
+    });
+    send(200, result);
   }
 
   async function createQuote(ctx, req, send) {
