@@ -17,6 +17,10 @@ import { createHash, randomBytes } from 'node:crypto';
 import { ApiError } from './errors.mjs';
 import { appendEntry, balanceOf } from './credits.mjs';
 import { isRetryable } from './provider.mjs';
+import {
+  MASK_VERSION, buildReferencePlan, checkReferenceCapacity, checkSubjectProtection, compositeSubject,
+  createSubjectMask, makeFailedGenerationRecord, makeGenerationRecord, makeRejectedGenerationRecord,
+} from './m06.mjs';
 
 export const RUN_SCHEMA_VERSION = 1;
 export const EVENT_SCHEMA_VERSION = 1;
@@ -70,6 +74,9 @@ export function createJobs({
   let running = false;
   const wake = new Set();
   let idleWaiters = [];
+  // M06：参考图 data URI 只在内存里用于提交，绝不写入 runs.json（体积过大）。
+  // 进程重启后缓存为空；真实 Provider 会因此明确拒绝本轮提交，而不是静默少发参考图。
+  const referenceCache = new Map();
 
   // ---------- 事件订阅：仅内存，用于 SSE；断线由 sequence 续传兜底 ----------
   const listeners = new Map(); // listenerId -> { runId, handler }
@@ -90,6 +97,95 @@ export function createJobs({
     for (const resolve of pending) resolve();
   }
 
+  // ---------- M06：主体上下文（素材 → 掩码 → 参考图职责） ----------
+  /**
+   * 在创建任务时一次性准备好主体上下文：掩码、去背图、参考图职责与图序。
+   * 任何一步不能确认就返回 available=false，由能力闸口决定拒绝还是模拟降级。
+   * 去背图只落盘用于本地合成，不进入发送给供应商的参考列表。
+   */
+  async function prepareSubjectContext({ ctx, project }) {
+    const assets = await store.read(data => Object.values(data.assets ?? {})
+      .filter(item => item.tenant_id === ctx.tenantId && item.project_id === project.id && item.role_status === 'active'));
+    const subject = assets.find(item => item.role === 'subject') ?? null;
+    const packaging = assets.find(item => item.role === 'packaging') ?? null;
+    const styles = assets.filter(item => item.role === 'style');
+    const capabilities = provider.capabilities();
+    const maxReferences = Number.isFinite(capabilities.max_references) ? capabilities.max_references : Infinity;
+
+    if (!subject) {
+      return {
+        protection: { available: false, reason: 'MISSING_SUBJECT_ASSET', message: '项目没有生效的主体素材，无法保证商品主体不被改写' },
+        references: [], reference_images: [], dropped: [],
+        // 模拟 Provider 允许降级演练，掩码引用会明确标注 simulated，绝不含糊成已验证
+        mask_ref: capabilities.simulated === true ? 'mask:simulated:MISSING_SUBJECT_ASSET' : null,
+      };
+    }
+    const subjectBytes = await store.readBlob(subject.sha256, subject.ext);
+    if (!subjectBytes) {
+      return {
+        protection: { available: false, reason: 'SUBJECT_BLOB_MISSING', message: '主体素材文件已不可用，请重新上传后再生成' },
+        references: [], reference_images: [], dropped: [],
+        mask_ref: capabilities.simulated === true ? 'mask:simulated:SUBJECT_BLOB_MISSING' : null,
+      };
+    }
+    const mask = createSubjectMask({ bytes: subjectBytes, mime: subject.mime });
+    const plan = buildReferencePlan({
+      subjectAsset: subject, packagingAsset: packaging, styleAssets: styles,
+      cutoutSha256: mask.available ? mask.cutout_sha256 : null, maxReferences,
+    });
+    if (!mask.available) {
+      return {
+        protection: mask,
+        references: plan.references,
+        reference_images: [],
+        dropped: plan.dropped,
+        capacity_exceeded: plan.capacity_exceeded,
+        required_count: plan.required_count,
+        mask_ref: capabilities.simulated === true ? `mask:simulated:${mask.reason}` : null,
+      };
+    }
+
+    const maskFile = await store.putBlob(mask.maskBytes, mask.sha256, 'png');
+    const cutoutFile = await store.putBlob(mask.cutoutBytes, mask.cutout_sha256, 'png');
+
+    // 参考图按职责顺序转成 data URI；只有 sent_to_provider 的才编码，去背图永远不发送
+    const referenceImages = [];
+    for (const reference of plan.references) {
+      if (reference.sent_to_provider === false || !reference.asset_id) continue;
+      const asset = assets.find(item => item.id === reference.asset_id);
+      if (!asset) continue;
+      const bytes = await store.readBlob(asset.sha256, asset.ext);
+      if (!bytes) continue;
+      referenceImages.push({
+        index: reference.index,
+        role: reference.role,
+        asset_id: reference.asset_id,
+        mime: asset.mime,
+        data_uri: `data:${asset.mime};base64,${bytes.toString('base64')}`,
+      });
+    }
+
+    return {
+      protection: {
+        ...mask,
+        ref: `mask:verified:${mask.sha256}`,
+        mask_file: maskFile,
+        cutout_file: cutoutFile,
+      },
+      mask_ref: `mask:verified:${mask.sha256}`,
+      mask_sha256: mask.sha256,
+      mask_coverage: mask.coverage,
+      mask_method: mask.method,
+      cutout_sha256: mask.cutout_sha256,
+      cutout_file: cutoutFile,
+      references: plan.references,
+      reference_images: referenceImages,
+      dropped: plan.dropped,
+      capacity_exceeded: plan.capacity_exceeded,
+      required_count: plan.required_count,
+    };
+  }
+
   // ---------- 创建任务：先预留，再入队 ----------
   async function createRun({ ctx, run, project, spec, quote, idempotencyKey, scenario = 'success', fingerprint = null }) {
     const existing = await store.read(data => Object.values(data.runs ?? {})
@@ -102,10 +198,31 @@ export function createJobs({
       return { run: existing, replayed: true };
     }
 
-    const validation = provider.validate({
-      request_hash: 'capability-check', target_width: 0, target_height: 0, references: 0,
-    });
+    // M06：创建时只记录 Provider 能力声明；真正的请求级能力校验在每次提交前做，
+    // 因为尺寸、参考图与掩码要等具体交付物确定后才能比对。
+    const capabilities = provider.capabilities();
+    const validation = {
+      ok: true,
+      checked_at: new Date(clock()).toISOString(),
+      capabilities,
+    };
 
+    // M06：先备好主体上下文再做能力闸口。真实 Provider 如果既不能接掩码、
+    // 也不能做已验收的本地合成，就在创建阶段直接拒绝（422），不入队、不收费。
+    const subjectContext = await prepareSubjectContext({ ctx, project });
+    const protectionGate = checkSubjectProtection({
+      capabilities, protection: subjectContext.protection, required: true,
+    });
+    if (!protectionGate.ok) {
+      throw new ApiError(422, protectionGate.code, protectionGate.message, protectionGate.details);
+    }
+    const capacityGate = checkReferenceCapacity({ capabilities, plan: subjectContext });
+    if (!capacityGate.ok) {
+      throw new ApiError(422, capacityGate.code, capacityGate.message, capacityGate.details);
+    }
+
+    // data URI 只在内存里保留给本轮提交使用，不进持久化
+    referenceCache.set(run.id, subjectContext.reference_images ?? []);
     const created = await store.mutate(data => {
       const duplicated = Object.values(data.runs ?? {})
         .find(item => item.tenant_id === ctx.tenantId && item.idempotency_key === idempotencyKey);
@@ -130,6 +247,7 @@ export function createJobs({
       });
       if (!reserve.applied) throw new Error('预算预留未生效');
 
+      const specDeliverables = new Map((spec.deliverables ?? []).map(item => [item.id, item]));
       const record = {
         id: run.id,
         tenant_id: ctx.tenantId,
@@ -164,15 +282,55 @@ export function createJobs({
         },
         provider_validation: validation,
         scenario,
-        deliverables: quote.lines.map(line => ({
-          deliverable_id: line.deliverable_id,
-          label: line.label,
-          count: line.count,
-          credits: line.credits,
-          status: 'pending',
-          attempts_used: 0,
-          succeeded_attempt_id: null,
-        })),
+        deliverables: quote.lines.map(line => {
+          const detail = specDeliverables.get(line.deliverable_id) ?? null;
+          return {
+            deliverable_id: line.deliverable_id,
+            label: line.label,
+            type: line.type ?? detail?.type ?? null,
+            count: line.count,
+            credits: line.credits,
+            // M06：实际尺寸与格式取自冻结快照，不再硬编码 1024×1024
+            width: detail?.width ?? 1024,
+            height: detail?.height ?? 1024,
+            ratio: detail?.ratio ?? null,
+            formats: Array.isArray(detail?.formats) ? [...detail.formats] : ['png'],
+            prompt: `生成「${line.label}」；商品主体必须与参考图完全一致，不得改变形状、文字、Logo 与颜色。`,
+            status: 'pending',
+            attempts_used: 0,
+            succeeded_attempt_id: null,
+          };
+        }),
+        // M06：主体保护要求与允许的变换（区域与变换版本随任务冻结，后续可追溯）
+        subject_protection: {
+          required: true,
+          mode: protectionGate.mode,
+          mask_version: MASK_VERSION,
+          protected_regions: ['shape', 'text', 'logo', 'color'],
+          allowed_transforms: ['lighting', 'shadow'],
+          warning: protectionGate.warning ?? null,
+          note: '商品主体、包装文字与 Logo 优先保留原始像素；允许的光照/阴影变换会被记录',
+        },
+        // 掩码哈希、参考图职责与图序随任务冻结；去背图只用于本地合成，不发送给供应商
+        subject_context: {
+          mode: protectionGate.mode,
+          warning: protectionGate.warning ?? null,
+          available: subjectContext.protection?.available === true,
+          reason: subjectContext.protection?.available === true ? null : subjectContext.protection?.reason ?? null,
+          message: subjectContext.protection?.available === true ? null : subjectContext.protection?.message ?? null,
+          mask_ref: subjectContext.mask_ref ?? null,
+          mask_sha256: subjectContext.mask_sha256 ?? null,
+          mask_coverage: subjectContext.mask_coverage ?? null,
+          mask_method: subjectContext.mask_method ?? null,
+          cutout_sha256: subjectContext.cutout_sha256 ?? null,
+          references: subjectContext.references ?? [],
+          // 只落盘载荷元信息；base64 留在 referenceCache，避免把 runs.json 撑大
+          reference_images: (subjectContext.reference_images ?? []).map(({ data_uri, ...rest }) => rest),
+          reference_payload_ready: (subjectContext.reference_images ?? []).length > 0,
+          dropped: subjectContext.dropped ?? [],
+          required_count: subjectContext.required_count ?? 0,
+        },
+        generation_record_ids: [],
         attempts: [],
         terminal_reason: null,
         pending_confirmation: null,
@@ -337,18 +495,69 @@ export function createJobs({
     }
     attempt.status = 'succeeded';
     attempt.ended_at = new Date(at).toISOString();
+    const target = run.deliverables.find(item => item.deliverable_id === attempt.deliverable_id);
+
+    // M06：声明本地合成能力时，用掩码把原始商品像素贴回生成图；否则保持供应商原图
+    let outputBytes = result.output.bytes;
+    let composite = null;
+    if (run.subject_context?.mode === 'composite' && run.subject_context.cutout_sha256) {
+      const cutout = await store.readBlob(run.subject_context.cutout_sha256, 'png');
+      const mask = run.subject_context.mask_sha256
+        ? await store.readBlob(run.subject_context.mask_sha256, 'png') : null;
+      const composed = compositeSubject({ outputBytes, cutoutBytes: cutout, maskBytes: mask });
+      composite = {
+        available: composed.available,
+        applied: composed.applied === true,
+        reason: composed.reason ?? null,
+        sha256: composed.sha256 ?? null,
+        meta: composed.meta ?? null,
+      };
+      if (composed.applied) outputBytes = composed.bytes;
+    }
+
+    // 扩展名以供应商实际格式为准；只有本地合成或供应商未声明格式时才回落 png
+    const ext = composite?.applied ? 'png' : (result.output.format ?? 'png');
+    const outputHash = composite?.applied ? composite.sha256 : result.output.sha256;
+    const requestedFormats = target?.formats ?? ['png'];
+    const formatContract = {
+      requested: [...requestedFormats],
+      actual: ext,
+      satisfied: requestedFormats.includes(ext),
+      note: '以实际输出格式为准；不一致时记录但不篡改供应商产物',
+    };
+
     attempt.result = {
-      provider: result.provider,
+      provider: result.provider ?? attempt.provider_meta?.id ?? null,
       model: result.model,
       model_version: result.model_version,
       provider_request_id: result.provider_request_id,
+      provider_job_id: attempt.provider_job_id,
       latency_ms: result.latency_ms,
-      output: { ...result.output, bytes: undefined },
-      output_hash: result.output.sha256,
+      usage: result.usage ?? null,
+      cost: result.cost ?? null,
+      provider_meta: attempt.provider_meta,
+      output: { ...result.output, bytes: undefined, format: ext, sha256: outputHash },
+      output_hash: outputHash,
+      format_contract: formatContract,
+      subject_protection: attempt.subject_protection,
+      composite,
     };
     attempt.charged_credits = attempt.planned_credits;
-    const file = await store.putBlob(result.output.bytes, result.output.sha256, 'png');
-    attempt.output_file = { path: file, bytes: result.output.bytes.length, hash: result.output.sha256 };
+    const file = await store.putBlob(outputBytes, outputHash, ext);
+    attempt.output_file = { path: file, bytes: outputBytes.length, hash: outputHash, format: ext };
+
+    // M06：每次真实/模拟调用都留一条可追溯生成记录
+    const record = makeGenerationRecord({
+      run, attempt, request: attempt.provider_request, provider: attempt.provider_meta,
+      result: { ...result, model: result.model, model_version: result.model_version },
+      output: { format: ext, width: result.output.width, height: result.output.height, bytes: outputBytes, sha256: outputHash },
+      protection: attempt.subject_protection,
+      composite: composite ? { applied: composite.applied, sha256: composite.sha256, ...(composite.meta ?? {}) } : null,
+      at,
+    });
+    record.format_contract = formatContract;
+    data.generation_records[record.id] = record;
+    run.generation_record_ids.push(record.id);
 
     const capture = appendEntry(data, {
       type: 'capture',
@@ -363,11 +572,16 @@ export function createJobs({
       at,
     });
     run.budget.captured_credits += capture.applied ? attempt.planned_credits : 0;
-    const target = run.deliverables.find(item => item.deliverable_id === attempt.deliverable_id);
     if (target) { target.status = 'succeeded'; target.succeeded_attempt_id = attempt.id; }
     events.push(pushEvent(data, run, {
       stage: 'generation', status: 'attempt_succeeded', at, attemptId: attempt.id, iteration: attempt.iteration,
-      payload: { deliverable_id: attempt.deliverable_id, credits: attempt.planned_credits, output_hash: result.output.sha256 },
+      payload: {
+        deliverable_id: attempt.deliverable_id, credits: attempt.planned_credits,
+        output_hash: outputHash, generation_record_id: record.id,
+        provider: record.provider, simulated: record.provider_meta.simulated,
+        subject_protection: record.subject_protection.mode,
+        format_satisfied: formatContract.satisfied,
+      },
     }));
   }
 
@@ -378,10 +592,20 @@ export function createJobs({
     attempt.charged_credits = 0;
     const target = run.deliverables.find(item => item.deliverable_id === attempt.deliverable_id);
     if (target) target.status = 'failed';
+    // M06：供应商失败也留生成记录（未产生输出、不收费），便于后续对账与复盘
+    const providerMeta = attempt.provider_meta ?? { id: 'unknown', version: null, simulated: false, acceptance: 'not_verified' };
+    const record = makeFailedGenerationRecord({
+      run, attempt, request: attempt.provider_request ?? {}, provider: providerMeta, error, at,
+    });
+    data.generation_records[record.id] = record;
+    run.generation_record_ids.push(record.id);
     // 供应商技术失败不向用户收费：该 attempt 的预算留在池里，终态时整体释放
     events.push(pushEvent(data, run, {
       stage: 'generation', status: 'attempt_failed', at, attemptId: attempt.id, iteration: attempt.iteration,
-      payload: { deliverable_id: attempt.deliverable_id, ...error, charged: 0 },
+      payload: {
+        deliverable_id: attempt.deliverable_id, ...error, charged: 0,
+        generation_record_id: record.id, simulated: providerMeta.simulated === true,
+      },
     }));
   }
 
@@ -423,22 +647,66 @@ export function createJobs({
       const iteration = attemptsUsed + 1;
       if (iteration > run.iteration) run.iteration = iteration;
       target.status = 'running';
+      const capabilities = provider.capabilities();
+      const referenceImages = referenceCache.get(run.id) ?? [];
+      const sentReferenceCount = run.subject_context?.references?.filter(item => item.sent_to_provider !== false).length ?? 0;
       const request = {
         request_hash: sha({
           run_id: run.id, deliverable_id: target.deliverable_id, iteration,
           spec_content_hash: run.spec_ref.content_hash,
+          width: target.width, height: target.height,
         }),
         idempotency_key: `sub:${run.id}:${target.deliverable_id}:${iteration}`,
         deliverable_id: target.deliverable_id,
-        target_width: 1024,
-        target_height: 1024,
-        references: 1,
-        requires_subject_protection: true,
-        mask_ref: `mask:${target.deliverable_id}`,
+        // M06：尺寸与格式来自交付清单，参考图数量来自职责计划，掩码引用来自真实掩码校验
+        target_width: target.width,
+        target_height: target.height,
+        formats: [...target.formats],
+        prompt: target.prompt,
+        references: sentReferenceCount,
+        reference_plan: run.subject_context?.references ?? [],
+        reference_images: referenceImages,
+        reference_payload_ready: referenceImages.length >= sentReferenceCount,
+        requires_subject_protection: run.subject_protection?.required === true,
+        mask_ref: run.subject_context?.mask_ref ?? null,
+        mask_version: MASK_VERSION,
+        subject_cutout_sha256: run.subject_context?.cutout_sha256 ?? null,
+        composite_ratio: run.subject_context?.composite_ratio ?? null,
         scenario: run.scenario,
         run_id: run.id,
       };
+
+      // 能力闸口：Provider 声明不接受这份请求就明确拒绝，不提交、不收费、留拒绝记录
+      const validation = provider.validate(request);
+      if (!validation?.ok) {
+        const gate = {
+          code: validation?.code ?? 'UNSUPPORTED_CAPABILITY',
+          message: validation?.message ?? 'Provider 拒绝了该请求',
+          details: validation?.details ?? null,
+        };
+        const record = makeRejectedGenerationRecord({
+          run, attempt: { id: newId('atp'), deliverable_id: target.deliverable_id, iteration }, request,
+          provider: { id: capabilities.id, version: capabilities.version, simulated: capabilities.simulated === true, acceptance: capabilities.acceptance },
+          gate, at,
+        });
+        data.generation_records[record.id] = record;
+        run.generation_record_ids.push(record.id);
+        target.status = 'failed';
+        events.push(pushEvent(data, run, {
+          stage: 'generation', status: 'request_rejected', at, iteration,
+          payload: {
+            deliverable_id: target.deliverable_id, code: gate.code, message: gate.message,
+            generation_record_id: record.id, provider: capabilities.id, charged: 0,
+          },
+        }));
+        return;
+      }
+
       const handle = provider.submit(request);
+      const providerMeta = handle.provider_meta ?? {
+        id: capabilities.id, version: capabilities.version,
+        simulated: capabilities.simulated === true, acceptance: capabilities.acceptance ?? 'not_verified',
+      };
       const attempt = {
         id: newId('atp'),
         run_id: run.id,
@@ -455,14 +723,38 @@ export function createJobs({
         result: null,
         error: null,
         scenario: run.scenario,
-        provider_request: request,
-      };
+        // 请求体落盘时剔除 base64 载荷，只保留职责、哈希与就绪标记
+        provider_request: {
+          ...request,
+          reference_images: request.reference_images.map(({ data_uri, ...rest }) => rest),
+        },
+        // M06：每次调用都写明用哪个 Provider 版本、主体保护走哪条路径
+        provider_meta: providerMeta,
+        subject_protection: {
+          mode: run.subject_context?.mode ?? 'not_required',
+          mask: run.subject_context?.mask_ref
+            ? {
+              ref: run.subject_context.mask_ref,
+              sha256: run.subject_context.mask_sha256 ?? null,
+              version: MASK_VERSION,
+              coverage: run.subject_context.mask_coverage ?? null,
+              method: run.subject_context.mask_method ?? null,
+              verified: run.subject_context.mask_ref.startsWith('mask:verified:'),
+            }
+            : null,
+          warning: run.subject_context?.warning ?? null,
+        },
+       };
       run.attempts.push(attempt);
       target.attempts_used = iteration;
       slots -= 1;
       events.push(pushEvent(data, run, {
         stage: 'generation', status: 'attempt_submitted', at, attemptId: attempt.id, iteration,
-        payload: { deliverable_id: attempt.deliverable_id, provider_job_id: handle.provider_job_id, idempotency_key: request.idempotency_key },
+        payload: {
+          deliverable_id: attempt.deliverable_id, provider_job_id: handle.provider_job_id,
+          idempotency_key: request.idempotency_key, provider: providerMeta.id,
+          subject_protection: attempt.subject_protection.mode,
+        },
       }));
     }
     if (run.status === 'queued' && run.attempts.length > 0) {
@@ -530,6 +822,7 @@ export function createJobs({
     }
     run.pending_best = succeeded.map(item => item.deliverable_id);
     await releaseRemaining(data, run, events, at, '任务终态，释放未发生的额度');
+    referenceCache.delete(run.id);
     events.push(pushEvent(data, run, {
       stage: 'settled', status: run.status, at,
       payload: {
@@ -556,6 +849,7 @@ export function createJobs({
     run.status = 'cancelled';
     run.terminal_reason = run.cancel_reason ?? 'user_cancelled';
     await releaseRemaining(data, run, events, at, '任务已取消，释放未发生的额度');
+    referenceCache.delete(run.id);
     events.push(pushEvent(data, run, {
       stage: 'cancelled', status: 'cancelled', at,
       payload: {
@@ -663,6 +957,11 @@ export function createJobs({
     for (const attempt of clone.attempts) {
       if (attempt.output_file) attempt.output_file = { bytes: attempt.output_file.bytes, hash: attempt.output_file.hash };
     }
+    // 参考图的 data URI 只在提交时用，返回给前端只会撑大响应；保留职责与哈希即可
+    if (clone.subject_context?.reference_images) {
+      clone.subject_context.reference_images = clone.subject_context.reference_images
+        .map(({ data_uri, ...rest }) => rest);
+    }
     return {
       ...clone,
       events_tail: eventsOf(data, run.id, Math.max(0, run.last_sequence - 20)).map(event => ({
@@ -714,8 +1013,38 @@ export function createJobs({
     });
   }
 
+  // ---------- M06：生成记录 ----------
+  async function listGenerationRecords(ctx, { runId = null, projectId = null } = {}) {
+    return store.read(data => {
+      if (runId) findRun(data, ctx, runId);
+      return {
+        records: Object.values(data.generation_records ?? {})
+          .filter(record => record.tenant_id === ctx.tenantId)
+          .filter(record => !runId || record.run_id === runId)
+          .filter(record => !projectId || record.project_id === projectId)
+          .sort((left, right) => right.created_at.localeCompare(left.created_at)),
+      };
+    });
+  }
+
+  async function getGenerationRecord(ctx, recordId) {
+    return store.read(data => {
+      const record = data.generation_records?.[recordId];
+      if (!record || record.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '生成记录不存在');
+      // 记录只增不改；这里顺带带上所属任务的当前状态，便于前端同屏展示
+      const run = data.runs?.[record.run_id] ?? null;
+      return {
+        record,
+        run: run && run.tenant_id === ctx.tenantId
+          ? { id: run.id, status: run.status, project_id: run.project_id, deliverables: run.deliverables }
+          : null,
+      };
+    });
+  }
+
   return {
     start, stop, createRun, cancelRun, confirmBudget, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
+    listGenerationRecords, getGenerationRecord,
     get activeSubscriptions() { return listeners.size; },
   };
 }

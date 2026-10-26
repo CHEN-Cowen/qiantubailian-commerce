@@ -143,6 +143,9 @@ export function createProvider({ defaultScenario = 'success', cancelAlwaysSuccee
       supports_seed: true,
       max_side: 2048,
       formats: ['jpg', 'png'],
+      // M06：如实标注模拟身份，生成记录与验收报告都据此区分"模拟"与"真实"
+      simulated: true,
+      acceptance: 'simulated_only',
     };
   }
 

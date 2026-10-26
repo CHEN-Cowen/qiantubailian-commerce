@@ -11,7 +11,8 @@ import {
 } from './spec.mjs';
 import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
 import { balanceOf, ledgerEntries } from './credits.mjs';
-import { createProvider, RETRYABLE_CODES } from './provider.mjs';
+import { RETRYABLE_CODES } from './provider.mjs';
+import { createProviderFromEnv } from './providers/index.mjs';
 import { createJobs, TERMINAL_STATES } from './jobs.mjs';
 
 const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
@@ -38,16 +39,33 @@ export function createApi({
   maxConcurrency = 2,
   tickMs = 25,
   allowScenarioInjection = false,
+  // M06：Provider 可注入（测试或宿主自建 Adapter）；不注入时按环境变量选择，默认 mock
+  provider: injectedProvider = null,
+  providerOptions = {},
 } = {}) {
   if (!store) throw new Error('API 缺少存储实例');
   if (!Array.isArray(allowedTenants) || allowedTenants.length === 0) throw new Error('API 租户配置无效');
   if (!Number.isInteger(initialCredits) || initialCredits < 0) throw new Error('初始额度配置无效');
-  const provider = createProvider({ defaultScenario: 'success' });
+  const resolvedProvider = injectedProvider
+    ? {
+      provider: injectedProvider,
+      mode: 'injected',
+      acceptance: injectedProvider.capabilities?.().acceptance ?? 'not_verified',
+      note: '外部注入的 Provider；验收状态由注入方负责',
+    }
+    : createProviderFromEnv(process.env, providerOptions);
+  const provider = resolvedProvider.provider;
+  const providerInfo = {
+    mode: resolvedProvider.mode,
+    acceptance: resolvedProvider.acceptance,
+    note: resolvedProvider.note,
+  };
   const jobs = createJobs({
     store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs,
   });
 
   publish.jobs = jobs;
+  publish.provider = { ...providerInfo, capabilities: () => provider.capabilities() };
   publish.credits = { balanceOf: tenantId => store.read(data => balanceOf(data, tenantId, { initialCredits })) };
   // 暴露 drain：关闭服务时先排空写队列，再让调用方清理数据目录
   publish.drain = () => (typeof store.drain === 'function' ? store.drain() : Promise.resolve());
@@ -82,7 +100,7 @@ export function createApi({
 
     if (resource === 'tenant' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
-      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M05' });
+      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M06' });
     }
     if (resource === 'credits' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
@@ -104,6 +122,30 @@ export function createApi({
       if (rest[2] === 'events') {
         requireMethod(method, ['GET', 'HEAD']);
         return streamRunEvents(ctx, req, res, rest[1], query, send);
+      }
+      if (rest[2] === 'generation-records') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.listGenerationRecords(ctx, { runId: rest[1] }).then(result => send(200, result));
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'provider' && rest.length === 2 && rest[1] === 'capabilities') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return send(200, {
+        mode: providerInfo.mode,
+        acceptance: providerInfo.acceptance,
+        note: providerInfo.note,
+        capabilities: provider.capabilities(),
+      });
+    }
+    if (resource === 'generation-records') {
+      if (rest.length === 1) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return listGenerationRecordsRoute(ctx, query, send);
+      }
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.getGenerationRecord(ctx, rest[1]).then(result => send(200, result));
       }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
@@ -823,6 +865,14 @@ export function createApi({
       recent: ledgerEntries(data, ctx.tenantId, { limit: 20 }),
       note: '演示额度，不代表真实货币或可计费权益；能否生成由服务端判定，不信任前端余额。',
     }));
+  }
+
+  // M06：生成记录查询。租户过滤在 jobs 内部完成，跨租户一律按不存在处理。
+  function listGenerationRecordsRoute(ctx, query, send) {
+    const runId = String(query?.get('run_id') ?? '').trim() || null;
+    const projectId = String(query?.get('project_id') ?? '').trim() || null;
+    return jobs.listGenerationRecords(ctx, { runId, projectId })
+      .then(result => send(200, { ...result, provider: providerInfo }));
   }
 
   async function createQuote(ctx, req, send) {

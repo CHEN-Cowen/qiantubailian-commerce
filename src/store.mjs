@@ -12,11 +12,13 @@ const TABLES = Object.freeze([
   'projects', 'assets', 'truth_versions', 'brand_kits', 'brand_kit_versions', 'specs',
   // M05：报价、任务与事件（attempt 内嵌于 run）、额度账户与只增台账
   'quotes', 'runs', 'events', 'credit_accounts', 'credit_entries',
+  // M06：生成记录（模型、请求、用量、成本、版本与输出哈希），只增不改
+  'generation_records',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
   projects: {}, assets: {}, truth_versions: {}, brand_kits: {}, brand_kit_versions: {}, specs: {},
-  quotes: {}, runs: {}, events: {}, credit_accounts: {}, credit_entries: {},
+  quotes: {}, runs: {}, events: {}, credit_accounts: {}, credit_entries: {}, generation_records: {},
 });
 
 function normalize(raw) {
