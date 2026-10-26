@@ -51,7 +51,15 @@ function request(port, route, { method = 'GET', headers = {}, body } = {}) {
 async function start(t, options = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'm04-'));
   const app = createApp({ port: 0, storeDir: dir, allowedTenants: TENANTS, ...options });
-  t.after(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    await app.close(); // close() 会先排空写队列，再让清理安全进行
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      // 清理失败（Windows 上系统临时目录偶发 ENOTEMPTY）只记录，不掩盖测试结论
+      console.error('[m04] 临时目录清理失败（不影响测试结论）', dir, error?.code ?? error?.message ?? error);
+    }
+  });
   const { port } = await app.listen();
   return { port, dir, app };
 }
@@ -570,7 +578,13 @@ test('M04 跨租户：他人项目的快照与套件一律按不存在处理', a
 // ---------- 15. 存储兼容 ----------
 test('M04 存储：旧版 data.json 只有三张表也能加载并写入新表', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'm04-store-'));
-  t.after(async () => { await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      console.error('[m04] 临时目录清理失败（不影响测试结论）', dir, error?.code ?? error?.message ?? error);
+    }
+  });
   await writeFile(path.join(dir, 'data.json'), `${JSON.stringify({ schema_version: 1, projects: {}, assets: {}, truth_versions: {} })}\n`, 'utf8');
   const app = createApp({ port: 0, storeDir: dir, allowedTenants: TENANTS });
   t.after(async () => { await app.close(); });

@@ -77,7 +77,15 @@ function request(port, route, { method = 'GET', headers = {}, body } = {}) {
 async function start(t, options = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'm03-'));
   const app = createApp({ port: 0, storeDir: dir, allowedTenants: TENANTS, ...options });
-  t.after(async () => { await app.close(); await rm(dir, { recursive: true, force: true }); });
+  t.after(async () => {
+    await app.close(); // close() 会先排空写队列，再让清理安全进行
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      // 清理失败（Windows 上系统临时目录偶发 ENOTEMPTY）只记录，不掩盖测试结论
+      console.error('[m03] 临时目录清理失败（不影响测试结论）', dir, error?.code ?? error?.message ?? error);
+    }
+  });
   const { port } = await app.listen();
   return { port, dir, app };
 }
@@ -491,13 +499,18 @@ test('M03 素材被替换后，引用旧素材的事实版本阻止生产', asyn
 });
 
 // ---------- 11. API 路由语义 ----------
-test('M03 路由语义：M05 预留 501、未知接口 404、错误方法 405 带 Allow', async t => {
+test('M03 路由语义：未知接口 404、错误方法 405 带 Allow（M05 后 /api/runs 与 /api/quotes 已实现）', async t => {
   const { port } = await start(t);
-  for (const route of ['/api/runs', '/api/runs/abc', '/api/quotes']) {
-    const response = await request(port, route, { method: 'POST', headers: as(), body: {} });
-    assert.equal(response.status, 501, route);
-    assert.equal(response.json.error, 'NOT_IMPLEMENTED');
+  // M05 已实现：这些路由不再是 501，但必须按方法判定并带 Allow
+  for (const route of ['/api/runs', '/api/quotes']) {
+    const response = await request(port, route, { method: 'DELETE', headers: as() });
+    assert.equal(response.status, 405, route);
+    assert.ok(response.headers.allow?.includes('GET'), `${route} 应回 Allow 头`);
   }
+  // 不存在的任务仍按不存在处理，不泄漏
+  const missingRun = await request(port, '/api/runs/not-exist', { headers: as() });
+  assert.equal(missingRun.status, 404);
+  assert.equal(missingRun.json.error, 'NOT_FOUND');
   for (const route of ['/api', '/api/', '/api/unknown']) {
     const response = await request(port, route, { headers: as() });
     assert.equal(response.status, 404, route);
@@ -524,7 +537,13 @@ test('M03 路由语义：M05 预留 501、未知接口 404、错误方法 405 �
 // ---------- 12. 重新加载后数据仍在 ----------
 test('M03 持久化：重开服务后项目、素材与事实版本仍可读且哈希一致', async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'm03-persist-'));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  t.after(async () => {
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      console.error('[m03] 临时目录清理失败（不影响测试结论）', dir, error?.code ?? error?.message ?? error);
+    }
+  });
   const first = createApp({ port: 0, storeDir: dir, allowedTenants: TENANTS });
   const { port: firstPort } = await first.listen();
   const project = await createProject(firstPort);

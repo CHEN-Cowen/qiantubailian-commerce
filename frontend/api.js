@@ -4,6 +4,13 @@
  * 服务端错误按 code 透传给界面，避免把失败渲染成成功。
  */
 const ACTOR_ID = 'demo_operator';
+// 当前工作区的租户标识：普通请求走请求头，SSE 订阅必须走 query
+// （浏览器 EventSource 不能自定义请求头，服务端因此在 SSE 路由上接受 tenant_id 参数）
+let currentTenant = null;
+
+export function currentTenantId() {
+  return currentTenant;
+}
 
 export class ApiFailure extends Error {
   constructor(status, code, message, details) {
@@ -21,6 +28,7 @@ async function call(route, { json, headers = {}, ...rest } = {}) {
     ...rest,
     headers: {
       'x-actor-id': ACTOR_ID,
+      ...(currentTenant ? { 'x-tenant-id': currentTenant } : {}),
       ...(hasJson ? { 'Content-Type': 'application/json' } : {}),
       ...headers,
     },
@@ -41,7 +49,11 @@ async function call(route, { json, headers = {}, ...rest } = {}) {
 }
 
 export const api = {
-  tenant: () => call('/api/tenant'),
+  async tenant() {
+    const result = await call('/api/tenant');
+    if (result?.tenant_id) currentTenant = result.tenant_id;
+    return result;
+  },
   listProjects: () => call('/api/projects'),
   createProject: body => call('/api/projects', { method: 'POST', json: body }),
   getProject: id => call(`/api/projects/${encodeURIComponent(id)}`),
@@ -69,4 +81,34 @@ export const api = {
   createSpec: (id, body) => call(`/api/projects/${encodeURIComponent(id)}/specs`, { method: 'POST', json: body }),
   listSpecs: id => call(`/api/projects/${encodeURIComponent(id)}/specs`),
   getSpec: (id, version) => call(`/api/projects/${encodeURIComponent(id)}/specs/${encodeURIComponent(version)}`),
+  // M05：额度账本、报价、任务执行与事件流
+  credits: () => call('/api/credits'),
+  // 报价/任务列表暂不按项目过滤：后端未提供 project_id 参数，前端取回后本地过滤，
+  // 不把"看似筛选"的假参数传给后端
+  listQuotes: () => call('/api/quotes'),
+  createQuote: body => call('/api/quotes', { method: 'POST', json: body }),
+  getQuote: id => call(`/api/quotes/${encodeURIComponent(id)}`),
+  listRuns: () => call('/api/runs'),
+  getRun: id => call(`/api/runs/${encodeURIComponent(id)}`),
+  /** 创建任务必须带 Idempotency-Key：同名重复点击不会重复扣费。 */
+  createRun: (body, idempotencyKey) => call('/api/runs', {
+    method: 'POST',
+    headers: { 'Idempotency-Key': idempotencyKey },
+    json: body,
+  }),
+  cancelRun: (id, body = {}) => call(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST', json: body }),
+  /** 预算超出初始预留时，用户确认追加额度后继续执行。 */
+  confirmRunBudget: (id, body = {}) => call(`/api/runs/${encodeURIComponent(id)}/budget-confirmation`, { method: 'POST', json: body }),
+  /**
+   * SSE 事件流：返回 EventSource，调用方负责关闭。
+   * EventSource 不能自定义请求头，所以租户必须走 query 参数（服务端仅在 SSE 路由放开）。
+   * lastEventId 用于断线续传：只取该序号之后的事件，不重放已消费的部分。
+   */
+  runEvents: (id, { lastEventId = 0 } = {}) => {
+    const query = new URLSearchParams();
+    if (currentTenant) query.set('tenant_id', currentTenant);
+    if (lastEventId > 0) query.set('last_event_id', String(lastEventId));
+    const suffix = query.toString() ? `?${query}` : '';
+    return new EventSource(`/api/runs/${encodeURIComponent(id)}/events${suffix}`);
+  },
 };

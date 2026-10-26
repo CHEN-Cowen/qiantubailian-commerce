@@ -6,9 +6,9 @@ import { LOOPBACK_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
 
-export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.3.0', module: 'M03' });
+export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.5.0', module: 'M05' });
 export const STATIC_FILES = Object.freeze([
-  'index.html', 'app.js', 'api.js', 'real-data.js', 'm04.js', 'style.css', 'm03.css', 'm04.css', 'viewport.css', 'icon.svg', 'architecture.svg',
+  'index.html', 'app.js', 'api.js', 'real-data.js', 'm04.js', 'm05.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
 ]);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8', '.jpg': 'image/jpeg' };
@@ -54,12 +54,20 @@ export function createApp({
   defaultActor = 'demo_operator',
   maxUploadBytes,
   clock,
+  initialCredits = 240,
+  attemptTimeoutMs = 30_000,
+  maxConcurrency = 2,
+  tickMs = 25,
+  allowScenarioInjection = false,
 } = {}) {
   if (!LOOPBACK_HOSTS.includes(host)) throw new Error('HOST 必须为 loopback 地址');
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('PORT 配置无效');
   const root = path.resolve(staticRoot);
   const store = createStore({ dir: storeDir });
-  const api = createApi({ store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock });
+  const api = createApi({
+    store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock,
+    initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection,
+  });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'no-store');
@@ -115,10 +123,15 @@ export function createApp({
   let closing;
   return {
     server,
+    jobs: api.jobs,
     listen() {
       return new Promise((resolve, reject) => {
         const onError = error => { server.off('listening', onListen); reject(error); };
-        const onListen = () => { server.off('error', onError); resolve(server.address()); };
+        const onListen = () => {
+          server.off('error', onError);
+          api.jobs.start();
+          resolve(server.address());
+        };
         server.once('error', onError);
         server.once('listening', onListen);
         server.listen(port, host);
@@ -127,13 +140,25 @@ export function createApp({
     close({ deadlineMs = 3_000 } = {}) {
       if (closing) return closing;
       closing = new Promise((resolve, reject) => {
-        if (!server.listening) { resolve(); return; }
+        if (!server.listening) {
+          // 同样要等飞行中的 tick 收尾
+          Promise.resolve(api.jobs.stop()).then(() => resolve(), () => resolve());
+          return;
+        }
         const timer = setTimeout(() => {
           server.closeAllConnections();
           for (const socket of sockets) socket.destroy();
         }, deadlineMs);
         timer.unref();
-        server.close(error => { clearTimeout(timer); error ? reject(error) : resolve(); });
+        server.close(error => {
+          clearTimeout(timer);
+          // 顺序很重要：先停调度并等飞行中的 tick 收尾，再排空写队列，
+          // 最后调用方才能安全清理数据目录
+          Promise.resolve(api.jobs.stop())
+            .then(() => api.drain?.())
+            .then(() => { error ? reject(error) : resolve(); })
+            .catch(() => { error ? reject(error) : resolve(); });
+        });
         server.closeIdleConnections();
       });
       return closing;

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
 import { ApiError, toApiError } from './errors.mjs';
 import { IMAGE_TYPES, inspectImage } from './images.mjs';
 import {
@@ -9,17 +9,22 @@ import { getTemplate, listChannelRules, listTemplates, matchChannelRule } from '
 import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
+import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
+import { balanceOf, ledgerEntries } from './credits.mjs';
+import { createProvider, RETRYABLE_CODES } from './provider.mjs';
+import { createJobs, TERMINAL_STATES } from './jobs.mjs';
 
 const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
 const now = () => new Date().toISOString();
+const fingerprintOf = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 /**
- * M03 项目、素材与商品事实 + M04 模板、品牌套件、平台规则与 CommerceSpec。
+ * M03 项目、素材与商品事实 + M04 模板、品牌套件、平台规则与 CommerceSpec
+ * + M05 报价、额度账本与任务执行骨架（Provider 为确定性模拟，真实 Adapter 属 M06）。
  * 约束：
  * - 所有查询强制带租户条件；跨租户对象一律按不存在处理，避免泄漏对象是否存在。
  * - 事实版本与 spec 版本都只追加，不原地覆盖；写入用 base_version 乐观锁。
- * - 模板与平台规则是只读目录；品牌套件按租户版本化。
- * - /api/runs、/api/quotes 属 M05，明确返回 501，不假装已实现。
+ * - 额度由服务端判定：预留不足不入队、不调供应商；同一操作键不重复结算。
  */
 export function createApi({
   store,
@@ -28,37 +33,79 @@ export function createApi({
   defaultActor = 'demo_operator',
   maxUploadBytes = LIMITS.maxBytes,
   clock = () => new Date(),
+  initialCredits = 0,
+  attemptTimeoutMs = 30_000,
+  maxConcurrency = 2,
+  tickMs = 25,
+  allowScenarioInjection = false,
 } = {}) {
   if (!store) throw new Error('API 缺少存储实例');
   if (!Array.isArray(allowedTenants) || allowedTenants.length === 0) throw new Error('API 租户配置无效');
+  if (!Number.isInteger(initialCredits) || initialCredits < 0) throw new Error('初始额度配置无效');
+  const provider = createProvider({ defaultScenario: 'success' });
+  const jobs = createJobs({
+    store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs,
+  });
 
-  return async function handleApi(req, res, route, send) {
+  publish.jobs = jobs;
+  publish.credits = { balanceOf: tenantId => store.read(data => balanceOf(data, tenantId, { initialCredits })) };
+  // 暴露 drain：关闭服务时先排空写队列，再让调用方清理数据目录
+  publish.drain = () => (typeof store.drain === 'function' ? store.drain() : Promise.resolve());
+  return publish;
+
+  async function publish(req, res, route, send) {
     try {
-      await dispatch(req, route, send);
+      await dispatch(req, res, route, send);
     } catch (error) {
       const failure = toApiError(error);
+      // 非预期错误必须留痕但不外泄细节（NFR-05）；Apierror 属于业务分支，不打堆栈
+      if (failure.status >= 500) {
+        console.error('[api] 未预期错误', route, failure.code, error?.stack ?? error?.message ?? error);
+      }
       if (res.headersSent) { res.destroy(); return; }
       if (failure.allow) res.setHeader('Allow', failure.allow);
       const body = { error: failure.code, message: failure.message };
       if (failure.details !== undefined) body.details = failure.details;
       send(failure.status, body);
     }
-  };
+  }
 
-  async function dispatch(req, route, send) {
+  async function dispatch(req, res, route, send) {
     const query = new URLSearchParams(req.url.includes('?') ? req.url.slice(req.url.indexOf('?') + 1) : '');
     const rest = route.split('/').filter(part => part !== '').slice(1);
     const method = req.method;
-    const ctx = resolveContext(req);
+    // SSE 订阅走 EventSource，浏览器无法带自定义头，因此允许用 query 传租户
+    const isEventStream = rest.length === 3 && rest[0] === 'runs' && rest[2] === 'events';
+    const ctx = resolveContext(req, { allowQueryTenant: isEventStream, query });
     if (rest.length === 0) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     const [resource, projectId, section, third] = rest;
 
-    if (resource === 'runs' || resource === 'quotes') {
-      throw new ApiError(501, 'NOT_IMPLEMENTED', '任务、报价与事件接口将在 M05 接入，M03 不提供');
-    }
     if (resource === 'tenant' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
-      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M04' });
+      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M05' });
+    }
+    if (resource === 'credits' && rest.length === 1) {
+      requireMethod(method, ['GET', 'HEAD']);
+      return getCredits(ctx, send);
+    }
+    if (resource === 'quotes') {
+      if (rest.length === 1 && method === 'POST') return createQuote(ctx, req, send);
+      if (rest.length === 1) { requireMethod(method, ['GET', 'HEAD', 'POST']); return listQuotes(ctx, send); }
+      if (rest.length === 2) { requireMethod(method, ['GET', 'HEAD']); return getQuote(ctx, rest[1], send); }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'runs') {
+      if (rest.length === 1 && method === 'POST') return createRun(ctx, req, send);
+      if (rest.length === 1) { requireMethod(method, ['GET', 'HEAD', 'POST']); return listRunsRoute(ctx, send); }
+      if (rest.length === 2) { requireMethod(method, ['GET', 'HEAD']); return jobs.getRun(ctx, rest[1]).then(result => send(200, result)); }
+      if (rest.length !== 3) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+      if (rest[2] === 'cancel') { requireMethod(method, ['POST']); return cancelRunRoute(ctx, req, rest[1], send); }
+      if (rest[2] === 'budget-confirmation') { requireMethod(method, ['POST']); return confirmBudgetRoute(ctx, req, rest[1], send); }
+      if (rest[2] === 'events') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return streamRunEvents(ctx, req, res, rest[1], query, send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
     if (resource === 'catalog') return handleCatalog(method, rest, query, send);
     if (resource === 'brand-kits') return handleBrandKits(ctx, method, rest, req, send);
@@ -111,9 +158,13 @@ export function createApi({
     throw new ApiError(404, 'NOT_FOUND', '接口不存在');
   }
 
-  function resolveContext(req) {
+  function resolveContext(req, { allowQueryTenant = false, query = null } = {}) {
     const tenantHeader = req.headers['x-tenant-id'];
-    const tenantId = tenantHeader === undefined ? defaultTenant : String(tenantHeader).trim();
+    // 浏览器 EventSource 不能自定义请求头，SSE 订阅必须能通过 query 传租户。
+    // 只在显式允许的路由上放宽，且请求头优先；租户白名单校验不变。
+    const queryTenant = allowQueryTenant ? query?.get('tenant_id') : undefined;
+    const rawTenant = tenantHeader !== undefined ? tenantHeader : queryTenant;
+    const tenantId = rawTenant === undefined ? defaultTenant : String(rawTenant).trim();
     if (!allowedTenants.includes(tenantId)) {
       throw new ApiError(403, 'TENANT_FORBIDDEN', '当前租户无权访问该工作区');
     }
@@ -762,6 +813,211 @@ export function createApi({
     const kit = data.brand_kits[kitId];
     if (!kit || kit.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '品牌套件不存在');
     return kit;
+  }
+
+  // ---------- M05 额度、报价与任务 ----------
+  function getCredits(ctx, send) {
+    return store.read(data => send(200, {
+      tenant_id: ctx.tenantId,
+      balance: balanceOf(data, ctx.tenantId, { initialCredits }),
+      recent: ledgerEntries(data, ctx.tenantId, { limit: 20 }),
+      note: '演示额度，不代表真实货币或可计费权益；能否生成由服务端判定，不信任前端余额。',
+    }));
+  }
+
+  async function createQuote(ctx, req, send) {
+    const body = await readJson(req);
+    const projectId = String(body.project_id ?? '').trim();
+    if (!projectId) throw new ApiError(422, 'MISSING_PROJECT', '报价需要指定项目');
+    const quoted = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const spec = resolveSpecRecord(data, project.id, body.spec_version);
+      const quote = quoteFromSpec({ spec, at: clock() });
+      return { quote: { ...quote, tenant_id: ctx.tenantId, project_id: project.id } };
+    });
+    const record = await store.mutate(data => {
+      data.quotes[quoted.quote.quote_id] = quoted.quote;
+      return quoted.quote;
+    });
+    send(201, { quote: record, status: quoteStatus(record, clock()) });
+  }
+
+  function listQuotes(ctx, send) {
+    return store.read(data => send(200, {
+      quotes: Object.values(data.quotes ?? {})
+        .filter(quote => quote.tenant_id === ctx.tenantId)
+        .sort((left, right) => right.created_at.localeCompare(left.created_at))
+        .slice(0, 20)
+        .map(quote => ({
+          quote_id: quote.quote_id, project_id: quote.project_id, price_version: quote.price_version,
+          spec_ref: quote.spec_ref, estimated_credits: quote.estimated_credits, max_credits: quote.max_credits,
+          max_attempts: quote.max_attempts, created_at: quote.created_at, expires_at: quote.expires_at,
+          status: quoteStatus(quote, clock()),
+        })),
+    }));
+  }
+
+  function getQuote(ctx, quoteId, send) {
+    return store.read(data => {
+      const quote = data.quotes?.[quoteId];
+      if (!quote || quote.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '报价不存在');
+      send(200, { quote, status: quoteStatus(quote, clock()) });
+    });
+  }
+
+  async function createRun(ctx, req, send) {
+    const body = await readJson(req);
+    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+    if (idempotencyKey === '') {
+      throw new ApiError(400, 'MISSING_IDEMPOTENCY_KEY', '创建任务必须带 Idempotency-Key，避免重复提交产生重复费用');
+    }
+    const scenario = body.scenario;
+    if (scenario !== undefined && !allowScenarioInjection) {
+      throw new ApiError(400, 'SCENARIO_NOT_ALLOWED', '当前环境不允许注入 Provider 场景');
+    }
+    const prepared = await store.read(data => {
+      const project = findProject(data, ctx, String(body.project_id ?? '').trim());
+      const spec = resolveSpecRecord(data, project.id, body.spec_version);
+      const quoteId = String(body.quote_id ?? '').trim();
+      const quote = quoteId ? data.quotes?.[quoteId] : null;
+      if (!quote || quote.tenant_id !== ctx.tenantId || quote.project_id !== project.id) {
+        throw new ApiError(422, 'QUOTE_REQUIRED', '必须先基于冻结的 spec 取得有效报价，再创建任务');
+      }
+      if (quoteStatus(quote, clock()) === 'expired') {
+        throw new ApiError(409, 'QUOTE_EXPIRED', '报价已过期，请重新取价后再执行');
+      }
+      if (!quoteMatchesSpec(quote, spec)) {
+        throw new ApiError(409, 'QUOTE_SPEC_MISMATCH', '报价与所选冻结快照不一致，请重新报价');
+      }
+      const readiness = computeReadiness(project, Object.values(data.assets).filter(asset => asset.project_id === project.id), latestTruth(data, project.id));
+      if (!readiness.can_start_production) {
+        throw new ApiError(409, 'READINESS_BLOCKED', readiness.blocker_count > 0
+          ? `生产前置未满足：${readiness.blockers[0]?.message ?? '请检查商品事实与素材'}`
+          : '生产前置未满足', { blockers: readiness.blockers });
+      }
+      return { project, spec, quote };
+    });
+
+    const runId = newId('run');
+    const createdAt = new Date(clock()).toISOString();
+    const created = await jobs.createRun({
+      ctx,
+      run: { id: runId, created_at: createdAt },
+      project: prepared.project,
+      spec: prepared.spec,
+      quote: prepared.quote,
+      idempotencyKey,
+      scenario: allowScenarioInjection && scenario ? String(scenario) : 'success',
+      fingerprint: fingerprintOf({
+        project_id: prepared.project.id,
+        quote_id: prepared.quote.quote_id,
+        spec_version: prepared.spec.version,
+        scenario: allowScenarioInjection && scenario ? String(scenario) : 'success',
+      }),
+    });
+    send(created.replayed ? 200 : 201, {
+      run: created.run,
+      replayed: created.replayed,
+      balance: await store.read(data => balanceOf(data, ctx.tenantId, { initialCredits })),
+    });
+  }
+
+  function listRunsRoute(ctx, send) {
+    return jobs.listRuns(ctx, null).then(result => send(200, result));
+  }
+
+  async function cancelRunRoute(ctx, req, runId, send) {
+    const body = await readJson(req).catch(() => ({}));
+    const result = await jobs.cancelRun({ ctx, runId, reason: String(body.reason ?? 'user_cancelled') });
+    send(200, { run: result.run, note: '重复取消幂等；已请求取消后供应商的迟到结果不会再改变任务状态。' });
+  }
+
+  async function confirmBudgetRoute(ctx, req, runId, send) {
+    const body = await readJson(req);
+    const result = await jobs.confirmBudget({
+      ctx, runId,
+      extraCredits: Number(body.extra_credits ?? 0),
+      confirm: body.confirm !== false,
+    });
+    send(200, { run: result.run });
+  }
+
+  /**
+   * SSE 事件流：支持 Last-Event-ID 续传（断线后不丢事件）与按 event_id 去重。
+   * 至少一次投递，客户端负责去重；超出保留期则返回需要刷新快照的提示事件。
+   */
+  async function streamRunEvents(ctx, req, res, runId, query, send) {
+    const header = Number(req.headers['last-event-id'] ?? query.get('last_event_id') ?? 0);
+    const since = Number.isInteger(header) && header >= 0 ? header : 0;
+    let snapshot = [];
+    let runState = null;
+    try {
+      snapshot = await jobs.eventsSince(ctx, runId, since);
+      runState = await jobs.getRun(ctx, runId);
+    } catch (error) {
+      const failure = toApiError(error);
+      send(failure.status, { error: failure.code, message: failure.message });
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    if (req.socket) req.socket.setTimeout(0);
+    // 事件名用规范的 message：EventSource 只把 message 映射到 onmessage/addEventListener('message')。
+    // 自定义事件名（如 run）不会触发 message 监听，导致浏览器端"连上了但收不到事件"。
+    const write = event => {
+      res.write(`id: ${event.sequence}\nevent: message\ndata: ${JSON.stringify(event)}\n\n`);
+    };
+    // 终态标记不占用 sequence 空间：它不是一条领域事件，只是给客户端的收尾信号。
+    // 刻意不写 "id:" 行——按 SSE 规范，只有携带 id 的事件才更新客户端的 Last-Event-ID 游标。
+    // 若复用 last_sequence 当 id，会与最后一条真实事件重号，破坏游标语义（断线续传时错位）；
+    // 若写一个非数字 id（如 terminal-xxx），同样会让游标变成非法值。
+    const writeTerminal = payload => {
+      res.write(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
+    };
+    for (const event of snapshot) write(event);
+    if (runState.run && !['queued', 'running', 'evaluating', 'awaiting_confirmation'].includes(runState.run.status)) {
+      // 终态也用 message 类型：前端靠同一条链路拿到终态事件，不依赖额外的事件名
+      writeTerminal({ terminal: runState.run.status, terminal_reason: runState.run.terminal_reason });
+      res.end();
+      return;
+    }
+
+    const heartbeat = setInterval(() => res.write(': 心跳\n\n'), 10_000);
+    if (typeof heartbeat.unref === 'function') heartbeat.unref();
+    let unsubscribe = null;
+    const cleanup = () => {
+      clearInterval(heartbeat);
+      if (unsubscribe) unsubscribe();
+      unsubscribe = null;
+    };
+    unsubscribe = jobs.subscribe(runId, event => {
+      write(event);
+      if (TERMINAL_STATES.has(String(event.payload?.status)) || event.status === 'released') {
+        writeTerminal({ terminal: 'settled', status: event.status });
+        res.end();
+        cleanup();
+      }
+    });
+    req.on('close', cleanup);
+    req.on('error', cleanup);
+  }
+
+  function resolveSpecRecord(data, projectId, rawVersion) {
+    const version = rawVersion === undefined || rawVersion === null || rawVersion === '' ? null : Number(rawVersion);
+    if (version !== null && (!Number.isInteger(version) || version < 1)) {
+      throw new ApiError(422, 'INVALID_SPEC_VERSION', 'spec 版本无效');
+    }
+    const candidates = Object.values(data.specs ?? {})
+      .filter(item => item.project_id === projectId)
+      .sort((left, right) => left.version - right.version);
+    const spec = version === null ? candidates[candidates.length - 1] : candidates.find(item => item.version === version);
+    if (!spec) throw new ApiError(404, 'NOT_FOUND', '未找到该版本的冻结生产配置');
+    return spec;
   }
 
   function findProject(data, ctx, projectId) {

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="m03.css">
   <link rel="stylesheet" href="m04.css">
+  <link rel="stylesheet" href="m05.css">
   <link rel="stylesheet" href="viewport.css">
   <link rel="icon" href="icon.svg">
 </head>
@@ -157,7 +158,24 @@
     </form>
   </dialog>
 
+  <dialog id="run-dialog" class="real-dialog real-dialog-wide" aria-labelledby="run-title">
+    <button class="dialog-close" data-close-dialog="run-dialog" aria-label="关闭">×</button>
+    <p class="eyebrow">M05 · 报价 / 额度 / 任务执行</p>
+    <h2 id="run-title">生产任务</h2>
+    <div id="run-body">
+      <p class="truth-hint">正在读取额度与报价…</p>
+    </div>
+    <div id="run-quote"></div>
+    <div id="run-events"></div>
+    <div class="real-actions">
+      <button type="button" class="secondary" id="run-cancel">取消任务</button>
+      <button type="button" class="secondary" data-close-dialog="run-dialog">关闭</button>
+      <button type="submit" class="primary" id="run-start">确认并开始</button>
+    </div>
+  </dialog>
+
   <script type="module" src="app.js"></script>
   <script type="module" src="m04.js"></script>
+  <script type="module" src="m05.js"></script>
 </body>
 </html>

@@ -83,7 +83,7 @@ test('静态白名单、HEAD、响应安全头与健康状态', async t => {
   await healthcheck(`http://127.0.0.1:${port}`);
 });
 
-test('API 路由语义：未知接口 404、M05 预留 501、静态路由非 GET/HEAD 为 405', async t => {
+test('API 路由语义：未知接口 404、已实现路由按方法判定、静态路由非 GET/HEAD 为 405', async t => {
   const { port } = await running(t);
   const connectStatus = route => new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, path: route, method: 'CONNECT', agent: false });
@@ -97,10 +97,13 @@ test('API 路由语义：未知接口 404、M05 预留 501、静态路由非 GET
     assert.equal(JSON.parse(response.body).error, 'NOT_FOUND', route);
     assert.equal(await connectStatus(route), 404, route);
   }
-  for (const method of ['GET', 'POST', 'DELETE']) {
-    const response = await request(port, '/api/runs', method);
-    assert.equal(response.status, 501);
-    assert.equal(JSON.parse(response.body).error, 'NOT_IMPLEMENTED');
+  // M05 后 /api/runs 与 /api/quotes 已实现：GET 正常、DELETE 走方法判定
+  for (const route of ['/api/runs', '/api/quotes']) {
+    const allowed = await request(port, route);
+    assert.ok([200, 201].includes(allowed.status), `${route} 应可读`);
+    const rejected = await request(port, route, 'DELETE');
+    assert.equal(rejected.status, 405, `${route} DELETE 应 405`);
+    assert.ok(rejected.headers.allow?.includes('GET'), '应回 Allow 头');
   }
   for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE']) {
     if (!['GET', 'HEAD'].includes(method)) {

@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from '../src/config.mjs';
+import { loadConfig, loadRuntimeConfig } from '../src/config.mjs';
 import { createApp } from '../src/server.mjs';
 
 let app;
@@ -16,7 +16,7 @@ try {
   try { process.loadEnvFile(fileURLToPath(new URL('../.env', import.meta.url))); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('环境文件加载失败'); }
   const config = loadConfig();
-  app = createApp(config);
+  app = createApp({ ...config, ...loadRuntimeConfig() });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   if (process.send) process.on('message', message => {
@@ -25,7 +25,7 @@ try {
   app.server.on('error', () => { console.error('服务运行失败'); process.exitCode = 1; void stop(); });
   const address = await app.listen();
   if (!stopping) {
-    console.log(`M04 已启动，端口 ${address.port}`);
+    console.log(`服务已启动，端口 ${address.port}`);
     if (process.send) process.send({ type: 'ready', port: address.port, host: address.address });
   } else {
     await app.close();
