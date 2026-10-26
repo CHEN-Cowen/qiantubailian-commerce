@@ -83,30 +83,35 @@ test('静态白名单、HEAD、响应安全头与健康状态', async t => {
   await healthcheck(`http://127.0.0.1:${port}`);
 });
 
-test('API 所有常见方法 501，其他非 GET/HEAD 为 405', async t => {
+test('API 路由语义：未知接口 404、M05 预留 501、静态路由非 GET/HEAD 为 405', async t => {
   const { port } = await running(t);
-  for (const route of ['/api', '/api/test', '/healthz']) {
-    const status = await new Promise((resolve, reject) => {
-      const req = http.request({ host: '127.0.0.1', port, path: route, method: 'CONNECT', agent: false });
-      req.on('connect', (res, socket) => { socket.destroy(); resolve(res.statusCode); });
-      req.on('error', reject);
-      req.end();
-    });
-    assert.equal(status, route.startsWith('/api') ? 501 : 405);
+  const connectStatus = route => new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: route, method: 'CONNECT', agent: false });
+    req.on('connect', (res, socket) => { socket.destroy(); resolve(res.statusCode); });
+    req.on('error', reject);
+    req.end();
+  });
+  for (const route of ['/api', '/api/', '/api/test']) {
+    const response = await request(port, route);
+    assert.equal(response.status, 404, route);
+    assert.equal(JSON.parse(response.body).error, 'NOT_FOUND', route);
+    assert.equal(await connectStatus(route), 404, route);
+  }
+  for (const method of ['GET', 'POST', 'DELETE']) {
+    const response = await request(port, '/api/runs', method);
+    assert.equal(response.status, 501);
+    assert.equal(JSON.parse(response.body).error, 'NOT_IMPLEMENTED');
   }
   for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'TRACE']) {
-    for (const route of ['/api', '/api/', '/api/test']) {
-      const response = await request(port, route, method);
-      assert.equal(response.status, 501);
-      if (method !== 'HEAD') assert.deepEqual(JSON.parse(response.body), { error: 'NOT_IMPLEMENTED' });
-    }
-    if (['GET', 'HEAD'].includes(method)) continue;
-    for (const route of ['/', '/healthz', '/readyz', '/missing']) {
-      const response = await request(port, route, method);
-      assert.equal(response.status, 405);
-      assert.equal(response.headers.allow, 'GET, HEAD');
+    if (!['GET', 'HEAD'].includes(method)) {
+      for (const route of ['/', '/healthz', '/readyz', '/missing']) {
+        const response = await request(port, route, method);
+        assert.equal(response.status, 405);
+        assert.equal(response.headers.allow, 'GET, HEAD');
+      }
     }
   }
+  assert.equal(await connectStatus('/healthz'), 405);
 });
 
 test('严格解码与路径安全：拒绝穿越、双编码、反斜线及非白名单', async t => {

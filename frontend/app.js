@@ -1,3 +1,5 @@
+import { initRealData } from './real-data.js';
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -22,7 +24,7 @@ function setView(view) {
 
 function openProject(project = 'skin') {
   if (project !== 'skin') {
-    toast('该项目等待商品事实确认；M03 完成前不能进入商品生产工作台');
+    toast('演示项目不接入真实商品事实与生产闸口；请在「商品项目」页创建真实项目并确认事实');
     return;
   }
   state.project = true;
@@ -69,15 +71,11 @@ $$('[data-open-project]').forEach(card => {
   card.addEventListener('click', activateProject);
   card.addEventListener('keydown', activateProject);
 });
-$('#new-project-button').addEventListener('click', startWizard);
-$('#projects-new').addEventListener('click', startWizard);
 $('#quick-start').addEventListener('click', startWizard);
 $('#background-task').addEventListener('click', () => toast('仅换背景将在 M06 接入主体保护与实际生成'));
-$('#import-button').addEventListener('click', () => toast('导入商品资料将在 M03 接入文件校验'));
-$('#upload-button').addEventListener('click', () => toast('素材上传将在 M03 接入版本与来源记录'));
 $('#back-home').addEventListener('click', closeProject);
 $('#start-generation').addEventListener('click', startWizard);
-$('#project-settings').addEventListener('click', () => toast('项目设置将在 M03 接入商品事实与平台目标'));
+$('#project-settings').addEventListener('click', () => toast('此页为 M02 演示项目，不写入真实商品事实；真实项目请在「商品项目」页打开商品事实'));
 $('#professional-button').addEventListener('click', openDrawer);
 $('#drawer-button').addEventListener('click', openDrawer);
 $('#asset-detail-button').addEventListener('click', () => showAsset(state.selectedAsset));
@@ -221,3 +219,4 @@ function restoreRoute() {
 }
 window.addEventListener('hashchange', restoreRoute);
 restoreRoute();
+initRealData({ toast });

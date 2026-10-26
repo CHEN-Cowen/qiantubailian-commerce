@@ -13,8 +13,8 @@ async function enumerate(directory) {
   }
   return files;
 }
-const files = ['frontend/app.js', 'plugins/seedream/server.mjs'].map(name => path.join(root, name));
-for (const directory of ['src', 'scripts', 'test']) files.push(...await enumerate(path.join(root, directory)));
+const files = ['plugins/seedream/server.mjs'].map(name => path.join(root, name));
+for (const directory of ['src', 'scripts', 'test', 'frontend']) files.push(...await enumerate(path.join(root, directory)));
 for (const file of files.sort()) {
   const result = spawnSync(process.execPath, ['--check', file], { stdio: 'inherit' });
   if (result.error || result.status !== 0) { process.exitCode = 1; break; }

@@ -3,14 +3,17 @@ import { open, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LOOPBACK_HOSTS } from './config.mjs';
+import { createStore } from './store.mjs';
+import { createApi } from './api.mjs';
 
-export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.1.0', module: 'M01' });
+export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.3.0', module: 'M03' });
 export const STATIC_FILES = Object.freeze([
-  'index.html', 'app.js', 'style.css', 'viewport.css', 'icon.svg', 'architecture.svg',
+  'index.html', 'app.js', 'api.js', 'real-data.js', 'style.css', 'm03.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
 ]);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8', '.jpg': 'image/jpeg' };
 const defaultRoot = fileURLToPath(new URL('../frontend/', import.meta.url));
+const defaultDataDir = fileURLToPath(new URL('../runtime/', import.meta.url));
 
 async function readAsset(root, name) {
   let current = root;
@@ -41,10 +44,21 @@ function pathname(raw) {
   return decoded;
 }
 
-export function createApp({ host = '127.0.0.1', port = 3000, staticRoot = defaultRoot } = {}) {
+export function createApp({
+  host = '127.0.0.1',
+  port = 3000,
+  staticRoot = defaultRoot,
+  storeDir = process.env.QTB_DATA_DIR || defaultDataDir,
+  allowedTenants = ['tenant_demo'],
+  defaultTenant = 'tenant_demo',
+  defaultActor = 'demo_operator',
+  maxUploadBytes,
+} = {}) {
   if (!LOOPBACK_HOSTS.includes(host)) throw new Error('HOST 必须为 loopback 地址');
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('PORT 配置无效');
   const root = path.resolve(staticRoot);
+  const store = createStore({ dir: storeDir });
+  const api = createApi({ store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'no-store');
@@ -57,7 +71,10 @@ export function createApp({ host = '127.0.0.1', port = 3000, staticRoot = defaul
     const handle = async () => {
       let route;
       try { route = pathname(req.url); } catch { send(400, { error: 'BAD_REQUEST' }); return; }
-      if (route === '/api' || route.startsWith('/api/')) { send(501, { error: 'NOT_IMPLEMENTED' }); return; }
+      if (route === '/api' || route.startsWith('/api/')) {
+        await api(req, res, route, send);
+        return;
+      }
       if (!['GET', 'HEAD'].includes(req.method)) {
         res.setHeader('Allow', 'GET, HEAD');
         send(405, { error: 'METHOD_NOT_ALLOWED' });

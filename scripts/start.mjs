@@ -25,13 +25,13 @@ try {
   app.server.on('error', () => { console.error('服务运行失败'); process.exitCode = 1; void stop(); });
   const address = await app.listen();
   if (!stopping) {
-    console.log(`M01 已启动，端口 ${address.port}`);
+    console.log(`M03 已启动，端口 ${address.port}`);
     if (process.send) process.send({ type: 'ready', port: address.port, host: address.address });
   } else {
     await app.close();
   }
 } catch {
-  console.error('M01 启动失败，请检查配置与端口');
+  console.error('M03 启动失败，请检查配置与端口');
   process.exitCode = 1;
   await stop();
 }
