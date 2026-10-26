@@ -394,7 +394,7 @@ function renderSpecDetail(spec) {
         <li>平台规则：${channel.rule_id ? `${escapeHtml(channel.rule_id)} v${escapeHtml(channel.version)} · ${RULE_STATUS_LABEL[channel.status] ?? escapeHtml(channel.status)}` : '未匹配到规则'}${channel.platform_coverage === 'verified' ? '' : ' · 覆盖不足，不能声称平台通过'}</li>
         <li>商品事实：v${spec.product_truth.version}<code>${escapeHtml(spec.product_truth.content_hash.slice(0, 12))}…</code></li>
         <li>目录版本：${escapeHtml(spec.provenance.catalog_version)} · 装配器 ${escapeHtml(spec.provenance.spec_builder_version)}</li>
-        <li>预算：${spec.budget.max_credits} 额度 / 最多 ${spec.budget.max_attempts} 轮<span class="spec-meta">（模板推荐值，正式报价属 M05）</span></li>
+        <li>预算：${spec.budget.max_credits} 额度 / 最多 ${spec.budget.max_attempts} 轮<span class="spec-meta">（模板推荐值，正式报价以冻结的生产配置为准）</span></li>
       </ul>
       ${resolutions.length === 0 ? '' : `<h4>冲突处理记录</h4><ul class="truth-warnings">${resolutions.map(item => `<li><b>${escapeHtml(item.key)}</b> → ${escapeHtml(item.option)} · 优先方：${escapeHtml(priorityLabel(item))}</li>`).join('')}</ul>`}
       ${(gaps.warnings ?? []).length === 0 ? '' : `<h4>当时的提示</h4><ul class="truth-warnings">${gaps.warnings.map(item => `<li>${escapeHtml(item.message)}</li>`).join('')}</ul>`}

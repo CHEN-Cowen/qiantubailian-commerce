@@ -584,8 +584,8 @@ test('M03 前端接线：真实数据脚本引用的元素存在、白名单同�
   }
   for (const name of ['api.js', 'real-data.js', 'm03.css']) assert.ok(STATIC_FILES.includes(name), `白名单缺少 ${name}`);
   assert.match(html, /href="m03\.css"/);
-  assert.match(html, /REAL DATA · 服务端持久化/);
-  assert.match(html, /M02 演示数据/);
+  assert.match(html, /我的项目/);
+  assert.match(html, /以下为演示数据 · 刷新即重置/);
   assert.match(app, /initRealData\(\{ toast \}\)/);
   assert.doesNotMatch(app, /M03 接入文件校验/);
   assert.doesNotMatch(app, /M03 接入版本与来源记录/);

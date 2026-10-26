@@ -72,16 +72,18 @@ $$('[data-open-project]').forEach(card => {
   card.addEventListener('keydown', activateProject);
 });
 $('#quick-start').addEventListener('click', startWizard);
-$('#background-task').addEventListener('click', () => toast('仅换背景将在 M06 接入主体保护与实际生成'));
+$('#background-task').addEventListener('click', () => toast('此为演示入口；请在「商品项目」中打开真实项目使用仅换背景'));
 $('#back-home').addEventListener('click', closeProject);
 $('#start-generation').addEventListener('click', startWizard);
-$('#project-settings').addEventListener('click', () => toast('此页为 M02 演示项目，不写入真实商品事实；真实项目请在「商品项目」页打开商品事实'));
+$('#project-settings').addEventListener('click', () => toast('此页为演示项目，不会保存；真实项目请在「商品项目」页打开'));
 $('#professional-button').addEventListener('click', openDrawer);
 $('#drawer-button').addEventListener('click', openDrawer);
 $('#asset-detail-button').addEventListener('click', () => showAsset(state.selectedAsset));
-$('#revise-button').addEventListener('click', () => toast('修订任务将在 M08 接入版本对比与重新质检'));
+$('#revise-button').addEventListener('click', () => toast('演示页暂不支持修订；请在真实项目中使用自动修订'));
 $('#zoom-button').addEventListener('click', () => showAsset(state.selectedAsset));
 $('#help-button').addEventListener('click', showHelp);
+$('#data-note-button').addEventListener('click', showHelp);
+$('#data-note-button').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showHelp(); } });
 $('#close-help').addEventListener('click', () => $('#help-dialog').close());
 $('#help-ok').addEventListener('click', () => $('#help-dialog').close());
 $$('[data-close-drawer]').forEach(button => button.addEventListener('click', closeDrawer));
@@ -96,8 +98,8 @@ $$('.asset-card').forEach(card => card.addEventListener('click', () => {
 $$('.drawer-tabs button').forEach(button => button.addEventListener('click', () => {
   $$('.drawer-tabs button').forEach(item => item.classList.remove('selected'));
   button.classList.add('selected');
-  if (button.textContent === 'Prompt') toast('Prompt 为当前版本快照，手动修改将在 M08 生成新版本');
-  if (button.textContent === '模型参数') toast('模型参数仅展示适配器快照，真实 Provider 将在 M06 接入');
+  if (button.textContent === 'Prompt') toast('演示数据，仅供查看');
+  if (button.textContent === '模型参数') toast('演示数据，仅供查看');
 }));
 
 $('#sort-assets').addEventListener('click', () => toast('已按最近更新时间排序'));

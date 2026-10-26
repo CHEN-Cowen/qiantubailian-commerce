@@ -74,7 +74,7 @@ function renderProjects() {
   const list = $('#real-list');
   if (!list) return;
   if (state.projects.length === 0) {
-    list.innerHTML = '<p class="real-empty">尚未创建真实项目。点击「导入商品资料」或「新建项目」开始；下方 mock 演示区不写入任何真实数据。</p>';
+    list.innerHTML = '<p class="real-empty">尚未创建项目。点击「导入商品资料」或「新建项目」开始。</p>';
     return;
   }
   list.innerHTML = state.projects.map(project => {
