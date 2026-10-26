@@ -90,6 +90,7 @@ function renderProjects() {
       <div class="real-card-side">${pill}
         <button class="text-button" data-action="truth">商品事实</button>
         <button class="text-button" data-action="upload">上传素材</button>
+        <button class="text-button" data-action="spec">生产配置</button>
       </div>
     </article>`;
   }).join('');

@@ -7,13 +7,17 @@ import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
  * - 写操作串行化并在临时文件上原子替换，避免部分写入。
  * - 写失败时内存与磁盘都保持上一个已提交状态。
  */
-const EMPTY_DATA = () => ({ schema_version: 1, projects: {}, assets: {}, truth_versions: {} });
+const TABLES = Object.freeze(['projects', 'assets', 'truth_versions', 'brand_kits', 'brand_kit_versions', 'specs']);
+const EMPTY_DATA = () => ({
+  schema_version: 1,
+  projects: {}, assets: {}, truth_versions: {}, brand_kits: {}, brand_kit_versions: {}, specs: {},
+});
 
 function normalize(raw) {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('存储结构无效');
   if (raw.schema_version !== 1) throw new Error('存储版本不支持');
   const data = EMPTY_DATA();
-  for (const key of ['projects', 'assets', 'truth_versions']) {
+  for (const key of TABLES) {
     const table = raw[key];
     if (table === undefined) continue;
     if (table === null || typeof table !== 'object' || Array.isArray(table)) throw new Error('存储结构无效');

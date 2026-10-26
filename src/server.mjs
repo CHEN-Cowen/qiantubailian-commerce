@@ -8,7 +8,7 @@ import { createApi } from './api.mjs';
 
 export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.3.0', module: 'M03' });
 export const STATIC_FILES = Object.freeze([
-  'index.html', 'app.js', 'api.js', 'real-data.js', 'style.css', 'm03.css', 'viewport.css', 'icon.svg', 'architecture.svg',
+  'index.html', 'app.js', 'api.js', 'real-data.js', 'm04.js', 'style.css', 'm03.css', 'm04.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
 ]);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8', '.jpg': 'image/jpeg' };
@@ -53,12 +53,13 @@ export function createApp({
   defaultTenant = 'tenant_demo',
   defaultActor = 'demo_operator',
   maxUploadBytes,
+  clock,
 } = {}) {
   if (!LOOPBACK_HOSTS.includes(host)) throw new Error('HOST 必须为 loopback 地址');
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('PORT 配置无效');
   const root = path.resolve(staticRoot);
   const store = createStore({ dir: storeDir });
-  const api = createApi({ store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes });
+  const api = createApi({ store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'no-store');

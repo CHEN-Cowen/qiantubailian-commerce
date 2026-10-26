@@ -7,6 +7,7 @@
   <meta name="description" content="从真实商品素材到可发布视觉资产的商品视觉生产与校验工作台。">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="m03.css">
+  <link rel="stylesheet" href="m04.css">
   <link rel="stylesheet" href="viewport.css">
   <link rel="icon" href="icon.svg">
 </head>
@@ -108,6 +109,55 @@
   <dialog id="truth-dialog" class="real-dialog real-dialog-wide" aria-labelledby="truth-title"><button class="dialog-close" data-close-dialog="truth-dialog" aria-label="关闭">×</button><p class="eyebrow">M03 · 商品事实与生产闸口</p><h2 id="truth-title">商品事实</h2><div id="truth-body"></div></dialog>
   <dialog id="help-dialog"><button class="dialog-close" id="close-help">×</button><p class="eyebrow">M03 · 项目与商品事实</p><h2>真实数据与演示数据是分开的</h2><p>「商品项目」页顶部的真实项目来自服务端 <code>/api/projects</code>，素材与事实版本写入本机 runtime 存储；带 MOCK 标记的区域仍是演示数据。生成、质检、费用与导出尚未接入（M05—M08）。</p><button class="primary" id="help-ok">知道了</button></dialog>
   <dialog id="flow-dialog" aria-labelledby="flow-title"><button class="dialog-close" id="close-flow" aria-label="关闭演示">×</button><p class="eyebrow">MOCK · 本页演示 / 刷新重置</p><h2 id="flow-title">新品上架包</h2><div id="flow-content"></div><p id="flow-error" role="alert"></p><div class="flow-actions"><button class="secondary" id="flow-back">上一步</button><button class="primary" id="flow-next">下一步</button></div></dialog>
+  <dialog id="spec-dialog" class="real-dialog real-dialog-wide" aria-labelledby="spec-title">
+    <button class="dialog-close" data-close-dialog="spec-dialog" aria-label="关闭">×</button>
+    <p class="eyebrow">M04 · 模板 / 品牌 / 平台规则</p>
+    <h2 id="spec-title">生产配置</h2>
+    <form id="spec-form" class="real-form">
+      <div class="spec-grid">
+        <label>任务模板<select id="spec-template" aria-label="任务模板"></select></label>
+        <label>品牌套件<select id="spec-brand" aria-label="品牌套件"></select></label>
+        <label>目标平台<input id="spec-platform" maxlength="40" placeholder="例如：天猫"></label>
+      </div>
+      <p class="real-note">模板与平台规则来自服务端只读目录。平台规则带来源、版本与复核日期；内置基线未经官方核验，覆盖不足时结论只能是 unknown，不能声称平台通过。</p>
+      <div id="spec-body"><p class="truth-hint">正在读取模板与规则…</p></div>
+      <p class="form-error" id="spec-error" role="alert"></p>
+      <div class="real-actions">
+        <button type="button" class="secondary" id="spec-brand-new">新建品牌套件</button>
+        <button type="button" class="secondary" data-close-dialog="spec-dialog">关闭</button>
+        <button type="submit" class="primary" id="spec-freeze">冻结生产配置</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="brand-dialog" aria-labelledby="brand-title">
+    <button class="dialog-close" data-close-dialog="brand-dialog" aria-label="关闭">×</button>
+    <p class="eyebrow">M04 · 品牌基础套件</p>
+    <h2 id="brand-title">新建品牌套件</h2>
+    <p class="real-note">套件只追加版本，已冻结的配置引用固定版本，不会被新版本改写。</p>
+    <form id="brand-form" class="real-form">
+      <label>套件名称<input name="name" required maxlength="60" placeholder="例如：月光品牌套件"></label>
+      <label>主色（#RRGGBB）<input name="primary" required pattern="#[0-9A-Fa-f]{6}" placeholder="#246BCE"></label>
+      <label>辅助色（可选，逗号分隔）<input name="secondary" placeholder="#F8FAFC, #15803D"></label>
+      <label class="brand-inline"><span><input type="checkbox" name="logo_present"> 套件包含 Logo</span></label>
+      <label>Logo 说明（可选）<input name="logo_description" maxlength="120" placeholder="例如：左上角文字标"></label>
+      <label>授权字体（可选）<input name="font_name" maxlength="60" placeholder="例如：思源黑体"></label>
+      <label>字体授权状态<select name="font_license" aria-label="字体授权状态">
+        <option value="licensed">已授权（可商用）</option>
+        <option value="unlicensed">未授权</option>
+        <option value="unknown" selected>未确认</option>
+      </select></label>
+      <label>语气（可选）<input name="tone" maxlength="120" placeholder="例如：克制、可信"></label>
+      <label>禁用表达（每行一条）<textarea name="banned" rows="3" placeholder="例如：根治&#10;100% 有效"></textarea></label>
+      <p class="form-error" id="brand-error" role="alert"></p>
+      <div class="real-actions">
+        <button type="button" class="secondary" data-close-dialog="brand-dialog">取消</button>
+        <button type="submit" class="primary" id="brand-submit">保存套件</button>
+      </div>
+    </form>
+  </dialog>
+
   <script type="module" src="app.js"></script>
+  <script type="module" src="m04.js"></script>
 </body>
 </html>

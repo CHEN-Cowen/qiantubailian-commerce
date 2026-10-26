@@ -57,4 +57,16 @@ export const api = {
   listTruthVersions: id => call(`/api/projects/${encodeURIComponent(id)}/truth-versions`),
   createTruthVersion: (id, body) => call(`/api/projects/${encodeURIComponent(id)}/truth-versions`, { method: 'POST', json: body }),
   readiness: id => call(`/api/projects/${encodeURIComponent(id)}/readiness`),
+  // M04：目录、品牌套件与生产配置
+  listTemplates: () => call('/api/catalog/templates'),
+  getTemplate: id => call(`/api/catalog/templates/${encodeURIComponent(id)}`),
+  listChannelRules: () => call('/api/catalog/channel-rules'),
+  listBrandKits: () => call('/api/brand-kits'),
+  getBrandKit: id => call(`/api/brand-kits/${encodeURIComponent(id)}`),
+  createBrandKit: body => call('/api/brand-kits', { method: 'POST', json: body }),
+  createBrandKitVersion: (id, body) => call(`/api/brand-kits/${encodeURIComponent(id)}/versions`, { method: 'POST', json: body }),
+  previewSpec: (id, body) => call(`/api/projects/${encodeURIComponent(id)}/specs/preview`, { method: 'POST', json: body }),
+  createSpec: (id, body) => call(`/api/projects/${encodeURIComponent(id)}/specs`, { method: 'POST', json: body }),
+  listSpecs: id => call(`/api/projects/${encodeURIComponent(id)}/specs`),
+  getSpec: (id, version) => call(`/api/projects/${encodeURIComponent(id)}/specs/${encodeURIComponent(version)}`),
 };
