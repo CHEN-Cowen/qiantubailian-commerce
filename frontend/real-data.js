@@ -43,7 +43,7 @@ function renderBlockers(blockers = []) {
 export function initRealData({ toast } = {}) {
   if (typeof toast === 'function') state.toast = toast;
   $('#import-button')?.addEventListener('click', () => openCreateDialog('导入商品资料'));
-  $('#new-project-button')?.addEventListener('click', () => openCreateDialog('创建商品项目'));
+  $$('.js-new-project').forEach(button => button.addEventListener('click', () => openCreateDialog('创建商品项目')));
   $('#projects-new')?.addEventListener('click', () => openCreateDialog('创建商品项目'));
   $('#upload-button')?.addEventListener('click', () => openUploadDialog());
   $('#project-form')?.addEventListener('submit', submitCreate);
