@@ -22,6 +22,8 @@ const TABLES = Object.freeze([
   'eval_dataset_items', 'eval_reports', 'model_candidates', 'model_routing',
   // M10：结构化详情页与视频分镜/帧检查（只增不改，失效按当前上下文另算）
   'detail_pages', 'video_plans',
+  // M11：批量任务与条目、团队成员、品牌配方与版本、配方引用
+  'batches', 'batch_items', 'members', 'recipes', 'recipe_versions', 'recipe_usages',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -30,6 +32,7 @@ const EMPTY_DATA = () => ({
   quality_reports: {}, exports: {},
   eval_dataset_items: {}, eval_reports: {}, model_candidates: {}, model_routing: {},
   detail_pages: {}, video_plans: {},
+  batches: {}, batch_items: {}, members: {}, recipes: {}, recipe_versions: {}, recipe_usages: {},
 });
 
 function normalize(raw) {

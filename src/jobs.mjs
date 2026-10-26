@@ -2242,13 +2242,165 @@ export function createJobs({
     return getExport(ctx, result.id);
   }
 
+  // ---------- M11：批量导出（逐项隔离，失败不静默省略） ----------
+
+  async function createBatchExport(ctx, batchId, { scope = 'partial' } = {}) {
+    if (scope !== 'complete' && scope !== 'partial') {
+      throw new ApiError(422, 'INVALID_SCOPE', '导出范围只能是 complete 或 partial');
+    }
+    const result = await store.mutate(async data => {
+      const batch = data.batches?.[String(batchId ?? '')] ?? null;
+      if (!batch || batch.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '批量任务不存在');
+      }
+      const at = clock();
+      const items = Object.values(data.batch_items ?? {})
+        .filter(item => item.batch_id === batch.id && item.tenant_id === ctx.tenantId)
+        .sort((left, right) => left.index - right.index);
+      const entries = [];
+      const images = [];
+      const included = [];
+      const missing = [];
+
+      for (const item of items) {
+        // 条目状态以真实任务状态为准：任务结束但条目还是 running 会造成"已完成却导不出"
+        const linked = item.run_id ? data.runs?.[item.run_id] ?? null : null;
+        if (linked) {
+          item.status = linked.status === 'completed'
+            ? 'completed'
+            : linked.status === 'cancelled'
+              ? 'cancelled'
+              : ACTIVE_STATES.has(linked.status) ? 'running' : 'failed';
+        }
+        if (item.status !== 'completed' || !item.run_id) {
+          missing.push({
+            item_id: item.id, sku: item.sku, status: item.status,
+            reason: item.status === 'completed' ? 'RETRY_NEEDED' : `ITEM_${String(item.status).toUpperCase()}`,
+            detail: item.last_error ?? null, blockers: item.blockers ?? [],
+          });
+          continue;
+        }
+        const run = data.runs?.[item.run_id] ?? null;
+        if (!run || run.tenant_id !== ctx.tenantId) {
+          missing.push({ item_id: item.id, sku: item.sku, status: item.status, reason: 'RUN_MISSING', detail: null });
+          continue;
+        }
+        const reports = {};
+        const validities = {};
+        for (const version of run.versions ?? []) {
+          const report = data.quality_reports?.[version.report_id] ?? null;
+          if (report) reports[report.id] = report;
+          validities[version.report_id] = await reportValidityIn(data, report);
+        }
+        const plan = planExport({ run, versions: run.versions ?? [], reports, validities, scope: 'partial' });
+        if (!plan.ok) {
+          missing.push({
+            item_id: item.id, sku: item.sku, status: item.status, reason: plan.code,
+            detail: plan.message, missing: plan.missing ?? [],
+          });
+          continue;
+        }
+        const itemImages = [];
+        for (const { version, report, deliverable } of plan.included) {
+          const bytes = await store.readBlob(version.hash, version.format ?? 'png');
+          if (!bytes) {
+            throw new ApiError(409, 'EXPORT_FILE_MISSING', `条目 ${item.sku} 的交付物 ${deliverable.deliverable_id} 文件不可读取`);
+          }
+          const file = `images/${item.sku}/${deliverable.deliverable_id}.${version.format ?? 'png'}`;
+          entries.push({ name: file, bytes });
+          const row = {
+            item_id: item.id, sku: item.sku, run_id: run.id,
+            deliverable_id: deliverable.deliverable_id, label: deliverable.label, file,
+            sha256: version.hash, format: version.format, width: version.width, height: version.height,
+            bytes: version.bytes, version_id: version.id, report_id: report.id, decision: report.decision,
+          };
+          itemImages.push(row);
+          images.push(row);
+        }
+        included.push({ item_id: item.id, sku: item.sku, run_id: run.id, images: itemImages });
+      }
+
+      if (scope === 'complete' && missing.length > 0) {
+        throw new ApiError(409, 'BATCH_EXPORT_INCOMPLETE', `完整批量包要求全部条目可发布，当前仍有 ${missing.length} 项未达成`, {
+          missing: missing.map(item => ({ sku: item.sku, reason: item.reason })),
+        });
+      }
+      if (included.length === 0) {
+        throw new ApiError(409, 'BATCH_EXPORT_EMPTY', '没有可导出的条目，逐项原因见 missing', { missing });
+      }
+
+      const manifest = {
+        package_format: 'qtb-batch-package.1',
+        schema_version: 1,
+        generated_at: new Date(at).toISOString(),
+        batch_id: batch.id,
+        batch_name: batch.name,
+        scope,
+        tenant_id: ctx.tenantId,
+        provider: {
+          id: provider.capabilities().id ?? null,
+          simulated: provider.capabilities().simulated === true,
+          acceptance: provider.capabilities().acceptance ?? null,
+        },
+        items: included.map(item => ({
+          item_id: item.item_id, sku: item.sku, run_id: item.run_id,
+          images: item.images.map(row => ({
+            deliverable_id: row.deliverable_id, label: row.label, file: row.file,
+            sha256: row.sha256, format: row.format, width: row.width, height: row.height,
+            version_id: row.version_id, report_id: row.report_id, decision: row.decision,
+          })),
+        })),
+        missing,
+        platform_compliance: 'not_claimed',
+        note: '失败与阻断条目在 missing 中逐项列出；批量导出不使用抽检替代硬检查。',
+      };
+      entries.push({ name: 'batch-manifest.json', bytes: Buffer.from(JSON.stringify(manifest, null, 2)) });
+      const zip = buildZip(entries, { now: at });
+      const packageHash = zipSha256(zip);
+      const file = await store.putBlob(zip, packageHash, 'zip');
+      const record = {
+        id: exportRecordId(),
+        schema_version: EXPORT_SCHEMA_VERSION,
+        package_format: 'qtb-batch-package.1',
+        kind: 'batch',
+        tenant_id: ctx.tenantId,
+        project_id: null,
+        run_id: null,
+        batch_id: batch.id,
+        scope,
+        complete: missing.length === 0,
+        status: missing.length === 0 ? 'PACKAGE_COMPLETE' : 'PACKAGE_PARTIAL',
+        message: missing.length === 0
+          ? `完整批量包：${included.length} 项`
+          : `部分批量包：${included.length} 项可导出，${missing.length} 项缺失`,
+        package_filename: `qtb-batch-${batch.id}-${scope}.zip`,
+        package_sha256: packageHash,
+        package_bytes: zip.length,
+        package_path: file,
+        manifest,
+        qa_summary: null,
+        included: images,
+        missing,
+        platform_compliance: 'not_claimed',
+        content_hash_scope: '清单与文件哈希；不含图片二进制',
+        created_by: ctx.actorId,
+        created_at: new Date(at).toISOString(),
+      };
+      data.exports[record.id] = record;
+      batch.export_ids = [...(batch.export_ids ?? []), record.id];
+      batch.updated_at = new Date(at).toISOString();
+      return { id: record.id };
+    });
+    return getExport(ctx, result.id);
+  }
+
   return {
     start, stop, createRun, cancelRun, confirmBudget, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
     listGenerationRecords, getGenerationRecord,
     listQualityReports, getQualityReport, reviewQualityReport,
     listRunVersions, activateVersion, createExport, listExports, getExport, readExportPackage,
     createVideoPlan, listVideoPlans, getVideoPlan, evaluateVideoPlanFrames, generateVideo,
-    createJointExport,
+    createJointExport, createBatchExport,
     get activeSubscriptions() { return listeners.size; },
   };
 }

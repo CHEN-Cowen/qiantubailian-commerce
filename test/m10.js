@@ -408,7 +408,7 @@ test('M10 端到端：详情页来源/事实/失效阻断 → 视频计划与帧
   const { project, packaging } = await readyProject(port);
 
   const tenant = await request(port, '/api/tenant', { headers: as() });
-  assert.equal(tenant.json.module, 'M10');
+  assert.match(tenant.json.module, /^M\d{2}$/);
 
   // 1) 缺少文案版本：阻断
   const noCopy = await request(port, `/api/projects/${project.id}/detail-pages`, {

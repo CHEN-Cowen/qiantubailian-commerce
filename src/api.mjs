@@ -13,7 +13,7 @@ import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './p
 import { balanceOf, ledgerEntries } from './credits.mjs';
 import { RETRYABLE_CODES } from './provider.mjs';
 import { createProviderFromEnv } from './providers/index.mjs';
-import { createJobs, TERMINAL_STATES } from './jobs.mjs';
+import { createJobs, ACTIVE_STATES, TERMINAL_STATES } from './jobs.mjs';
 import {
   MAX_CANARY_PERCENT, MIN_CANARY_PERCENT, DEFAULT_CANARY_THRESHOLDS, summarizeDataset,
   summarizeEvaluation, evaluateCanaryHealth, planCanary,
@@ -21,6 +21,11 @@ import {
 import {
   buildDetailPage, checkDetailPageValidity, planPlatformDelivery,
 } from './m10.mjs';
+import {
+  applyRecipeApproval, batchSummary, can, describePermissions, evaluateRecipeUseValidity, isRecipeVisible,
+  makeRecipeVersion, planBatch, planMemberChange, previewImportRows,
+  resolveRole, summarizeCatalogConsole, validateRecipeInput,
+} from './m11.mjs';
 
 const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
 const now = () => new Date().toISOString();
@@ -109,7 +114,7 @@ export function createApi({
 
     if (resource === 'tenant' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
-      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M10' });
+      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M11' });
     }
     if (resource === 'credits' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
@@ -187,6 +192,60 @@ export function createApi({
     }
     if (resource === 'detail-pages') return handleDetailPages(ctx, method, rest, req, send);
     if (resource === 'video-plans') return handleVideoPlans(ctx, method, rest, req, send);
+    if (resource === 'batches') {
+      if (rest.length === 1) {
+        if (method === 'POST') return createBatchRoute(ctx, req, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listBatchesRoute(ctx, send);
+      }
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getBatchRoute(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'preview') {
+        requireMethod(method, ['POST']);
+        return previewBatchRoute(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'start') {
+        requireMethod(method, ['POST']);
+        return startBatchRoute(ctx, req, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'exports') {
+        requireMethod(method, ['POST']);
+        return batchExportRoute(ctx, rest[1], req, send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'members') {
+      if (rest.length === 1) {
+        if (method === 'POST') return upsertMemberRoute(ctx, req, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listMembersRoute(ctx, send);
+      }
+      if (rest.length === 2 && method === 'DELETE') return removeMemberRoute(ctx, rest[1], send);
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'recipes') {
+      if (rest.length === 1) {
+        if (method === 'POST') return createRecipeRoute(ctx, req, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listRecipesRoute(ctx, send);
+      }
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getRecipeRoute(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'approve') {
+        requireMethod(method, ['POST']);
+        return approveRecipeRoute(ctx, rest[1], req, send);
+      }
+      if (rest.length === 3 && rest[2] === 'usages') {
+        if (method === 'POST') return recordRecipeUsageRoute(ctx, rest[1], req, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listRecipeUsagesRoute(ctx, rest[1], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
     if (resource === 'eval') return handleEval(ctx, method, rest, req, query, send);
     if (resource === 'models') {
       if (rest.length === 1) {
@@ -1652,6 +1711,709 @@ export function createApi({
       video_plan_id: body.video_plan_id ?? null,
     });
     send(201, result);
+  }
+
+  // ---------- M11：批量、团队与品牌配方 ----------
+
+  function tenantMembers(data, tenantId) {
+    return Object.values(data.members ?? {}).filter(item => item.tenant_id === tenantId);
+  }
+
+  /**
+   * 权限闸口。零成员的租户把当前操作者视为 owner（引导路径）；
+   * 一旦登记过成员，未登记的操作者一律 403，不靠"默认放行"兜底。
+   */
+  async function requireAction(ctx, action) {
+    const resolved = await store.read(data => resolveRole({
+      members: tenantMembers(data, ctx.tenantId),
+      actorId: ctx.actorId,
+    }));
+    if (!can(resolved.role, action)) {
+      throw new ApiError(403, 'FORBIDDEN', `当前角色${resolved.role ? `（${resolved.role}）` : ''}没有 ${action} 权限`, {
+        action, role: resolved.role ?? null,
+      });
+    }
+    return resolved.role;
+  }
+
+  function roleOf(data, ctx) {
+    return resolveRole({ members: tenantMembers(data, ctx.tenantId), actorId: ctx.actorId });
+  }
+
+  function batchItemsOf(data, ctx, batchId) {
+    return Object.values(data.batch_items ?? {})
+      .filter(item => item.batch_id === batchId && item.tenant_id === ctx.tenantId)
+      .sort((left, right) => left.index - right.index);
+  }
+
+  function runStateOf(data, item) {
+    if (!item.run_id) return null;
+    const run = data.runs?.[item.run_id] ?? null;
+    if (!run || run.tenant_id !== item.tenant_id) return 'failed';
+    if (ACTIVE_STATES.has(run.status)) return 'running';
+    if (run.status === 'completed') return 'completed';
+    if (run.status === 'cancelled') return 'cancelled';
+    return 'failed';
+  }
+
+  /** 条目状态：已产生运行的按运行状态回写，未开始的按当前上下文重算阻断。 */
+  function itemStatusOf(data, item) {
+    const runState = runStateOf(data, item);
+    if (runState) return runState;
+    if (item.status === 'invalid') return 'invalid';
+    return item.status === 'ready' || item.status === 'blocked' ? item.status : 'imported';
+  }
+
+  /**
+   * 批量状态只反映"是否已开始执行"，不把"预览后就绪"误判成执行中：
+   * running 必须真的有在途任务；就绪未开始记为 ready。
+   */
+  function batchStatusOf(items) {
+    const terminal = new Set(['completed', 'failed', 'cancelled', 'blocked', 'invalid']);
+    if (items.some(item => item.status === 'running')) return 'running';
+    if (items.length > 0 && items.every(item => terminal.has(item.status))) {
+      return items.every(item => item.status === 'completed') ? 'completed' : 'partial';
+    }
+    if (items.some(item => item.status === 'completed' || item.status === 'failed')) return 'partial';
+    if (items.some(item => item.status === 'ready')) return 'ready';
+    if (items.some(item => item.status === 'blocked' || item.status === 'invalid')) return 'blocked';
+    return 'imported';
+  }
+
+  /**
+   * 逐项评估：事实、素材、冻结配置、报价能力与额度都在这里判定。
+   * 任何一项不满足只标记该条目，不影响批内其他条目。
+   */
+  function evaluateBatchItem(data, ctx, item) {
+    if (!item.project_id) {
+      return { status: 'invalid', blockers: item.blockers ?? [], quote: null };
+    }
+    const project = data.projects?.[item.project_id] ?? null;
+    if (!project || project.tenant_id !== ctx.tenantId) {
+      return { status: 'blocked', blockers: [{ code: 'PROJECT_MISSING', message: '导入的项目已不存在' }], quote: null };
+    }
+    const blockers = [];
+    const assets = Object.values(data.assets ?? {})
+      .filter(asset => asset.project_id === project.id && asset.tenant_id === ctx.tenantId);
+    const truth = latestTruth(data, project.id);
+    const readiness = computeReadiness(project, assets, truth);
+    for (const blocker of readiness.blockers ?? []) {
+      blockers.push({ code: blocker.code, message: blocker.message });
+    }
+    const spec = latestSpec(data, project.id);
+    if (!spec) blockers.push({ code: 'SPEC_REQUIRED', message: '尚未冻结生产配置，需先完成模板与平台设置' });
+    let quote = null;
+    if (spec) {
+      try {
+        quote = quoteFromSpec({ spec, at: clock() });
+      } catch (error) {
+        blockers.push({ code: 'QUOTE_UNAVAILABLE', message: error?.message ?? '报价不可用' });
+      }
+    }
+    if (blockers.length > 0) return { status: 'blocked', blockers, quote, spec };
+    return { status: 'ready', blockers: [], quote, spec };
+  }
+
+  function refreshBatch(data, ctx, batch) {
+    const items = batchItemsOf(data, ctx, batch.id);
+    for (const item of items) {
+      const runState = runStateOf(data, item);
+      if (runState) {
+        item.status = runState;
+        continue;
+      }
+      if (item.status === 'invalid' || item.status === 'running') continue;
+      const evaluated = evaluateBatchItem(data, ctx, item);
+      item.status = evaluated.status;
+      item.blockers = evaluated.blockers;
+      item.estimated_credits = evaluated.quote?.estimated_credits ?? 0;
+      item.max_credits = evaluated.quote?.max_credits ?? 0;
+      item.spec_version = evaluated.spec?.version ?? item.spec_version ?? null;
+    }
+    batch.items = items;
+    batch.summary = batchSummary(items);
+    batch.status = batchStatusOf(items);
+    batch.updated_at = new Date(clock()).toISOString();
+    return items;
+  }
+
+  function batchView(data, ctx, batch) {
+    const items = batch.items ?? batchItemsOf(data, ctx, batch.id);
+    return {
+      ...batch,
+      items,
+      summary: batchSummary(items),
+      status: batchStatusOf(items),
+      console: summarizeCatalogConsole({ items }),
+    };
+  }
+
+  function normalizeImportRows({ rows = [], columns = [] } = {}) {
+    if (!Array.isArray(rows)) throw new ApiError(422, 'IMPORT_ROWS_INVALID', 'rows 必须是数组');
+    if (rows.length > 0 && Array.isArray(rows[0]) && Array.isArray(columns) && columns.length > 0) {
+      return rows.map(cells => Object.fromEntries(columns.map((column, index) => [column, cells[index] ?? ''])));
+    }
+    return rows;
+  }
+
+  async function createBatchRoute(ctx, req, send) {
+    await requireAction(ctx, 'batch:create');
+    const body = await readJson(req);
+    const rows = normalizeImportRows({ rows: body.rows, columns: body.columns });
+    const created = await store.mutate(data => {
+      const existingSkus = Object.values(data.projects ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .map(item => item.sku);
+      const brandKitIds = Object.values(data.brand_kits ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .map(item => item.id);
+      let preview;
+      try {
+        preview = previewImportRows({
+          rows, columns: body.columns, mapping: body.mapping, existingSkus,
+          templateIds: listTemplates().map(item => item.id), brandKitIds,
+        });
+      } catch (error) {
+        throw new ApiError(422, 'IMPORT_INVALID', error?.message ?? '导入数据无效');
+      }
+      if (!preview.ok && preview.rows.length === 0) {
+        throw new ApiError(422, 'IMPORT_MAPPING_INVALID', preview.issues[0]?.message ?? '导入字段映射无效', {
+          issues: preview.issues,
+        });
+      }
+      const timestamp = now();
+      const batchId = newId('bat');
+      const items = [];
+      for (const row of preview.rows) {
+        const item = {
+          id: newId('bit'),
+          tenant_id: ctx.tenantId,
+          batch_id: batchId,
+          index: row.index,
+          sku: row.sku,
+          name: row.name,
+          category: row.category,
+          platform: row.platform,
+          template_id: row.template_id,
+          brand_kit_id: row.brand_kit_id,
+          facts: row.facts,
+          status: row.valid ? 'imported' : 'invalid',
+          project_id: null,
+          run_id: null,
+          quote_id: null,
+          spec_version: null,
+          blockers: row.valid ? [] : row.errors,
+          warnings: row.warnings,
+          estimated_credits: 0,
+          max_credits: 0,
+          last_error: null,
+          created_at: timestamp,
+        };
+        if (row.valid) {
+          const duplicate = Object.values(data.projects ?? {}).find(existing =>
+            existing.tenant_id === ctx.tenantId && existing.sku.toLowerCase() === row.sku.toLowerCase());
+          if (duplicate) {
+            item.status = 'invalid';
+            item.blockers = [{ code: 'IMPORT_SKU_EXISTS', message: `SKU ${row.sku} 已存在` }];
+          } else {
+            const project = {
+              id: newId('prj'),
+              tenant_id: ctx.tenantId,
+              name: row.name,
+              sku: row.sku,
+              category: row.category,
+              platform: row.platform ?? '',
+              status: 'drafting',
+              truth_head_version: 0,
+              spec_head_version: 0,
+              confirmation_status: null,
+              created_at: timestamp,
+              updated_at: timestamp,
+              created_by: ctx.actorId,
+              batch_id: batchId,
+            };
+            data.projects[project.id] = project;
+            item.project_id = project.id;
+          }
+        }
+        data.batch_items[item.id] = item;
+        items.push(item);
+      }
+      const batch = {
+        id: batchId,
+        schema_version: 1,
+        tenant_id: ctx.tenantId,
+        name: String(body.name ?? '').trim() || `批量导入 ${timestamp.slice(0, 10)}`,
+        status: batchStatusOf(items),
+        columns: Array.isArray(body.columns) ? body.columns : [],
+        mapping: preview.mapping,
+        items,
+        summary: batchSummary(items),
+        budget: {
+          confirmed: false,
+          confirmed_by: null,
+          confirmed_at: null,
+          estimated_credits: 0,
+          max_credits: 0,
+        },
+        export_ids: [],
+        created_by: ctx.actorId,
+        created_at: timestamp,
+        updated_at: timestamp,
+      };
+      data.batches[batch.id] = batch;
+      return { batch, issues: preview.issues, summary: preview.summary };
+    });
+    send(201, {
+      batch: batchView(await store.read(data => data), ctx, created.batch),
+      import_issues: created.issues,
+      import_summary: created.summary,
+    });
+  }
+
+  async function listBatchesRoute(ctx, send) {
+    await requireAction(ctx, 'batch:read');
+    const payload = await store.read(data => {
+      const batches = Object.values(data.batches ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+        .map(item => {
+          const items = batchItemsOf(data, ctx, item.id).map(item2 => ({ ...item2, status: itemStatusOf(data, item2) }));
+          return batchView(data, ctx, { ...item, items });
+        });
+      return { tenant_id: ctx.tenantId, batches, total: batches.length };
+    });
+    send(200, payload);
+  }
+
+  async function getBatchRoute(ctx, batchId, send) {
+    await requireAction(ctx, 'batch:read');
+    const payload = await store.read(data => {
+      const batch = data.batches?.[batchId] ?? null;
+      if (!batch || batch.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '批量任务不存在');
+      const items = batchItemsOf(data, ctx, batch.id).map(item => ({ ...item, status: itemStatusOf(data, item) }));
+      return { batch: batchView(data, ctx, { ...batch, items }) };
+    });
+    send(200, payload);
+  }
+
+  async function previewBatchRoute(ctx, batchId, send) {
+    await requireAction(ctx, 'batch:preview');
+    const payload = await store.mutate(data => {
+      const batch = data.batches?.[batchId] ?? null;
+      if (!batch || batch.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '批量任务不存在');
+      if (batch.status === 'running') throw new ApiError(409, 'BATCH_RUNNING', '批量正在执行，不能重复预览');
+      const items = refreshBatch(data, ctx, batch);
+      const balance = balanceOf(data, ctx.tenantId, { initialCredits });
+      const plan = planBatch({
+        items: items.map(item => ({
+          item_id: item.id, sku: item.sku, status: item.status, blockers: item.blockers,
+          estimated_credits: item.estimated_credits, max_credits: item.max_credits,
+        })),
+        availableCredits: balance.available,
+        // 预览回答"确认预算后能否开始"，因此这里按已确认计算，并单独标出是否仍需确认
+        confirmed: true,
+      });
+      batch.preview = {
+        at: new Date(clock()).toISOString(),
+        estimated_credits: plan.estimated_credits,
+        max_credits: plan.max_credits,
+        can_start: plan.can_start,
+        budget_confirmed: batch.budget?.confirmed === true,
+        requires_budget_confirmation: batch.budget?.confirmed !== true,
+        reasons: plan.reasons,
+      };
+      return {
+        batch: batchView(data, ctx, batch),
+        preview: {
+          ...plan,
+          budget_confirmed: batch.preview.budget_confirmed,
+          requires_budget_confirmation: batch.preview.requires_budget_confirmation,
+        },
+        balance,
+      };
+    });
+    send(200, payload);
+  }
+
+  async function startBatchRoute(ctx, req, batchId, send) {
+    await requireAction(ctx, 'batch:start');
+    const body = await readJson(req).catch(() => ({}));
+    if (body.confirm_budget !== true) {
+      throw new ApiError(422, 'BATCH_BUDGET_UNCONFIRMED', '开始批量前必须显式确认预算（confirm_budget: true）');
+    }
+    const prepared = await store.mutate(data => {
+      const batch = data.batches?.[batchId] ?? null;
+      if (!batch || batch.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '批量任务不存在');
+      if (batch.status === 'running') throw new ApiError(409, 'BATCH_RUNNING', '批量正在执行，不能重复开始');
+      const items = refreshBatch(data, ctx, batch);
+      const balance = balanceOf(data, ctx.tenantId, { initialCredits });
+      const plan = planBatch({
+        items: items.map(item => ({
+          item_id: item.id, sku: item.sku, status: item.status, blockers: item.blockers,
+          estimated_credits: item.estimated_credits, max_credits: item.max_credits,
+        })),
+        availableCredits: balance.available,
+        confirmed: true,
+      });
+      if (!plan.can_start) {
+        throw new ApiError(409, 'BATCH_NOT_STARTABLE', plan.reasons[0]?.message ?? '批量暂不可开始', {
+          reasons: plan.reasons,
+        });
+      }
+      batch.budget = {
+        confirmed: true,
+        confirmed_by: ctx.actorId,
+        confirmed_at: new Date(clock()).toISOString(),
+        estimated_credits: plan.estimated_credits,
+        max_credits: plan.max_credits,
+      };
+      batch.status = 'running';
+      batch.updated_at = new Date(clock()).toISOString();
+      const ready = items.filter(item => item.status === 'ready');
+      batch.items = items;
+      return {
+        batchId: batch.id,
+        ready: ready.map(item => ({ itemId: item.id, projectId: item.project_id, sku: item.sku })),
+      };
+    });
+
+    const failures = [];
+    for (const entry of prepared.ready) {
+      try {
+        const context = await store.read(data => {
+          const project = data.projects?.[entry.projectId] ?? null;
+          if (!project || project.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '项目不存在');
+          const spec = latestSpec(data, project.id);
+          if (!spec) throw new ApiError(409, 'SPEC_REQUIRED', '缺少冻结配置');
+          return { project, spec };
+        });
+        const quote = await store.mutate(data => {
+          const record = { ...quoteFromSpec({ spec: context.spec, at: clock() }), tenant_id: ctx.tenantId, project_id: context.project.id };
+          data.quotes[record.quote_id] = record;
+          return record;
+        });
+        const runId = newId('run');
+        await jobs.createRun({
+          ctx,
+          run: { id: runId, created_at: new Date(clock()).toISOString() },
+          project: context.project,
+          spec: context.spec,
+          quote,
+          idempotencyKey: `batch:${prepared.batchId}:${entry.itemId}`,
+          scenario: 'success',
+          fingerprint: fingerprintOf({
+            batch_id: prepared.batchId, item_id: entry.itemId,
+            project_id: context.project.id, spec_version: context.spec.version, quote_id: quote.quote_id,
+          }),
+        });
+        await store.mutate(data => {
+          const item = data.batch_items?.[entry.itemId] ?? null;
+          if (!item || item.tenant_id !== ctx.tenantId) return;
+          item.run_id = runId;
+          item.quote_id = quote.quote_id;
+          item.status = 'running';
+          item.spec_version = context.spec.version;
+          item.blockers = [];
+          item.last_error = null;
+          item.updated_at = new Date(clock()).toISOString();
+        });
+      } catch (error) {
+        failures.push({ item_id: entry.itemId, sku: entry.sku, code: error?.code ?? 'INTERNAL_ERROR', message: error?.message ?? '未知错误' });
+        await store.mutate(data => {
+          const item = data.batch_items?.[entry.itemId] ?? null;
+          if (!item || item.tenant_id !== ctx.tenantId) return;
+          item.status = 'failed';
+          item.last_error = { code: error?.code ?? 'INTERNAL_ERROR', message: error?.message ?? '未知错误' };
+          item.updated_at = new Date(clock()).toISOString();
+        });
+      }
+    }
+
+    const view = await store.read(data => {
+      const batch = data.batches?.[batchId] ?? null;
+      if (!batch || batch.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '批量任务不存在');
+      const items = batchItemsOf(data, ctx, batch.id).map(item => ({ ...item, status: itemStatusOf(data, item) }));
+      batch.items = items;
+      batch.summary = batchSummary(items);
+      return batchView(data, ctx, batch);
+    });
+    send(201, { batch: view, started: prepared.ready.length - failures.length, failures });
+  }
+
+  async function batchExportRoute(ctx, batchId, req, send) {
+    await requireAction(ctx, 'batch:export');
+    const body = await readJson(req).catch(() => ({}));
+    const scope = body.scope ?? 'partial';
+    const result = await jobs.createBatchExport(ctx, batchId, { scope });
+    send(201, result);
+  }
+
+  async function listMembersRoute(ctx, send) {
+    const payload = await store.read(data => {
+      const resolved = roleOf(data, ctx);
+      if (!resolved.role) throw new ApiError(403, 'FORBIDDEN', '当前操作者不是该租户成员');
+      return {
+        tenant_id: ctx.tenantId,
+        role: resolved.role,
+        bootstrap: resolved.bootstrap === true,
+        permissions: describePermissions(resolved.role).permissions,
+        members: tenantMembers(data, ctx.tenantId)
+          .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))
+          .map(item => ({ actor_id: item.actor_id, role: item.role, created_at: item.created_at })),
+      };
+    });
+    send(200, payload);
+  }
+
+  async function upsertMemberRoute(ctx, req, send) {
+    const actorRole = await requireAction(ctx, 'member:manage');
+    const body = await readJson(req);
+    const targetActorId = String(body.actor_id ?? '').trim();
+    if (!targetActorId) throw new ApiError(422, 'MEMBER_ACTOR_REQUIRED', '需要提供 actor_id');
+    const role = String(body.role ?? '').trim();
+    const result = await store.mutate(data => {
+      // 首次登记成员时，把当前操作者固化为 owner：否则引导期一加人就没人能管理租户
+      if (tenantMembers(data, ctx.tenantId).length === 0 && actorRole === 'owner') {
+        const bootstrap = {
+          id: newId('mbr'),
+          tenant_id: ctx.tenantId,
+          actor_id: ctx.actorId,
+          role: 'owner',
+          created_by: ctx.actorId,
+          created_at: now(),
+          updated_at: now(),
+        };
+        data.members[bootstrap.id] = bootstrap;
+      }
+      const members = tenantMembers(data, ctx.tenantId);
+      const plan = planMemberChange({ members, targetActorId, nextRole: role, actorRole });
+      if (!plan.ok) throw new ApiError(409, plan.code, plan.message);
+      const existing = members.find(item => item.actor_id === targetActorId) ?? null;
+      if (existing) {
+        existing.role = role;
+        existing.updated_at = new Date(clock()).toISOString();
+        return { member: existing, action: 'update' };
+      }
+      const record = {
+        id: newId('mbr'),
+        tenant_id: ctx.tenantId,
+        actor_id: targetActorId,
+        role,
+        created_by: ctx.actorId,
+        created_at: new Date(clock()).toISOString(),
+        updated_at: new Date(clock()).toISOString(),
+      };
+      data.members[record.id] = record;
+      return { member: record, action: 'add' };
+    });
+    send(201, { member: { actor_id: result.member.actor_id, role: result.member.role }, action: result.action });
+  }
+
+  async function removeMemberRoute(ctx, actorId, send) {
+    const actorRole = await requireAction(ctx, 'member:manage');
+    const result = await store.mutate(data => {
+      const members = tenantMembers(data, ctx.tenantId);
+      const plan = planMemberChange({ members, targetActorId: actorId, nextRole: null, actorRole });
+      if (!plan.ok) throw new ApiError(409, plan.code, plan.message);
+      const existing = members.find(item => item.actor_id === actorId);
+      delete data.members[existing.id];
+      return { removed: actorId };
+    });
+    send(200, result);
+  }
+
+  async function createRecipeRoute(ctx, req, send) {
+    await requireAction(ctx, 'recipe:write');
+    const body = await readJson(req);
+    const checked = validateRecipeInput(body);
+    if (!checked.ok) {
+      throw new ApiError(422, 'RECIPE_INVALID', checked.issues[0]?.message ?? '配方参数无效', { issues: checked.issues });
+    }
+    const result = await store.mutate(data => {
+      const kit = data.brand_kits?.[checked.payload.brand_kit_id] ?? null;
+      if (!kit || kit.tenant_id !== ctx.tenantId) {
+        throw new ApiError(422, 'RECIPE_BRAND_KIT_UNKNOWN', '品牌套件不存在或不属于当前租户');
+      }
+      const template = listTemplates().find(item => item.id === checked.payload.template_id);
+      if (!template) throw new ApiError(422, 'RECIPE_TEMPLATE_UNKNOWN', '模板不存在');
+      const recipeId = newId('rcp');
+      const recipe = {
+        id: recipeId,
+        schema_version: 1,
+        tenant_id: ctx.tenantId,
+        name: checked.payload.name,
+        scope: checked.payload.scope,
+        head_version: 1,
+        created_by: ctx.actorId,
+        created_at: now(),
+        updated_at: now(),
+      };
+      data.recipes[recipeId] = recipe;
+      const version = {
+        id: newId('rcv'),
+        tenant_id: ctx.tenantId,
+        recipe_id: recipeId,
+        ...makeRecipeVersion({
+          recipeId, previousVersions: [], payload: checked.payload, actorId: ctx.actorId, at: new Date(clock()),
+        }),
+      };
+      data.recipe_versions[version.id] = version;
+      return { recipe, version };
+    });
+    send(201, {
+      recipe: result.recipe,
+      version: result.version,
+      note: result.version.status === 'pending'
+        ? '共享配方需要 owner 审批后才能用于生产'
+        : '私有配方仅创建者可用，版本已生效',
+    });
+  }
+
+  async function listRecipesRoute(ctx, send) {
+    await requireAction(ctx, 'recipe:read');
+    const payload = await store.read(data => {
+      const recipes = Object.values(data.recipes ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && isRecipeVisible({ recipe: item, actorId: ctx.actorId }))
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+        .map(item => {
+          const versions = Object.values(data.recipe_versions ?? {})
+            .filter(version => version.recipe_id === item.id)
+            .sort((left, right) => left.version - right.version);
+          const latest = versions[versions.length - 1] ?? null;
+          return {
+            ...item,
+            latest_version: latest ? { version: latest.version, status: latest.status } : null,
+            approved_version: versions.filter(v => v.status === 'approved')
+              .sort((l, r) => r.version - l.version)[0]?.version ?? null,
+          };
+        });
+      return { tenant_id: ctx.tenantId, recipes, total: recipes.length };
+    });
+    send(200, payload);
+  }
+
+  async function getRecipeRoute(ctx, recipeId, send) {
+    await requireAction(ctx, 'recipe:read');
+    const payload = await store.read(data => {
+      const recipe = data.recipes?.[recipeId] ?? null;
+      if (!recipe || recipe.tenant_id !== ctx.tenantId || !isRecipeVisible({ recipe, actorId: ctx.actorId })) {
+        throw new ApiError(404, 'NOT_FOUND', '配方不存在');
+      }
+      const versions = Object.values(data.recipe_versions ?? {})
+        .filter(item => item.recipe_id === recipe.id)
+        .sort((left, right) => left.version - right.version);
+      return { recipe, versions };
+    });
+    send(200, payload);
+  }
+
+  async function approveRecipeRoute(ctx, recipeId, req, send) {
+    const actorRole = await requireAction(ctx, 'recipe:approve');
+    const body = await readJson(req);
+    const result = await store.mutate(data => {
+      const recipe = data.recipes?.[recipeId] ?? null;
+      if (!recipe || recipe.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '配方不存在');
+      const versionNumber = Number(body.version);
+      if (!Number.isInteger(versionNumber)) throw new ApiError(422, 'RECIPE_VERSION_REQUIRED', '需要指定要审批的版本号');
+      const versions = Object.values(data.recipe_versions ?? {})
+        .filter(item => item.recipe_id === recipe.id)
+        .sort((left, right) => left.version - right.version);
+      const target = versions.find(item => item.version === versionNumber) ?? null;
+      if (!target) throw new ApiError(404, 'NOT_FOUND', '配方版本不存在');
+      const applied = applyRecipeApproval({
+        version: target,
+        decision: body.decision,
+        actorRole,
+        actorId: ctx.actorId,
+        note: body.note ?? '',
+        at: new Date(clock()),
+      });
+      if (!applied.ok) throw new ApiError(409, applied.code, applied.message);
+      const updated = { ...applied.version, tenant_id: ctx.tenantId, recipe_id: recipe.id, id: target.id };
+      const superseded = [];
+      if (applied.supersede_previous_approved) {
+        for (const version of versions) {
+          if (version.id === target.id) continue;
+          if (version.status !== 'approved') continue;
+          version.status = 'superseded';
+          version.superseded_at = applied.at;
+          superseded.push(version.version);
+        }
+      }
+      data.recipe_versions[target.id] = updated;
+      recipe.updated_at = applied.at;
+      return { version: updated, superseded, recipe };
+    });
+    send(200, {
+      recipe: result.recipe,
+      version: result.version,
+      superseded_versions: result.superseded,
+      invalidation_note: result.superseded.length > 0
+        ? '新版本已批准，引用旧版本的记录会变为 stale，需要重新按新版本生产'
+        : null,
+    });
+  }
+
+  async function recordRecipeUsageRoute(ctx, recipeId, req, send) {
+    await requireAction(ctx, 'recipe:write');
+    const body = await readJson(req);
+    const result = await store.mutate(data => {
+      const recipe = data.recipes?.[recipeId] ?? null;
+      if (!recipe || recipe.tenant_id !== ctx.tenantId || !isRecipeVisible({ recipe, actorId: ctx.actorId })) {
+        throw new ApiError(404, 'NOT_FOUND', '配方不存在');
+      }
+      const versions = Object.values(data.recipe_versions ?? {})
+        .filter(item => item.recipe_id === recipe.id);
+      const targetVersion = Number(body.version ?? 0);
+      const version = targetVersion
+        ? versions.find(item => item.version === targetVersion) ?? null
+        : versions.filter(item => item.status === 'approved').sort((l, r) => r.version - l.version)[0] ?? null;
+      if (!version || version.status !== 'approved') {
+        throw new ApiError(409, 'RECIPE_NOT_APPROVED', '配方版本尚未批准，不能用于生产');
+      }
+      const usage = {
+        id: newId('rus'),
+        tenant_id: ctx.tenantId,
+        recipe_id: recipe.id,
+        recipe_version: version.version,
+        actor_id: ctx.actorId,
+        target_type: String(body.target_type ?? 'spec').trim() || 'spec',
+        target_id: String(body.target_id ?? '').trim() || null,
+        created_at: now(),
+      };
+      data.recipe_usages[usage.id] = usage;
+      return { usage, version };
+    });
+    const validity = evaluateRecipeUseValidity({
+      usage: result.usage,
+      recipe: { ...result.version, scope: result.version.payload.scope, created_by: result.version.created_by },
+      versions: await store.read(data => Object.values(data.recipe_versions ?? {})
+        .filter(item => item.recipe_id === recipeId)),
+    });
+    send(201, { usage: result.usage, validity });
+  }
+
+  async function listRecipeUsagesRoute(ctx, recipeId, send) {
+    await requireAction(ctx, 'recipe:read');
+    const payload = await store.read(data => {
+      const recipe = data.recipes?.[recipeId] ?? null;
+      if (!recipe || recipe.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '配方不存在');
+      const versions = Object.values(data.recipe_versions ?? {}).filter(item => item.recipe_id === recipe.id);
+      const head = versions.filter(item => item.status === 'approved').sort((l, r) => r.version - l.version)[0] ?? null;
+      const usages = Object.values(data.recipe_usages ?? {})
+        .filter(item => item.recipe_id === recipe.id && item.tenant_id === ctx.tenantId)
+        .map(item => ({
+          ...item,
+          validity: evaluateRecipeUseValidity({
+            usage: item,
+            recipe: { ...head, scope: recipe.scope, created_by: recipe.created_by, brand_kit_id: head?.payload?.brand_kit_id ?? null },
+            versions,
+          }),
+        }));
+      return { recipe_id: recipe.id, usages, total: usages.length };
+    });
+    send(200, payload);
   }
 
   function resolveSpecRecord(data, projectId, rawVersion) {
