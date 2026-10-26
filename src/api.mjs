@@ -39,6 +39,8 @@ export function createApi({
   maxConcurrency = 2,
   tickMs = 25,
   allowScenarioInjection = false,
+  // M08：自动修订轮数上限可在测试或宿主侧收紧/放宽，默认 3
+  revisionMaxRounds = 3,
   // M06：Provider 可注入（测试或宿主自建 Adapter）；不注入时按环境变量选择，默认 mock
   provider: injectedProvider = null,
   providerOptions = {},
@@ -61,7 +63,7 @@ export function createApi({
     note: resolvedProvider.note,
   };
   const jobs = createJobs({
-    store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs,
+    store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, revisionMaxRounds,
   });
 
   publish.jobs = jobs;
@@ -116,6 +118,10 @@ export function createApi({
       if (rest.length === 1 && method === 'POST') return createRun(ctx, req, send);
       if (rest.length === 1) { requireMethod(method, ['GET', 'HEAD', 'POST']); return listRunsRoute(ctx, send); }
       if (rest.length === 2) { requireMethod(method, ['GET', 'HEAD']); return jobs.getRun(ctx, rest[1]).then(result => send(200, result)); }
+      if (rest.length === 5 && rest[2] === 'versions' && rest[4] === 'activate') {
+        requireMethod(method, ['POST']);
+        return activateVersionRoute(ctx, rest[1], rest[3], send);
+      }
       if (rest.length !== 3) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
       if (rest[2] === 'cancel') { requireMethod(method, ['POST']); return cancelRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'budget-confirmation') { requireMethod(method, ['POST']); return confirmBudgetRoute(ctx, req, rest[1], send); }
@@ -131,6 +137,30 @@ export function createApi({
         requireMethod(method, ['GET', 'HEAD']);
         return jobs.listQualityReports(ctx, { runId: rest[1] }).then(result => send(200, result));
       }
+      if (rest[2] === 'versions') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.listRunVersions(ctx, rest[1]).then(result => send(200, result));
+      }
+      if (rest[2] === 'exports') {
+        if (method === 'POST') return createExportRoute(ctx, req, rest[1], send);
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.listExports(ctx, { runId: rest[1] }).then(result => send(200, result));
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'exports') {
+      if (rest.length === 1) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.listExports(ctx, {
+          runId: String(query?.get('run_id') ?? '').trim() || null,
+          projectId: String(query?.get('project_id') ?? '').trim() || null,
+        }).then(result => send(200, result));
+      }
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.getExport(ctx, rest[1]).then(result => send(200, result));
+      }
+      if (rest.length === 3 && rest[2] === 'download') return downloadExportRoute(ctx, rest[1], res, send);
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
     if (resource === 'quality-reports') {
@@ -912,6 +942,25 @@ export function createApi({
       note: body?.note ?? null,
     });
     send(200, result);
+  }
+
+  // M08：版本回退与正式导出。导出资格（完整性、可发布、stale）全部由 jobs 在锁内重算。
+  function activateVersionRoute(ctx, runId, versionId, send) {
+    return jobs.activateVersion(ctx, runId, versionId).then(result => send(200, result));
+  }
+
+  async function createExportRoute(ctx, req, runId, send) {
+    const body = await readJson(req);
+    const scope = String(body?.scope ?? 'complete').trim();
+    const result = await jobs.createExport(ctx, runId, { scope });
+    send(201, result);
+  }
+
+  async function downloadExportRoute(ctx, exportId, res, send) {
+    const pkg = await jobs.readExportPackage(ctx, exportId);
+    res.setHeader('Content-Disposition', `attachment; filename="${pkg.filename}"`);
+    res.setHeader('X-Package-SHA256', pkg.sha256);
+    send(200, pkg.bytes, 'application/zip');
   }
 
   async function createQuote(ctx, req, send) {

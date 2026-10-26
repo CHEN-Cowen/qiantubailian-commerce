@@ -16,12 +16,14 @@ const TABLES = Object.freeze([
   'generation_records',
   // M07：Commerce QA 报告（检查项、证据、机器结论与人工复核），只增不改
   'quality_reports',
+  // M08：正式导出记录（清单、摘要、包哈希），只增不改
+  'exports',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
   projects: {}, assets: {}, truth_versions: {}, brand_kits: {}, brand_kit_versions: {}, specs: {},
   quotes: {}, runs: {}, events: {}, credit_accounts: {}, credit_entries: {}, generation_records: {},
-  quality_reports: {},
+  quality_reports: {}, exports: {},
 });
 
 function normalize(raw) {

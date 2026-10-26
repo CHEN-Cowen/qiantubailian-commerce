@@ -6,7 +6,7 @@ import { LOOPBACK_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
 
-export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.7.0', module: 'M07' });
+export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.8.0', module: 'M08' });
 export const STATIC_FILES = Object.freeze([
   'index.html', 'app.js', 'api.js', 'real-data.js', 'm04.js', 'm05.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
@@ -59,6 +59,7 @@ export function createApp({
   maxConcurrency = 2,
   tickMs = 25,
   allowScenarioInjection = false,
+  revisionMaxRounds = 3,
   provider = null,
   providerOptions = {},
 } = {}) {
@@ -68,7 +69,7 @@ export function createApp({
   const store = createStore({ dir: storeDir });
   const api = createApi({
     store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock,
-    initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection,
+    initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection, revisionMaxRounds,
     provider, providerOptions,
   });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
