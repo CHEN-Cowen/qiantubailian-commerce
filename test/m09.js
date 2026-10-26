@@ -253,7 +253,7 @@ test('M09 端到端：授权导入 → 评测 → 候选路由与灰度阻断 �
   const { port } = await start(t);
 
   const tenant = await request(port, '/api/tenant', { headers: as() });
-  assert.equal(tenant.json.module, 'M11');
+  assert.equal(tenant.json.module, 'M12');
 
   // 未授权条目必须被拒绝
   const rejected = await request(port, '/api/eval/dataset', {

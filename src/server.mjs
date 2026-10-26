@@ -6,7 +6,7 @@ import { LOOPBACK_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
 
-export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.11.0', module: 'M11' });
+export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.12.0', module: 'M12' });
 export const STATIC_FILES = Object.freeze([
   'index.html', 'app.js', 'api.js', 'real-data.js', 'm04.js', 'm05.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
@@ -62,6 +62,7 @@ export function createApp({
   revisionMaxRounds = 3,
   provider = null,
   providerOptions = {},
+  paymentProvider = null,
 } = {}) {
   if (!LOOPBACK_HOSTS.includes(host)) throw new Error('HOST 必须为 loopback 地址');
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('PORT 配置无效');
@@ -70,7 +71,7 @@ export function createApp({
   const api = createApi({
     store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock,
     initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection, revisionMaxRounds,
-    provider, providerOptions,
+    provider, providerOptions, paymentProvider,
   });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');

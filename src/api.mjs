@@ -1,4 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ApiError, toApiError } from './errors.mjs';
 import { IMAGE_TYPES, inspectImage } from './images.mjs';
 import {
@@ -10,7 +12,7 @@ import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
 import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
-import { balanceOf, ledgerEntries } from './credits.mjs';
+import { appendEntry, balanceOf, ledgerEntries } from './credits.mjs';
 import { RETRYABLE_CODES } from './provider.mjs';
 import { createProviderFromEnv } from './providers/index.mjs';
 import { createJobs, ACTIVE_STATES, TERMINAL_STATES } from './jobs.mjs';
@@ -26,6 +28,12 @@ import {
   makeRecipeVersion, planBatch, planMemberChange, previewImportRows,
   resolveRole, summarizeCatalogConsole, validateRecipeInput,
 } from './m11.mjs';
+import {
+  BACKUP_FORMAT_VERSION, buildBackupManifest, buildExperimentReport, buildObservabilitySnapshot,
+  evaluateFeedbackEligibility, evaluatePaymentCapability, listBillingPlans, mergeTenantSnapshot,
+  planById, previewOutcomeRows, summarizeFeedback, summarizeOutcomeMetrics, tenantSnapshot,
+  validateFeedbackInput, validateOutcomeImportInput, verifyBackupManifest,
+} from './m12.mjs';
 
 const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
 const now = () => new Date().toISOString();
@@ -56,6 +64,8 @@ export function createApi({
   // M06：Provider 可注入（测试或宿主自建 Adapter）；不注入时按环境变量选择，默认 mock
   provider: injectedProvider = null,
   providerOptions = {},
+  // M12：支付 Provider 默认未配置；只有宿主显式注入真实能力时才允许真实收款
+  paymentProvider = null,
 } = {}) {
   if (!store) throw new Error('API 缺少存储实例');
   if (!Array.isArray(allowedTenants) || allowedTenants.length === 0) throw new Error('API 租户配置无效');
@@ -77,17 +87,35 @@ export function createApi({
   const jobs = createJobs({
     store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, revisionMaxRounds,
   });
+  // M12：进程内指标只保留聚合计数，不记录请求体、素材或提示词
+  const metrics = { total: 0, by_status: {}, errors: 0, by_error: {} };
+  const startedAt = new Date(clock()).toISOString();
+  const recordMetric = (status, body) => {
+    metrics.total += 1;
+    metrics.by_status[status] = (metrics.by_status[status] ?? 0) + 1;
+    if (status >= 400) {
+      metrics.errors += 1;
+      const code = body?.error ?? 'UNKNOWN';
+      metrics.by_error[code] = (metrics.by_error[code] ?? 0) + 1;
+    }
+  };
 
   publish.jobs = jobs;
   publish.provider = { ...providerInfo, capabilities: () => provider.capabilities() };
   publish.credits = { balanceOf: tenantId => store.read(data => balanceOf(data, tenantId, { initialCredits })) };
   // 暴露 drain：关闭服务时先排空写队列，再让调用方清理数据目录
   publish.drain = () => (typeof store.drain === 'function' ? store.drain() : Promise.resolve());
+  const backupDirOf = backupId => path.join(store.dir, 'backups', backupId);
+
   return publish;
 
   async function publish(req, res, route, send) {
+    const tracked = (status, body, type) => {
+      recordMetric(status, body);
+      return send(status, body, type);
+    };
     try {
-      await dispatch(req, res, route, send);
+      await dispatch(req, res, route, tracked);
     } catch (error) {
       const failure = toApiError(error);
       // 非预期错误必须留痕但不外泄细节（NFR-05）；Apierror 属于业务分支，不打堆栈
@@ -98,7 +126,7 @@ export function createApi({
       if (failure.allow) res.setHeader('Allow', failure.allow);
       const body = { error: failure.code, message: failure.message };
       if (failure.details !== undefined) body.details = failure.details;
-      send(failure.status, body);
+      tracked(failure.status, body);
     }
   }
 
@@ -114,7 +142,7 @@ export function createApi({
 
     if (resource === 'tenant' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
-      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M11' });
+      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M12' });
     }
     if (resource === 'credits' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
@@ -245,6 +273,82 @@ export function createApi({
         return listRecipeUsagesRoute(ctx, rest[1], send);
       }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'feedback') {
+      if (rest.length === 1) {
+        if (method === 'POST') return createFeedbackRoute(ctx, req, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listFeedbackRoute(ctx, query, send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'outcomes') {
+      if (rest.length === 1) {
+        if (method === 'POST') return createOutcomeImportRoute(ctx, req, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listOutcomesRoute(ctx, query, send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'experiments') {
+      if (rest.length === 1) {
+        if (method === 'POST') return createExperimentRoute(ctx, req, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listExperimentsRoute(ctx, send);
+      }
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getExperimentRoute(ctx, rest[1], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'plans' && rest.length === 1) {
+      requireMethod(method, ['GET', 'HEAD']);
+      await requireAction(ctx, 'billing:read');
+      return send(200, {
+        ...listBillingPlans(),
+        payment: evaluatePaymentCapability({ provider: paymentProvider }),
+      });
+    }
+    if (resource === 'billing') {
+      if (rest.length === 2 && rest[1] === 'orders') {
+        if (method === 'POST') return createBillingOrderRoute(ctx, req, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listBillingOrdersRoute(ctx, send);
+      }
+      if (rest.length === 4 && rest[1] === 'orders' && rest[3] === 'settle') {
+        requireMethod(method, ['POST']);
+        return settleBillingOrderRoute(ctx, rest[2], send);
+      }
+      if (rest.length === 4 && rest[1] === 'orders' && rest[3] === 'refund') {
+        requireMethod(method, ['POST']);
+        return refundBillingOrderRoute(ctx, rest[2], req, send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'backups') {
+      if (rest.length === 1) {
+        if (method === 'POST') return createBackupRoute(ctx, send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listBackupsRoute(ctx, send);
+      }
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getBackupRoute(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'verify') {
+        requireMethod(method, ['POST']);
+        return verifyBackupRoute(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'restore') {
+        requireMethod(method, ['POST']);
+        return restoreBackupRoute(ctx, req, rest[1], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    if (resource === 'metrics' && rest.length === 1) {
+      requireMethod(method, ['GET', 'HEAD']);
+      return metricsRoute(ctx, send);
     }
     if (resource === 'eval') return handleEval(ctx, method, rest, req, query, send);
     if (resource === 'models') {
@@ -2414,6 +2518,504 @@ export function createApi({
       return { recipe_id: recipe.id, usages, total: usages.length };
     });
     send(200, payload);
+  }
+
+  // ---------- M12：结果回流、效果导入、实验、商业化、可观测性与备份 ----------
+
+  async function createFeedbackRoute(ctx, req, send) {
+    await requireAction(ctx, 'feedback:write');
+    const body = await readJson(req);
+    const checked = validateFeedbackInput(body);
+    if (!checked.ok) {
+      throw new ApiError(422, 'FEEDBACK_INVALID', checked.issues[0].message, { issues: checked.issues });
+    }
+    const runId = String(body.run_id ?? '').trim();
+    if (!runId) throw new ApiError(422, 'FEEDBACK_RUN_REQUIRED', '需要提供 run_id');
+    const versionIdIn = body.version_id ? String(body.version_id) : null;
+    const target = await store.read(data => {
+      const run = data.runs?.[runId] ?? null;
+      if (!run || run.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '任务不存在');
+      const versions = Array.isArray(run.versions) ? run.versions : [];
+      const version = versionIdIn
+        ? versions.find(item => item.id === versionIdIn) ?? null
+        : versions.find(item => item.active === true) ?? null;
+      return {
+        run: { status: run.status, project_id: run.project_id },
+        version: version ? {
+          id: version.id, active: version.active === true,
+          report_id: version.report_id ?? null, deliverable_id: version.deliverable_id ?? null,
+        } : null,
+      };
+    });
+    let report = null;
+    let reportValidity = null;
+    if (target.version?.report_id) {
+      const view = await jobs.getQualityReport(ctx, target.version.report_id);
+      report = { decision: view.report.decision };
+      reportValidity = view.report.validity;
+    }
+    const eligibility = evaluateFeedbackEligibility({
+      decision: checked.value.decision, run: target.run, version: target.version, report, reportValidity,
+    });
+    if (!eligibility.ok) {
+      const first = eligibility.blockers[0];
+      throw new ApiError(409, first.code, first.message, { blockers: eligibility.blockers });
+    }
+    if (checked.value.experiment_id) {
+      await store.read(data => {
+        const experiment = data.experiments?.[checked.value.experiment_id] ?? null;
+        if (!experiment || experiment.tenant_id !== ctx.tenantId) {
+          throw new ApiError(404, 'NOT_FOUND', '实验不存在');
+        }
+        return experiment;
+      });
+    }
+    const record = await store.mutate(data => {
+      const item = {
+        id: newId('fbk'),
+        tenant_id: ctx.tenantId,
+        run_id: runId,
+        project_id: target.run.project_id ?? null,
+        version_id: target.version.id,
+        deliverable_id: target.version.deliverable_id ?? null,
+        decision: checked.value.decision,
+        reason_code: checked.value.reason_code,
+        note: checked.value.note,
+        experiment_id: checked.value.experiment_id,
+        arm: checked.value.arm,
+        report_id: target.version.report_id ?? null,
+        evidence: report ? { report_decision: report.decision, report_validity: reportValidity } : null,
+        actor_id: ctx.actorId,
+        created_at: new Date(clock()).toISOString(),
+      };
+      data.feedback[item.id] = item;
+      return item;
+    });
+    send(201, { feedback: record });
+  }
+
+  async function listFeedbackRoute(ctx, query, send) {
+    await requireAction(ctx, 'feedback:read');
+    const runId = query.get('run_id');
+    const limit = Math.min(Math.max(Number(query.get('limit') ?? 100) || 100, 1), 500);
+    const payload = await store.read(data => {
+      const scoped = Object.values(data.feedback ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .filter(item => !runId || item.run_id === runId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+      return {
+        tenant_id: ctx.tenantId,
+        feedback: scoped.slice(0, limit),
+        total: scoped.length,
+        summary: summarizeFeedback(scoped),
+      };
+    });
+    send(200, payload);
+  }
+
+  async function createOutcomeImportRoute(ctx, req, send) {
+    await requireAction(ctx, 'outcome:write');
+    const body = await readJson(req);
+    const checked = validateOutcomeImportInput(body);
+    if (!checked.ok) {
+      const first = checked.issues[0];
+      const status = first.code === 'OUTCOME_AUTHORIZATION_REQUIRED' ? 403 : 422;
+      throw new ApiError(status, first.code, first.message, { issues: checked.issues });
+    }
+    if (checked.value.experiment_id) {
+      await store.read(data => {
+        const experiment = data.experiments?.[checked.value.experiment_id] ?? null;
+        if (!experiment || experiment.tenant_id !== ctx.tenantId) {
+          throw new ApiError(404, 'NOT_FOUND', '实验不存在');
+        }
+        return experiment;
+      });
+    }
+    const preview = previewOutcomeRows({ rows: body.rows });
+    if (preview.summary.valid === 0) {
+      throw new ApiError(422, 'OUTCOME_NO_VALID_ROWS', '没有任何可用行，请修正后再导入', {
+        rows: preview.rows, issues: checked.issues,
+      });
+    }
+    const record = await store.mutate(data => {
+      const item = {
+        id: newId('imp'),
+        tenant_id: ctx.tenantId,
+        source: checked.value.source,
+        authorization_reference: checked.value.authorization_reference,
+        experiment_id: checked.value.experiment_id,
+        arm: checked.value.arm,
+        rows: preview.accepted.map(row => ({
+          ...row, experiment_id: checked.value.experiment_id, arm: checked.value.arm,
+        })),
+        rejected: preview.rows.filter(row => !row.valid).map(row => ({
+          index: row.index, sku: row.sku ?? null, errors: row.errors,
+        })),
+        summary: preview.summary,
+        imported_by: ctx.actorId,
+        imported_at: new Date(clock()).toISOString(),
+      };
+      data.outcome_imports[item.id] = item;
+      return item;
+    });
+    send(201, { import: record, rows_preview: preview.rows });
+  }
+
+  async function listOutcomesRoute(ctx, query, send) {
+    await requireAction(ctx, 'outcome:read');
+    const experimentId = query.get('experiment_id');
+    const payload = await store.read(data => {
+      const imports = Object.values(data.outcome_imports ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .filter(item => !experimentId || item.experiment_id === experimentId)
+        .sort((left, right) => String(right.imported_at).localeCompare(String(left.imported_at)));
+      const rows = imports.flatMap(item => item.rows);
+      const sources = [...new Set(imports.map(item => `${item.source}｜${item.authorization_reference}`))];
+      return {
+        tenant_id: ctx.tenantId,
+        imports: imports.map(item => ({
+          id: item.id, source: item.source, authorization_reference: item.authorization_reference,
+          experiment_id: item.experiment_id, arm: item.arm, summary: item.summary,
+          imported_at: item.imported_at,
+        })),
+        metrics: summarizeOutcomeMetrics(rows),
+        sources,
+      };
+    });
+    send(200, payload);
+  }
+
+  async function createExperimentRoute(ctx, req, send) {
+    await requireAction(ctx, 'outcome:write');
+    const body = await readJson(req);
+    const name = String(body.name ?? '').trim();
+    if (!name) throw new ApiError(422, 'EXPERIMENT_NAME_REQUIRED', '实验名称不能为空');
+    if (name.length > 80) throw new ApiError(422, 'EXPERIMENT_NAME_TOO_LONG', '实验名称不能超过 80 字');
+    const metrics = ['ctr', 'cvr', 'cost_per_order', 'adoption_rate'];
+    const primaryMetric = String(body.primary_metric ?? 'cvr').trim();
+    if (!metrics.includes(primaryMetric)) {
+      throw new ApiError(422, 'EXPERIMENT_METRIC_INVALID', `primary_metric 必须是 ${metrics.join(' / ')} 之一`);
+    }
+    const experiment = await store.mutate(data => {
+      const item = {
+        id: newId('exp'),
+        tenant_id: ctx.tenantId,
+        name,
+        hypothesis: body.hypothesis ? String(body.hypothesis).trim().slice(0, 500) : null,
+        primary_metric: primaryMetric,
+        status: 'collecting',
+        created_by: ctx.actorId,
+        created_at: new Date(clock()).toISOString(),
+      };
+      data.experiments[item.id] = item;
+      return item;
+    });
+    send(201, { experiment });
+  }
+
+  async function listExperimentsRoute(ctx, send) {
+    await requireAction(ctx, 'outcome:read');
+    const payload = await store.read(data => ({
+      tenant_id: ctx.tenantId,
+      experiments: Object.values(data.experiments ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+        .map(item => ({ ...item })),
+    }));
+    send(200, payload);
+  }
+
+  async function getExperimentRoute(ctx, experimentId, send) {
+    await requireAction(ctx, 'outcome:read');
+    const payload = await store.read(data => {
+      const experiment = data.experiments?.[experimentId] ?? null;
+      if (!experiment || experiment.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '实验不存在');
+      }
+      const imports = Object.values(data.outcome_imports ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.experiment_id === experiment.id);
+      const outcomes = imports.flatMap(item => item.rows);
+      const feedback = Object.values(data.feedback ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.experiment_id === experiment.id);
+      return {
+        experiment,
+        report: buildExperimentReport({ experiment, outcomes, feedback }),
+        provenance: {
+          imports: imports.length,
+          sources: [...new Set(imports.map(item => item.source))],
+          authorization_references: [...new Set(imports.map(item => item.authorization_reference))],
+        },
+      };
+    });
+    send(200, payload);
+  }
+
+  async function createBillingOrderRoute(ctx, req, send) {
+    await requireAction(ctx, 'billing:manage');
+    const body = await readJson(req);
+    const capability = evaluatePaymentCapability({ provider: paymentProvider });
+    if (!capability.can_checkout) {
+      throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_UNAVAILABLE',
+        capability.blockers[0]?.message ?? '当前不具备下单条件', { payment: capability });
+    }
+    const plan = planById(String(body.plan_id ?? ''));
+    if (!plan) throw new ApiError(422, 'PLAN_UNKNOWN', '套餐不存在');
+    const order = await store.mutate(data => {
+      const item = {
+        id: newId('ord'),
+        tenant_id: ctx.tenantId,
+        plan_id: plan.id,
+        plan_snapshot: { ...plan },
+        credits: plan.credits,
+        seats: plan.seats,
+        status: 'pending_demo_settlement',
+        real_money: false,
+        simulated: true,
+        settlement: 'internal_demo_credits',
+        notice: '演示订单：不扣真实货币、不开具发票、不代表可计费权益',
+        created_by: ctx.actorId,
+        created_at: new Date(clock()).toISOString(),
+      };
+      data.billing_orders[item.id] = item;
+      const event = {
+        id: newId('pay'),
+        tenant_id: ctx.tenantId,
+        order_id: item.id,
+        type: 'demo_order_created',
+        amount_cents: 0,
+        currency: plan.currency,
+        actor_id: ctx.actorId,
+        created_at: item.created_at,
+      };
+      data.payment_events[event.id] = event;
+      return item;
+    });
+    send(201, { order, payment: capability });
+  }
+
+  async function listBillingOrdersRoute(ctx, send) {
+    await requireAction(ctx, 'billing:read');
+    const payload = await store.read(data => ({
+      tenant_id: ctx.tenantId,
+      orders: Object.values(data.billing_orders ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+        .map(item => ({ ...item })),
+      payment: evaluatePaymentCapability({ provider: paymentProvider }),
+    }));
+    send(200, payload);
+  }
+
+  async function settleBillingOrderRoute(ctx, orderId, send) {
+    await requireAction(ctx, 'billing:manage');
+    const capability = evaluatePaymentCapability({ provider: paymentProvider });
+    if (!capability.can_settle) {
+      throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_SETTLE_UNSUPPORTED',
+        capability.blockers[0]?.message ?? '当前不具备结算条件', { payment: capability });
+    }
+    const result = await store.mutate(data => {
+      const order = data.billing_orders?.[orderId] ?? null;
+      if (!order || order.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
+      if (order.status !== 'pending_demo_settlement') {
+        throw new ApiError(409, 'ORDER_STATE_INVALID', `订单当前状态为 ${order.status}，不能重复结算`);
+      }
+      const entry = appendEntry(data, {
+        type: 'grant', amount: order.credits, tenantId: ctx.tenantId,
+        uniqueOperationKey: `billing-order:${order.id}`,
+        memo: '演示套餐开通额度（内部演示，不代表真实权益）',
+        actor: ctx.actorId, initialCredits, at: clock(),
+      });
+      order.status = 'settled_demo';
+      order.settled_at = new Date(clock()).toISOString();
+      order.settled_by = ctx.actorId;
+      const event = {
+        id: newId('pay'), tenant_id: ctx.tenantId, order_id: order.id,
+        type: 'demo_order_settled', amount_cents: 0, currency: order.plan_snapshot.currency,
+        actor_id: ctx.actorId, created_at: order.settled_at,
+      };
+      data.payment_events[event.id] = event;
+      return { order, balance: entry.balance, applied: entry.applied };
+    });
+    send(200, {
+      ...result,
+      notice: '演示额度已到账；未发生真实收款，不能作为生产计费依据',
+    });
+  }
+
+  async function refundBillingOrderRoute(ctx, orderId, req, send) {
+    await requireAction(ctx, 'billing:manage');
+    await readJson(req).catch(() => ({}));
+    const capability = evaluatePaymentCapability({ provider: paymentProvider });
+    if (!capability.can_refund) {
+      throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_REFUND_UNSUPPORTED',
+        capability.blockers[0]?.message ?? '当前不具备退款条件', { payment: capability });
+    }
+    const order = await store.read(data => {
+      const item = data.billing_orders?.[orderId] ?? null;
+      if (!item || item.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
+      return item;
+    });
+    if (order.real_money !== true) {
+      throw new ApiError(409, 'ORDER_NOT_REAL_MONEY', '演示订单不涉及真实收款，不能发起真实退款');
+    }
+    throw new ApiError(409, 'REFUND_UNIMPLEMENTED', '真实支付通道尚未接入，未执行退款');
+  }
+
+  async function metricsRoute(ctx, send) {
+    await requireAction(ctx, 'metrics:read');
+    const payload = await store.read(data => buildObservabilitySnapshot({
+      data,
+      tenantId: ctx.tenantId,
+      counters: metrics,
+      startedAt,
+      at: new Date(clock()).toISOString(),
+      provider: publish.provider,
+      balance: balanceOf(data, ctx.tenantId, { initialCredits }),
+    }));
+    send(200, payload);
+  }
+
+  // ---------- M12：租户级备份与恢复 ----------
+
+  async function presentBlobNames() {
+    try {
+      const names = await readdir(path.join(store.dir, 'blobs'));
+      return names.filter(name => !name.endsWith('.tmp'));
+    } catch {
+      return [];
+    }
+  }
+
+  async function loadBackupFiles(ctx, backupId) {
+    if (!/^bkp_[0-9a-f]{16}$/.test(backupId)) {
+      throw new ApiError(400, 'BACKUP_ID_INVALID', '备份编号无效');
+    }
+    const record = await store.read(data => {
+      const item = data.backups?.[backupId] ?? null;
+      if (!item || item.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '备份不存在');
+      return item;
+    });
+    let manifest = null;
+    let snapshot = null;
+    try {
+      manifest = JSON.parse(await readFile(path.join(backupDirOf(backupId), 'manifest.json'), 'utf8'));
+      snapshot = JSON.parse(await readFile(path.join(backupDirOf(backupId), 'data.json'), 'utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    return { record, manifest, snapshot };
+  }
+
+  async function createBackupRoute(ctx, send) {
+    await requireAction(ctx, 'backup:manage');
+    const backupId = newId('bkp');
+    const createdAt = new Date(clock()).toISOString();
+    const snapshot = await store.read(data => tenantSnapshot(data, ctx.tenantId));
+    const manifest = buildBackupManifest({
+      backupId, tenantId: ctx.tenantId, snapshot, createdAt, createdBy: ctx.actorId,
+      formatVersion: BACKUP_FORMAT_VERSION,
+    });
+    const dir = backupDirOf(backupId);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, 'data.json'), `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+    await writeFile(path.join(dir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+    const record = await store.mutate(data => {
+      const item = {
+        id: backupId,
+        tenant_id: ctx.tenantId,
+        format_version: manifest.format_version,
+        data_sha256: manifest.data_sha256,
+        blob_refs_sha256: manifest.blob_refs_sha256,
+        counts: manifest.counts,
+        blob_count: manifest.blob_refs.length,
+        created_by: ctx.actorId,
+        created_at: createdAt,
+        restored_at: null,
+      };
+      data.backups[item.id] = item;
+      return item;
+    });
+    send(201, {
+      backup: record,
+      manifest: {
+        data_sha256: manifest.data_sha256, blob_refs_sha256: manifest.blob_refs_sha256,
+        counts: manifest.counts, blob_refs: manifest.blob_refs.length,
+      },
+    });
+  }
+
+  async function listBackupsRoute(ctx, send) {
+    await requireAction(ctx, 'backup:manage');
+    const payload = await store.read(data => ({
+      tenant_id: ctx.tenantId,
+      backups: Object.values(data.backups ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at))),
+    }));
+    send(200, payload);
+  }
+
+  async function getBackupRoute(ctx, backupId, send) {
+    await requireAction(ctx, 'backup:manage');
+    const loaded = await loadBackupFiles(ctx, backupId);
+    send(200, {
+      backup: loaded.record,
+      manifest: loaded.manifest
+        ? {
+          format_version: loaded.manifest.format_version, tenant_id: loaded.manifest.tenant_id,
+          created_at: loaded.manifest.created_at, data_sha256: loaded.manifest.data_sha256,
+          counts: loaded.manifest.counts, blob_refs: loaded.manifest.blob_refs.length,
+        }
+        : null,
+    });
+  }
+
+  async function verifyBackupRoute(ctx, backupId, send) {
+    await requireAction(ctx, 'backup:manage');
+    const loaded = await loadBackupFiles(ctx, backupId);
+    const presentBlobs = await presentBlobNames();
+    const verdict = verifyBackupManifest({
+      manifest: loaded.manifest, snapshot: loaded.snapshot, tenantId: ctx.tenantId, presentBlobs,
+    });
+    send(verdict.ok ? 200 : 409, {
+      backup: loaded.record,
+      ok: verdict.ok,
+      issues: verdict.issues,
+      checked: { blobs_present: presentBlobs.length },
+    });
+  }
+
+  async function restoreBackupRoute(ctx, req, backupId, send) {
+    await requireAction(ctx, 'backup:manage');
+    const body = await readJson(req).catch(() => ({}));
+    if (body.confirm !== true) {
+      throw new ApiError(422, 'BACKUP_CONFIRM_REQUIRED', '恢复会覆盖本租户当前数据，必须显式确认（confirm: true）');
+    }
+    const loaded = await loadBackupFiles(ctx, backupId);
+    const presentBlobs = await presentBlobNames();
+    const verdict = verifyBackupManifest({
+      manifest: loaded.manifest, snapshot: loaded.snapshot, tenantId: ctx.tenantId, presentBlobs,
+    });
+    if (!verdict.ok) {
+      throw new ApiError(409, verdict.issues[0]?.code ?? 'BACKUP_INVALID', '备份校验未通过，未执行恢复', {
+        issues: verdict.issues,
+      });
+    }
+    const restored = await store.mutate(draft => {
+      mergeTenantSnapshot(draft, loaded.snapshot, ctx.tenantId);
+      const record = draft.backups?.[backupId] ?? null;
+      if (record) {
+        record.restored_at = new Date(clock()).toISOString();
+        record.restored_by = ctx.actorId;
+      }
+      return { counts: loaded.manifest.counts };
+    });
+    send(200, {
+      restored: true,
+      backup_id: backupId,
+      counts: restored.counts,
+      notice: '仅恢复本租户数据；其他租户记录未被覆盖',
+    });
   }
 
   function resolveSpecRecord(data, projectId, rawVersion) {

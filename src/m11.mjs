@@ -35,13 +35,23 @@ export const PERMISSIONS = Object.freeze({
   owner: Object.freeze([
     'batch:read', 'batch:create', 'batch:preview', 'batch:start', 'batch:export',
     'recipe:read', 'recipe:write', 'recipe:approve', 'member:manage', 'project:read',
+    // M12：结果回流、效果导入、套餐与备份
+    'feedback:read', 'feedback:write', 'outcome:read', 'outcome:write',
+    'billing:read', 'billing:manage', 'backup:manage', 'metrics:read',
   ]),
   editor: Object.freeze([
     'batch:read', 'batch:create', 'batch:preview', 'batch:start', 'batch:export',
     'recipe:read', 'recipe:write', 'project:read',
+    'feedback:read', 'feedback:write', 'outcome:read', 'outcome:write', 'billing:read', 'metrics:read',
   ]),
-  reviewer: Object.freeze(['batch:read', 'recipe:read', 'project:read']),
-  viewer: Object.freeze(['batch:read', 'recipe:read', 'project:read']),
+  reviewer: Object.freeze([
+    'batch:read', 'recipe:read', 'project:read',
+    'feedback:read', 'feedback:write', 'outcome:read', 'billing:read', 'metrics:read',
+  ]),
+  viewer: Object.freeze([
+    'batch:read', 'recipe:read', 'project:read',
+    'feedback:read', 'outcome:read', 'billing:read', 'metrics:read',
+  ]),
 });
 
 export const BATCH_ITEM_STATES = Object.freeze([
