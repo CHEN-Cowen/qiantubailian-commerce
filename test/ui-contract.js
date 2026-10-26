@@ -11,7 +11,7 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   const [html, app, style, viewport] = await Promise.all([
     read('index.html'), read('app.js'), read('style.css'), read('viewport.css'),
   ]);
-  for (const text of ['快捷创意', '商品项目', '素材与版本', '商品事实已确认', 'COMMERCE QA', '专业模式', '数据为 mock']) {
+  for (const text of ['快捷创意', '商品项目', '素材与版本', '商品事实已确认', '质量检查', '专业模式', '数据为 mock']) {
     assert.match(html, new RegExp(text));
   }
   assert.match(html, /短视频首帧[\s\S]*后续阶段/);
@@ -22,8 +22,8 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   assert.match(app, /function openDrawer\(\)/);
   assert.match(app, /project !== 'skin'/);
   assert.match(app, /addEventListener\('keydown', activateProject\)/);
-  assert.match(style, /--blue:#246bce/);
-  assert.match(style, /--purple:#6d5bd0/);
+  assert.match(style, /--primary:#FF5A2E/);
+  assert.match(style, /--accent:#E8890C/);
   assert.match(viewport, /@media\(max-width:760px\)/);
   assert.match(style, /\.view,\.project-view\{display:none\}/);
   assert.match(html, /刷新后重置/);
