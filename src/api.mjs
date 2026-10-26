@@ -18,6 +18,9 @@ import {
   MAX_CANARY_PERCENT, MIN_CANARY_PERCENT, DEFAULT_CANARY_THRESHOLDS, summarizeDataset,
   summarizeEvaluation, evaluateCanaryHealth, planCanary,
 } from './m09.mjs';
+import {
+  buildDetailPage, checkDetailPageValidity, planPlatformDelivery,
+} from './m10.mjs';
 
 const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
 const now = () => new Date().toISOString();
@@ -106,7 +109,7 @@ export function createApi({
 
     if (resource === 'tenant' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
-      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M09' });
+      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M10' });
     }
     if (resource === 'credits' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
@@ -182,6 +185,8 @@ export function createApi({
       }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
+    if (resource === 'detail-pages') return handleDetailPages(ctx, method, rest, req, send);
+    if (resource === 'video-plans') return handleVideoPlans(ctx, method, rest, req, send);
     if (resource === 'eval') return handleEval(ctx, method, rest, req, query, send);
     if (resource === 'models') {
       if (rest.length === 1) {
@@ -261,6 +266,25 @@ export function createApi({
     if (rest.length === 5 && section === 'assets' && rest[4] === 'content') {
       requireMethod(method, ['GET', 'HEAD']);
       return sendAssetContent(ctx, projectId, third, send);
+    }
+    if (rest.length === 3 && section === 'detail-pages') {
+      if (method === 'POST') return createDetailPage(ctx, req, projectId, send);
+      requireMethod(method, ['GET', 'HEAD', 'POST']);
+      return listDetailPages(ctx, projectId, send);
+    }
+    if (rest.length === 5 && section === 'detail-pages' && rest[4] === 'recheck') {
+      requireMethod(method, ['POST']);
+      return recheckDetailPage(ctx, rest[3], req, send);
+    }
+    if (rest.length === 3 && section === 'video-plans') {
+      if (method === 'POST') return createVideoPlanRoute(ctx, req, projectId, send);
+      requireMethod(method, ['GET', 'HEAD', 'POST']);
+      return jobs.listVideoPlans(ctx, { projectId }).then(result => send(200, result));
+    }
+    if (rest.length === 3 && section === 'joint-exports') {
+      if (method === 'POST') return createJointExportRoute(ctx, req, projectId, send);
+      requireMethod(method, ['GET', 'HEAD', 'POST']);
+      return jobs.listExports(ctx, { projectId }).then(result => send(200, result));
     }
     throw new ApiError(404, 'NOT_FOUND', '接口不存在');
   }
@@ -1414,6 +1438,220 @@ export function createApi({
       return getEvalReport(ctx, rest[2], send);
     }
     throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+  }
+
+  // ---------- M10：结构化详情页与首帧视频 ----------
+
+  function detailContext(data, ctx, projectId, specVersion) {
+    const project = findProject(data, ctx, projectId);
+    const truth = latestTruth(data, project.id);
+    if (!truth) throw new ApiError(409, 'TRUTH_REQUIRED', '需要先确认商品事实，详情页参数必须能引用事实');
+    const spec = resolveSpecRecord(data, project.id, specVersion);
+    const brandKit = spec.brand_kit ? latestBrandKitVersion(data, spec.brand_kit.id) : null;
+    const assets = Object.values(data.assets)
+      .filter(asset => asset.tenant_id === ctx.tenantId && asset.project_id === project.id);
+    const channel = matchChannelRule({
+      platform: spec.channel?.platform ?? project.platform,
+      category: project.category ?? '',
+      at: clock(),
+    });
+    return { project, truth, spec, brandKit, assets, channel };
+  }
+
+  function detailPageView(page, context) {
+    return {
+      ...page,
+      validity: checkDetailPageValidity({
+        page,
+        truth: context.truth,
+        spec: context.spec,
+        brandKit: context.brandKit,
+        assets: context.assets,
+        channel: context.channel,
+      }),
+      platform_delivery: planPlatformDelivery({ channel: context.channel }),
+    };
+  }
+
+  function normalizeSections(sections) {
+    if (!Array.isArray(sections)) {
+      throw new ApiError(422, 'DETAIL_SECTIONS_REQUIRED', 'sections 必须是数组');
+    }
+    return sections;
+  }
+
+  async function createDetailPage(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const sections = normalizeSections(body.sections);
+    const result = await store.mutate(data => {
+      const context = detailContext(data, ctx, projectId, body.spec_version);
+      const page = buildDetailPage({
+        tenantId: ctx.tenantId,
+        projectId: context.project.id,
+        spec: context.spec,
+        truth: context.truth,
+        brandKit: context.brandKit,
+        assets: context.assets,
+        sections,
+        copyVersion: body.copy_version,
+        platform: context.project.platform,
+        channel: context.channel,
+        at: clock(),
+      });
+      const sameProject = Object.values(data.detail_pages)
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === context.project.id);
+      const record = {
+        id: newId('dtp'),
+        tenant_id: ctx.tenantId,
+        project_id: context.project.id,
+        version: sameProject.length + 1,
+        previous_page_id: null,
+        created_at: now(),
+        created_by: ctx.actorId,
+        ...page,
+      };
+      data.detail_pages[record.id] = record;
+      return { record, decision: page.decision };
+    });
+    send(201, {
+      detail_page: { ...result.record, validity: { validity: 'current', reasons: [] } },
+    });
+  }
+
+  async function listDetailPages(ctx, projectId, send) {
+    const payload = await store.read(data => {
+      const context = detailContext(data, ctx, projectId, undefined);
+      const pages = Object.values(data.detail_pages)
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === projectId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+        .map(item => detailPageView(item, context));
+      return { project_id: projectId, detail_pages: pages, total: pages.length };
+    });
+    send(200, payload);
+  }
+
+  async function getDetailPageRoute(ctx, pageId, send) {
+    const payload = await store.read(data => {
+      const page = data.detail_pages?.[pageId] ?? null;
+      if (!page || page.tenant_id !== ctx.tenantId) return null;
+      const context = detailContext(data, ctx, page.project_id, undefined);
+      return { detail_page: detailPageView(page, context) };
+    });
+    if (!payload) throw new ApiError(404, 'NOT_FOUND', '详情页不存在');
+    send(200, payload);
+  }
+
+  /**
+   * 重检：默认按当前最新事实与配置重建。未变化的参数复用上次来源快照，
+   * 但六模块、事实值、素材生效、文案版本与平台覆盖每次都全量检查（PDP-02）。
+   */
+  async function recheckDetailPage(ctx, pageId, req, send) {
+    const body = await readJson(req);
+    const result = await store.mutate(data => {
+      const previous = data.detail_pages?.[pageId] ?? null;
+      if (!previous || previous.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '详情页不存在');
+      }
+      const context = detailContext(data, ctx, previous.project_id, body.spec_version);
+      const sections = body.sections === undefined
+        ? previous.sections.map(section => ({
+          key: section.key,
+          params: (section.params ?? []).map(param => ({
+            key: param.key, label: param.label, value: param.value, source: param.source,
+          })),
+        }))
+        : normalizeSections(body.sections);
+      const page = buildDetailPage({
+        tenantId: ctx.tenantId,
+        projectId: previous.project_id,
+        spec: context.spec,
+        truth: context.truth,
+        brandKit: context.brandKit,
+        assets: context.assets,
+        sections,
+        copyVersion: body.copy_version ?? previous.copy_version,
+        platform: context.project.platform,
+        channel: context.channel,
+        previousPage: previous,
+        at: clock(),
+      });
+      const sameProject = Object.values(data.detail_pages)
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === previous.project_id);
+      const record = {
+        ...page,
+        id: newId('dtp'),
+        tenant_id: ctx.tenantId,
+        project_id: previous.project_id,
+        version: sameProject.length + 1,
+        previous_page_id: previous.id,
+        created_at: now(),
+        created_by: ctx.actorId,
+      };
+      data.detail_pages[record.id] = record;
+      return record;
+    });
+    send(201, {
+      detail_page: { ...result, validity: { validity: 'current', reasons: [] } },
+    });
+  }
+
+  function handleDetailPages(ctx, method, rest, req, send) {
+    if (rest.length === 1) {
+      requireMethod(method, ['GET', 'HEAD']);
+      return store.read(data => Object.values(data.detail_pages)
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at))))
+        .then(items => send(200, { tenant_id: ctx.tenantId, detail_pages: items, total: items.length }));
+    }
+    if (rest.length === 2) {
+      requireMethod(method, ['GET', 'HEAD']);
+      return getDetailPageRoute(ctx, rest[1], send);
+    }
+    if (rest.length === 3 && rest[2] === 'recheck') {
+      requireMethod(method, ['POST']);
+      return recheckDetailPage(ctx, rest[1], req, send);
+    }
+    throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+  }
+
+  async function createVideoPlanRoute(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    if (body.first_frame !== undefined && (body.first_frame === null || typeof body.first_frame !== 'object')) {
+      throw new ApiError(422, 'FIRST_FRAME_INVALID', 'first_frame 必须是对象');
+    }
+    const result = await jobs.createVideoPlan(ctx, projectId, body);
+    send(201, result);
+  }
+
+  function handleVideoPlans(ctx, method, rest, req, send) {
+    if (rest.length === 1) {
+      requireMethod(method, ['GET', 'HEAD']);
+      return jobs.listVideoPlans(ctx).then(result => send(200, result));
+    }
+    if (rest.length === 2) {
+      requireMethod(method, ['GET', 'HEAD']);
+      return jobs.getVideoPlan(ctx, rest[1]).then(result => send(200, result));
+    }
+    if (rest.length === 3 && rest[2] === 'frames') {
+      requireMethod(method, ['POST']);
+      return readJson(req).then(body => jobs.evaluateVideoPlanFrames(ctx, rest[1], body)).then(result => send(200, result));
+    }
+    if (rest.length === 3 && rest[2] === 'generate') {
+      requireMethod(method, ['POST']);
+      return jobs.generateVideo(ctx, rest[1]).then(result => send(200, result));
+    }
+    throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+  }
+
+  async function createJointExportRoute(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const result = await jobs.createJointExport(ctx, projectId, {
+      run_id: body.run_id ?? null,
+      scope: body.scope ?? 'partial',
+      detail_page_id: body.detail_page_id ?? null,
+      video_plan_id: body.video_plan_id ?? null,
+    });
+    send(201, result);
   }
 
   function resolveSpecRecord(data, projectId, rawVersion) {

@@ -31,6 +31,9 @@ import {
   buildManifest, buildQaSummary, buildZip, compareRevisionOutcome, exportBundleName, exportRecordId,
   makeVersionRecord, planExport, planRevision, zipSha256,
 } from './m08.mjs';
+import {
+  buildJointManifest, checkDetailPageValidity, evaluateVideoFrames, planPlatformDelivery, planVideo,
+} from './m10.mjs';
 
 export const RUN_SCHEMA_VERSION = 1;
 export const EVENT_SCHEMA_VERSION = 1;
@@ -1788,6 +1791,7 @@ export function createJobs({
         .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
         .map(item => ({
           id: item.id,
+          kind: item.kind ?? 'images',
           run_id: item.run_id,
           scope: item.scope,
           complete: item.complete,
@@ -1828,11 +1832,423 @@ export function createJobs({
     return { bytes, filename: item.package_filename, sha256: item.package_sha256 };
   }
 
+  // ---------- M10：首帧视频、帧检查与联合导出 ----------
+
+  const PROJECT_SHOT_ROLES = new Set(['subject', 'packaging', 'detail']);
+
+  function findProjectIn(data, ctx, projectId) {
+    const project = data.projects?.[projectId] ?? null;
+    if (!project || project.tenant_id !== ctx.tenantId) {
+      throw new ApiError(404, 'NOT_FOUND', '项目不存在');
+    }
+    return project;
+  }
+
+  function projectSnapshot(data, project) {
+    const newest = (items, key) => (items ?? [])
+      .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id)
+      .sort((left, right) => right[key] - left[key])[0] ?? null;
+    const spec = newest(Object.values(data.specs ?? {}), 'version');
+    const truth = newest(Object.values(data.truth_versions ?? {}), 'version');
+    const brandKit = spec?.brand_kit
+      ? Object.values(data.brand_kit_versions ?? {})
+        .filter(item => item.brand_kit_id === spec.brand_kit.id)
+        .sort((left, right) => right.version - left.version)[0] ?? null
+      : null;
+    const assets = Object.values(data.assets ?? {})
+      .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+    const channel = matchChannelRule({
+      platform: spec?.channel?.platform ?? project.platform ?? '',
+      category: project.category ?? '',
+      at: clock(),
+    });
+    return { spec, truth, brandKit, assets, channel };
+  }
+
+  /**
+   * 首帧归一化。只有"已发布且有效"的图片版本，或生效的主体/包装/细节素材，才算有效首帧。
+   * 风格图、待复核版本、失效素材都返回 available=false，由 planVideo 阻断。
+   */
+  async function resolveFirstFrame(data, ctx, project, input = {}) {
+    const kind = String(input?.kind ?? '').trim();
+    if (kind === 'asset') {
+      const asset = data.assets?.[String(input.asset_id ?? '')] ?? null;
+      if (!asset || asset.tenant_id !== ctx.tenantId || asset.project_id !== project.id) {
+        return { available: false, kind, reason: 'FIRST_FRAME_ASSET_NOT_FOUND' };
+      }
+      if (!PROJECT_SHOT_ROLES.has(asset.role)) {
+        return { available: false, kind, ref_id: asset.id, reason: 'FIRST_FRAME_ASSET_ROLE_INVALID' };
+      }
+      if (asset.role_status !== 'active') {
+        return { available: false, kind, ref_id: asset.id, reason: 'FIRST_FRAME_ASSET_STALE' };
+      }
+      const bytes = asset.sha256 ? await store.readBlob(asset.sha256, asset.ext ?? 'png') : null;
+      if (!bytes) {
+        return { available: false, kind, ref_id: asset.id, reason: 'FIRST_FRAME_FILE_MISSING' };
+      }
+      return {
+        available: true, kind, ref_id: asset.id, label: asset.filename ?? asset.id,
+        sha256: asset.sha256, width: asset.width ?? null, height: asset.height ?? null,
+        publishable: true, decision: 'source_asset', validity: 'current',
+      };
+    }
+
+    if (kind === 'version') {
+      const run = findRun(data, ctx, String(input.run_id ?? ''));
+      if (run.project_id !== project.id) throw new ApiError(404, 'NOT_FOUND', '任务不属于该项目');
+      let version = input.version_id
+        ? (run.versions ?? []).find(item => item.id === String(input.version_id)) ?? null
+        : null;
+      if (!version && input.deliverable_id) {
+        const target = run.deliverables.find(item => item.deliverable_id === String(input.deliverable_id)) ?? null;
+        version = target?.active_version_id
+          ? (run.versions ?? []).find(item => item.id === target.active_version_id) ?? null
+          : null;
+      }
+      if (!version) return { available: false, kind, reason: 'FIRST_FRAME_VERSION_NOT_FOUND' };
+      const target = run.deliverables.find(item => item.deliverable_id === version.deliverable_id) ?? null;
+      if (target?.active_version_id !== version.id) {
+        return { available: false, kind, ref_id: version.id, reason: 'FIRST_FRAME_VERSION_NOT_ACTIVE' };
+      }
+      const report = data.quality_reports?.[version.report_id] ?? null;
+      const validity = await reportValidityIn(data, report);
+      const decision = report?.decision ?? 'unknown';
+      const bytes = version.hash ? await store.readBlob(version.hash, version.format ?? 'png') : null;
+      const publishable = validity.validity === 'current' && decision === 'publishable' && Boolean(bytes);
+      return {
+        available: true, kind, ref_id: version.id, label: target?.label ?? version.deliverable_label ?? version.id,
+        run_id: run.id, deliverable_id: version.deliverable_id, report_id: report?.id ?? null,
+        sha256: version.hash ?? null, width: version.width ?? null, height: version.height ?? null,
+        publishable, decision, validity: validity.validity, validity_reasons: validity.reasons ?? [],
+      };
+    }
+
+    return { available: false, kind: kind || null, reason: 'FIRST_FRAME_KIND_INVALID' };
+  }
+
+  async function buildDetailPageViewIn(data, page, snapshot) {
+    const validity = checkDetailPageValidity({ page, ...snapshot });
+    return { ...page, validity };
+  }
+
+  function requireDetailPage(data, ctx, project, detailPageId) {
+    const page = data.detail_pages?.[String(detailPageId ?? '')] ?? null;
+    if (!page || page.tenant_id !== ctx.tenantId || page.project_id !== project.id) {
+      throw new ApiError(404, 'NOT_FOUND', '详情页不存在');
+    }
+    return page;
+  }
+
+  async function createVideoPlan(ctx, projectId, input = {}) {
+    const outcome = await store.mutate(async data => {
+      const project = findProjectIn(data, ctx, projectId);
+      const snapshot = projectSnapshot(data, project);
+      const firstFrame = await resolveFirstFrame(data, ctx, project, input.first_frame ?? {});
+      let detailPage = null;
+      if (input.detail_page_id) {
+        const page = requireDetailPage(data, ctx, project, input.detail_page_id);
+        detailPage = await buildDetailPageViewIn(data, page, snapshot);
+      }
+      const plan = planVideo({
+        tenantId: ctx.tenantId,
+        projectId: project.id,
+        firstFrame,
+        detailPage,
+        capabilities: provider.capabilities(),
+        durationSeconds: input.duration_seconds,
+        motion: input.motion ?? {},
+        audio: input.audio ?? {},
+        storyboard: input.storyboard ?? null,
+        at: clock(),
+      });
+      const record = {
+        id: newId('vpl'),
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        ...plan,
+        frame_reports: [],
+        latest_frame_report: null,
+        created_by: ctx.actorId,
+        created_at: new Date(clock()).toISOString(),
+      };
+      data.video_plans[record.id] = record;
+      return { id: record.id };
+    });
+    return getVideoPlan(ctx, outcome.id);
+  }
+
+  function videoView(record) {
+    const latest = record.latest_frame_report ?? null;
+    let status = record.decision;
+    if (record.decision === 'publishable') {
+      if (!latest) status = 'needs_review';
+      else status = latest.decision;
+    }
+    return {
+      ...record,
+      video_status: status,
+      has_video_file: false,
+      note: '没有真实视频文件；当前 Provider 不支持视频时只能得到分镜与检查计划。',
+    };
+  }
+
+  async function listVideoPlans(ctx, { projectId = null } = {}) {
+    if (projectId) await store.read(data => findProjectIn(data, ctx, projectId));
+    const items = await store.read(data => Object.values(data.video_plans ?? {})
+      .filter(item => item.tenant_id === ctx.tenantId)
+      .filter(item => !projectId || item.project_id === projectId)
+      .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+      .map(videoView));
+    return { video_plans: items, total: items.length };
+  }
+
+  async function getVideoPlan(ctx, planId) {
+    const record = await store.read(data => {
+      const found = data.video_plans?.[planId] ?? null;
+      if (!found || found.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '视频计划不存在');
+      }
+      return found;
+    });
+    return { video_plan: videoView(record) };
+  }
+
+  async function evaluateVideoPlanFrames(ctx, planId, input = {}) {
+    const frames = input.frames;
+    if (!Array.isArray(frames)) throw new ApiError(422, 'VIDEO_FRAMES_REQUIRED', '需要提供帧检查结果');
+    if (frames.length > 200) throw new ApiError(422, 'VIDEO_FRAMES_TOO_LARGE', '单次最多 200 帧检查结果');
+    const report = evaluateVideoFrames({ frames });
+    const outcome = await store.mutate(data => {
+      const plan = data.video_plans?.[planId] ?? null;
+      if (!plan || plan.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '视频计划不存在');
+      }
+      const entry = {
+        id: newId('vfr'),
+        created_at: new Date(clock()).toISOString(),
+        created_by: ctx.actorId,
+        ...report,
+      };
+      plan.frame_reports = [...(plan.frame_reports ?? []), entry];
+      plan.latest_frame_report = entry;
+      return { plan_id: plan.id, report_id: entry.id };
+    });
+    const view = await getVideoPlan(ctx, outcome.plan_id);
+    return { ...view, frame_report: view.video_plan.latest_frame_report };
+  }
+
+  /**
+   * 生成视频：当前 Provider 没有视频能力时必须明确拒绝，不写任何视频文件；
+   * 即使宿主自建 Adapter 声明了 video=true，没有真实实现也不能假装生成。
+   */
+  async function generateVideo(ctx, planId) {
+    const record = await store.read(data => {
+      const found = data.video_plans?.[planId] ?? null;
+      if (!found || found.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '视频计划不存在');
+      }
+      return found;
+    });
+    const capabilities = provider.capabilities();
+    if (capabilities.video !== true) {
+      throw new ApiError(409, 'VIDEO_PROVIDER_UNSUPPORTED', `当前 Provider「${capabilities.id ?? 'unknown'}」不支持视频，未生成任何视频文件`, {
+        provider: capabilities.id ?? null,
+        simulated: capabilities.simulated === true,
+        acceptance: capabilities.acceptance ?? null,
+      });
+    }
+    if (record.decision !== 'publishable') {
+      throw new ApiError(409, 'VIDEO_PLAN_BLOCKED', '视频计划存在阻断项，不能生成', {
+        blockers: record.blockers,
+      });
+    }
+    if (record.latest_frame_report?.decision !== 'publishable' && record.latest_frame_report) {
+      throw new ApiError(409, 'VIDEO_FRAME_REPORT_BLOCKED', '帧级检查未通过，不能生成视频');
+    }
+    throw new ApiError(501, 'VIDEO_ADAPTER_NOT_IMPLEMENTED', 'Provider 声明了视频能力，但仓库尚未接入真实视频 Adapter，不能假装生成');
+  }
+
+  async function createJointExport(ctx, projectId, options = {}) {
+    const scope = options.scope ?? 'partial';
+    if (scope !== 'complete' && scope !== 'partial') {
+      throw new ApiError(422, 'INVALID_SCOPE', '导出范围只能是 complete 或 partial');
+    }
+    const result = await store.mutate(async data => {
+      const project = findProjectIn(data, ctx, projectId);
+      const snapshot = projectSnapshot(data, project);
+      const at = clock();
+      const run = options.run_id ? findRun(data, ctx, String(options.run_id)) : null;
+      if (run && run.project_id !== project.id) throw new ApiError(404, 'NOT_FOUND', '任务不属于该项目');
+      if (!run && !options.detail_page_id && !options.video_plan_id) {
+        throw new ApiError(422, 'JOINT_EXPORT_EMPTY', '需要至少选择图片任务、详情页或视频计划之一');
+      }
+      if (scope === 'complete' && !run) {
+        throw new ApiError(409, 'JOINT_EXPORT_RUN_REQUIRED', '完整联合包必须包含图片任务');
+      }
+      if (run && ACTIVE_STATES.has(run.status)) {
+        throw new ApiError(409, 'RUN_NOT_TERMINAL', '任务尚未结束，不能导出');
+      }
+
+      const imageValidities = {};
+      const imageReports = {};
+      for (const version of run?.versions ?? []) {
+        const report = data.quality_reports?.[version.report_id] ?? null;
+        if (report) imageReports[report.id] = report;
+        imageValidities[version.report_id] = await reportValidityIn(data, report);
+      }
+      const imagePlan = run
+        ? planExport({
+          run,
+          versions: run.versions ?? [],
+          reports: imageReports,
+          validities: imageValidities,
+          scope: scope === 'complete' ? 'complete' : 'partial',
+        })
+        : { ok: false, code: 'PACKAGE_EMPTY', message: '未选择图片任务', included: [], missing: [], stale: 0, complete: false };
+
+      const detailPage = options.detail_page_id
+        ? await buildDetailPageViewIn(data, requireDetailPage(data, ctx, project, options.detail_page_id), snapshot)
+        : null;
+      const videoPlanRecord = options.video_plan_id
+        ? (() => {
+          const found = data.video_plans?.[String(options.video_plan_id)] ?? null;
+          if (!found || found.tenant_id !== ctx.tenantId || found.project_id !== project.id) {
+            throw new ApiError(404, 'NOT_FOUND', '视频计划不存在');
+          }
+          return found;
+        })()
+        : null;
+      const frameReport = videoPlanRecord?.latest_frame_report ?? null;
+      const delivery = planPlatformDelivery({ channel: snapshot.channel });
+
+      const detailPublishable = detailPage?.decision === 'publishable' && detailPage.validity.validity === 'current';
+      const videoPublishable = videoPlanRecord?.decision === 'publishable'
+        && frameReport?.decision === 'publishable';
+
+      if (scope === 'complete') {
+        if (!imagePlan.ok) {
+          throw new ApiError(409, imagePlan.code, imagePlan.message, { missing: imagePlan.missing, stale: imagePlan.stale });
+        }
+        if (!detailPage || !detailPublishable) {
+          throw new ApiError(409, 'JOINT_EXPORT_DETAIL_PAGE_NOT_READY', '完整联合包要求详情页可发布且未失效');
+        }
+        if (!videoPlanRecord || !videoPublishable) {
+          throw new ApiError(409, 'JOINT_EXPORT_VIDEO_NOT_READY', '完整联合包要求视频计划与帧级检查均可发布');
+        }
+        // 当前仓库没有真实视频 Adapter：即使计划通过，也不存在视频文件，必须拒绝完整包
+        throw new ApiError(409, 'JOINT_EXPORT_VIDEO_FILE_MISSING', '视频计划已通过，但仓库没有真实视频 Adapter，缺少视频文件，不能生成完整联合包');
+      }
+
+      const entries = [];
+      const images = [];
+      const missing = [];
+      for (const { version, report, deliverable } of imagePlan.included ?? []) {
+        const bytes = await store.readBlob(version.hash, version.format ?? 'png');
+        if (!bytes) throw new ApiError(409, 'EXPORT_FILE_MISSING', `交付物 ${deliverable.deliverable_id} 的文件已不可读取`);
+        const file = `images/${deliverable.deliverable_id}.${version.format ?? 'png'}`;
+        entries.push({ name: file, bytes });
+        images.push({
+          deliverable_id: deliverable.deliverable_id, label: deliverable.label, file,
+          sha256: version.hash, format: version.format, width: version.width, height: version.height,
+          bytes: version.bytes, version_id: version.id, report_id: report.id, decision: report.decision,
+        });
+      }
+      for (const item of imagePlan.missing ?? []) missing.push({ artifact: 'image', ...item });
+      if (!run) missing.push({ artifact: 'image', deliverable_id: null, label: '商品图片', reason: 'RUN_NOT_SELECTED' });
+      else if (!imagePlan.ok) missing.push({ artifact: 'image', deliverable_id: null, label: '商品图片', reason: imagePlan.code, message: imagePlan.message });
+
+      if (detailPage) {
+        if (detailPublishable) {
+          entries.push({ name: 'detail-page.json', bytes: Buffer.from(JSON.stringify(detailPage, null, 2)) });
+        } else {
+          missing.push({
+            artifact: 'detail_page', deliverable_id: 'detail_page', label: '结构化详情页',
+            reason: detailPage.decision !== 'publishable' ? 'BLOCKED' : 'STALE',
+          });
+        }
+      } else {
+        missing.push({ artifact: 'detail_page', deliverable_id: 'detail_page', label: '结构化详情页', reason: 'NOT_PROVIDED' });
+      }
+
+      if (videoPlanRecord) {
+        entries.push({ name: 'video-plan.json', bytes: Buffer.from(JSON.stringify(videoPlanRecord, null, 2)) });
+        if (frameReport) {
+          entries.push({ name: 'video-frames.json', bytes: Buffer.from(JSON.stringify(frameReport, null, 2)) });
+        }
+        missing.push({
+          artifact: 'video', deliverable_id: 'video', label: '商品短视频',
+          reason: videoPlanRecord.generation?.blocker_code ?? 'VIDEO_NOT_RENDERED',
+          detail: '当前仓库没有真实视频 Adapter；分镜与帧检查不等于已有视频文件',
+        });
+      } else {
+        missing.push({ artifact: 'video', deliverable_id: 'video', label: '商品短视频', reason: 'NOT_PROVIDED' });
+      }
+
+      entries.push({ name: 'platform-delivery.json', bytes: Buffer.from(JSON.stringify(delivery, null, 2)) });
+      const manifest = buildJointManifest({
+        project, run, spec: snapshot.spec, truth: snapshot.truth, provider: provider.capabilities(),
+        images, detailPage, videoPlan: videoPlanRecord, frameReport, delivery, missing, now: at,
+      });
+      entries.push({ name: 'joint-manifest.json', bytes: Buffer.from(JSON.stringify(manifest, null, 2)) });
+      if (run) {
+        entries.push({
+          name: 'qa-summary.json',
+          bytes: Buffer.from(JSON.stringify(buildQaSummary({ run, plan: imagePlan, now: at }), null, 2)),
+        });
+      }
+
+      const zip = buildZip(entries, { now: at });
+      const packageHash = zipSha256(zip);
+      const file = await store.putBlob(zip, packageHash, 'zip');
+      const record = {
+        id: exportRecordId(),
+        schema_version: EXPORT_SCHEMA_VERSION,
+        package_format: 'qtb-joint-package.1',
+        kind: 'joint',
+        tenant_id: run?.tenant_id ?? ctx.tenantId,
+        project_id: project.id,
+        run_id: run?.id ?? null,
+        detail_page_id: detailPage?.id ?? null,
+        video_plan_id: videoPlanRecord?.id ?? null,
+        scope,
+        complete: false,
+        status: 'PACKAGE_PARTIAL',
+        message: `联合包：图片 ${images.length} 项，详情页 ${detailPublishable ? '已包含' : '缺失'}，视频缺失（Provider 无视频能力）`,
+        package_filename: `qtb-joint-${project.id}-${scope}-${new Date(at).toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')}.zip`,
+        package_sha256: packageHash,
+        package_bytes: zip.length,
+        package_path: file,
+        manifest,
+        qa_summary: null,
+        included: images,
+        missing,
+        platform_compliance: 'not_claimed',
+        content_hash_scope: '清单与文件哈希；不含图片二进制',
+        created_by: ctx.actorId,
+        created_at: new Date(at).toISOString(),
+      };
+      data.exports[record.id] = record;
+      if (run) {
+        pushEvent(data, run, {
+          stage: 'export', status: scope, at,
+          payload: {
+            export_id: record.id, kind: 'joint', complete: false,
+            package_sha256: packageHash, included: images.length, missing: missing.length,
+          },
+        });
+      }
+      return { id: record.id };
+    });
+    return getExport(ctx, result.id);
+  }
+
   return {
     start, stop, createRun, cancelRun, confirmBudget, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
     listGenerationRecords, getGenerationRecord,
     listQualityReports, getQualityReport, reviewQualityReport,
     listRunVersions, activateVersion, createExport, listExports, getExport, readExportPackage,
+    createVideoPlan, listVideoPlans, getVideoPlan, evaluateVideoPlanFrames, generateVideo,
+    createJointExport,
     get activeSubscriptions() { return listeners.size; },
   };
 }

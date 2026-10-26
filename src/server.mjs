@@ -6,7 +6,7 @@ import { LOOPBACK_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
 
-export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.9.0', module: 'M09' });
+export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.10.0', module: 'M10' });
 export const STATIC_FILES = Object.freeze([
   'index.html', 'app.js', 'api.js', 'real-data.js', 'm04.js', 'm05.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',

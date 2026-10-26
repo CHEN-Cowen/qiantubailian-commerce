@@ -20,6 +20,8 @@ const TABLES = Object.freeze([
   'exports',
   // M09：授权评测集、评测报告与模型候选（冠军由当前 Provider 决定）
   'eval_dataset_items', 'eval_reports', 'model_candidates', 'model_routing',
+  // M10：结构化详情页与视频分镜/帧检查（只增不改，失效按当前上下文另算）
+  'detail_pages', 'video_plans',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -27,6 +29,7 @@ const EMPTY_DATA = () => ({
   quotes: {}, runs: {}, events: {}, credit_accounts: {}, credit_entries: {}, generation_records: {},
   quality_reports: {}, exports: {},
   eval_dataset_items: {}, eval_reports: {}, model_candidates: {}, model_routing: {},
+  detail_pages: {}, video_plans: {},
 });
 
 function normalize(raw) {
