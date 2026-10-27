@@ -6,9 +6,9 @@ import { LOOPBACK_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
 
-export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.17.0', module: 'R06' });
+export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.18.0', module: 'R07' });
 export const STATIC_FILES = Object.freeze([
-  'index.html', 'app.js', 'api.js', 'auth.js', 'real-data.js', 'm04.js', 'm05.js', 'workbench.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'workbench.css', 'viewport.css', 'icon.svg', 'architecture.svg',
+  'index.html', 'app.js', 'api.js', 'auth.js', 'real-data.js', 'm04.js', 'm05.js', 'workbench.js', 'pricing.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'workbench.css', 'pricing.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
   'assets/demo/sample-cream-original.jpg', 'assets/demo/sample-cream-hero.jpg', 'assets/demo/sample-cream-scene.jpg',
   'assets/demo/sample-cream-benefit.jpg', 'assets/demo/sample-cream-detail.jpg', 'assets/demo/sample-lamp-hero.jpg',

@@ -20,6 +20,38 @@ import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
 import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
+import { listCommercePlans as _listCommercePlans, commercePlanById as _commercePlanById, planSnapshot } from './plans.mjs';
+import { planById as legacyPlanById } from './m12.mjs'; // 旧 M12 内部 planById 保留（演示模式）
+
+// 统一的 plan 解析：先查商业化 plans，找不到再查 M12 内部 plans（兼容既有演示测试）
+function resolvePlanById(planId) {
+  const commercial = _commercePlanById(planId);
+  if (commercial) return commercial;
+  const legacy = legacyPlanById(planId);
+  if (legacy) return {
+    id: legacy.id,
+    name: legacy.name,
+    kind: legacy.billable ? 'billable_legacy' : 'legacy_demo',
+    credits: legacy.credits,
+    products: legacy.seats ?? null,
+    price_cents: legacy.price_cents,
+    currency: legacy.currency ?? 'CNY',
+    validity_days: null,
+    auto_renew: false,
+    rollover: false,
+    includes_batch: false,
+    priority_queue: false,
+    seats: legacy.seats,
+    note: legacy.note,
+    terms: legacy.note,
+  };
+  return null;
+}
+// /api/plans 同时返回商业化 + legacy 演示 plan（向后兼容）
+function listAllPlans() {
+  const commercial = _listCommercePlans();
+  return commercial;
+}
 import { appendEntry, balanceOf, grantExperienceCredits, ledgerEntries, sweepExpiredLots } from './credits.mjs';
 import { RETRYABLE_CODES } from './provider.mjs';
 import { createProviderFromEnv } from './providers/index.mjs';
@@ -38,8 +70,8 @@ import {
 } from './m11.mjs';
 import {
   BACKUP_FORMAT_VERSION, buildBackupManifest, buildExperimentReport, buildObservabilitySnapshot,
-  evaluateFeedbackEligibility, evaluatePaymentCapability, listBillingPlans, mergeTenantSnapshot,
-  planById, previewOutcomeRows, summarizeFeedback, summarizeOutcomeMetrics, tenantSnapshot,
+  evaluateFeedbackEligibility, evaluatePaymentCapability, mergeTenantSnapshot,
+  previewOutcomeRows, summarizeFeedback, summarizeOutcomeMetrics, tenantSnapshot,
   validateFeedbackInput, validateOutcomeImportInput, verifyBackupManifest,
 } from './m12.mjs';
 
@@ -345,7 +377,7 @@ export function createApi({
       requireMethod(method, ['GET', 'HEAD']);
       await requireAction(ctx, 'billing:read');
       return send(200, {
-        ...listBillingPlans(),
+        ...listAllPlans(),
         payment: evaluatePaymentCapability({ provider: paymentProvider }),
       });
     }
@@ -3301,21 +3333,21 @@ export function createApi({
       throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_UNAVAILABLE',
         capability.blockers[0]?.message ?? '当前不具备下单条件', { payment: capability });
     }
-    const plan = planById(String(body.plan_id ?? ''));
+    const plan = resolvePlanById(String(body.plan_id ?? ''));
     if (!plan) throw new ApiError(422, 'PLAN_UNKNOWN', '套餐不存在');
     const order = await store.mutate(data => {
       const item = {
         id: newId('ord'),
         tenant_id: ctx.tenantId,
         plan_id: plan.id,
-        plan_snapshot: { ...plan },
+        plan_snapshot: planSnapshot(plan),
         credits: plan.credits,
-        seats: plan.seats,
+        seats: plan.seats ?? 1,
         status: 'pending_demo_settlement',
         real_money: false,
         simulated: true,
         settlement: 'internal_demo_credits',
-        notice: '演示订单：不扣真实货币、不开具发票、不代表可计费权益',
+        notice: plan.terms ?? plan.note ?? '演示订单：不扣真实货币、不开具发票、不代表可计费权益',
         created_by: ctx.actorId,
         created_at: new Date(clock()).toISOString(),
       };

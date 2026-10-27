@@ -188,6 +188,19 @@ export const api = {
   createExport: (runId, { scope = 'complete' } = {}) => call(
     `/api/runs/${encodeURIComponent(runId)}/exports`,
     { method: 'POST', json: { scope } }),
+  // R07：价格与计费
+  listPlans: () => call('/api/plans'),
+  createBillingOrder: body => call('/api/billing/orders', { method: 'POST', json: body }),
+  listBillingOrders: ({ status } = {}) => {
+    const query = new URLSearchParams();
+    if (status) query.set('status', String(status));
+    const suffix = query.toString() ? `?${query}` : '';
+    return call(`/api/billing/orders${suffix}`);
+  },
+  cancelBillingOrder: orderId => call(`/api/billing/orders/${encodeURIComponent(orderId)}/cancel`, { method: 'POST' }),
+  // R05 追加：listGenerationRecords / reconcileRun
+  listGenerationRecords: runId => call(`/api/runs/${encodeURIComponent(runId)}/generation-records`),
+  reconcileRun: runId => call(`/api/runs/${encodeURIComponent(runId)}/reconcile`, { method: 'POST' }),
   /**
    * 下载导出包：走同源直接打开即可，后端已经设置 attachment。
    * 浏览器会处理跨域/CORS和文件保存对话框。

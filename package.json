@@ -1,6 +1,6 @@
 {
   "name": "qiantubailian-commerce",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22.22.2 <23" },
@@ -8,7 +8,7 @@
     "start": "node scripts/start.mjs",
     "dev": "node --watch scripts/start.mjs",
     "check": "node scripts/check.mjs",
-    "test": "node --test test/index.js test/ui-contract.js test/m03.js test/m04.js test/m05.js test/m06.js test/m07.js test/m08.js test/m09.js test/m10.js test/m11.js test/m12.js test/r01.js test/r02.js test/r03.js test/r04.js test/r05.js test/r06.js",
+    "test": "node --test test/index.js test/ui-contract.js test/m03.js test/m04.js test/m05.js test/m06.js test/m07.js test/m08.js test/m09.js test/m10.js test/m11.js test/m12.js test/r01.js test/r02.js test/r03.js test/r04.js test/r05.js test/r06.js test/r07.js",
     "smoke": "node scripts/smoke.mjs",
     "healthcheck": "node scripts/healthcheck.mjs"
   }

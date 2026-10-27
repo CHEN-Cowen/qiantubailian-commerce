@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="m04.css">
   <link rel="stylesheet" href="m05.css">
   <link rel="stylesheet" href="workbench.css">
+  <link rel="stylesheet" href="pricing.css">
   <link rel="stylesheet" href="viewport.css">
   <link rel="icon" href="icon.svg">
 </head>
@@ -28,6 +29,7 @@
       </nav>
       <div class="top-actions">
         <span class="mock-badge" id="data-note-button" role="button" tabindex="0" title="查看数据说明"><span class="dot"></span>演示数据</span>
+        <button class="secondary" data-open="pricing" title="额度、套餐与使用规则">额度</button>
         <button class="icon-button" id="help-button" aria-label="查看说明" title="查看说明">?</button>
         <button class="avatar" aria-label="账户菜单">林</button>
       </div>
@@ -281,6 +283,19 @@
   <dialog id="truth-dialog" class="real-dialog real-dialog-wide" aria-labelledby="truth-title"><button class="dialog-close" data-close-dialog="truth-dialog" aria-label="关闭">×</button><p class="eyebrow">商品事实</p><h2 id="truth-title">商品事实</h2><div id="truth-body"></div></dialog>
   <dialog id="help-dialog"><button class="dialog-close" id="close-help">×</button><p class="eyebrow">关于数据</p><h2>真实数据与演示数据是分开的</h2><p>你的项目、素材、任务与导出记录会自动保存；带「演示数据」标记的区域仅用于功能展示，刷新即重置，不会写入你的真实数据。</p><button class="primary" id="help-ok">知道了</button></dialog>
   <dialog id="flow-dialog" aria-labelledby="flow-title"><button class="dialog-close" id="close-flow" aria-label="关闭演示">×</button><p class="eyebrow">演示流程 · 刷新重置</p><h2 id="flow-title">新品上架包</h2><div id="flow-content"></div><p id="flow-error" role="alert"></p><div class="flow-actions"><button class="secondary" id="flow-back">上一步</button><button class="primary" id="flow-next">下一步</button></div></dialog>
+  <!-- R07：价格与额度管理 dialog -->
+  <dialog id="pricing-dialog" class="real-dialog real-dialog-wide" aria-labelledby="pricing-title">
+    <button class="dialog-close" data-close-dialog="pricing-dialog" aria-label="关闭">×</button>
+    <p class="eyebrow">额度、套餐与使用规则</p>
+    <h2 id="pricing-title">价格与额度</h2>
+    <div id="pricing-body"><p class="real-hint">正在加载…</p></div>
+    <div class="dialog-note">
+      <p class="real-note">
+        价格与权益全部来自服务端，前端不硬编码也不允许篡改。真实支付入口受后端商户配置闸口控制；
+        未完成微信商户入驻时仅展示价格与规则，不可实际购买。
+      </p>
+    </div>
+  </dialog>
   <dialog id="spec-dialog" class="real-dialog real-dialog-wide" aria-labelledby="spec-title">
     <button class="dialog-close" data-close-dialog="spec-dialog" aria-label="关闭">×</button>
     <p class="eyebrow">生产配置</p>
@@ -350,5 +365,6 @@
   <script type="module" src="m04.js"></script>
   <script type="module" src="m05.js"></script>
   <script type="module" src="workbench.js"></script>
+  <script type="module" src="pricing.js"></script>
 </body>
 </html>
