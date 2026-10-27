@@ -276,6 +276,8 @@ export function createJobs({
         actor: ctx.actorId,
         initialCredits,
         at: clock(),
+        // R03：体验额度只能服务它绑定的第一个商品
+        projectId: project.id,
       });
       if (!reserve.applied) throw new Error('预算预留未生效');
 
@@ -583,6 +585,7 @@ export function createJobs({
         actor: ctx.actorId,
         initialCredits,
         at: clock(),
+        projectId: run.project_id,
       });
       if (additional.applied) run.budget.reserved_credits += extraCredits;
       run.pending_confirmation = null;
@@ -682,8 +685,10 @@ export function createJobs({
             },
           }));
         }
-        // 未知调用超过对账窗口仍未确认：停止自动推进，转人工核对，预算保持冻结
-        if (attempt.status === 'unknown' && ageMs > reconcileWindowMs) {
+        // 未知调用超过对账窗口仍未确认：停止自动推进，转人工核对，预算保持冻结。
+        // 窗口从"进入未知"算起（而不是提交时刻），避免本地超时本身就吃掉大半个窗口。
+        const unknownAgeMs = new Date(at).getTime() - new Date(attempt.unknown_since ?? attempt.started_at).getTime();
+        if (attempt.status === 'unknown' && unknownAgeMs > reconcileWindowMs) {
           await requireAttention(data, run, attempt, events, at);
           return { changed: true, events };
         }
