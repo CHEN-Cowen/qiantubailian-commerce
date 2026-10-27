@@ -3,6 +3,7 @@ import vm from 'node:vm';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { STATIC_FILES } from '../src/server.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const read = name => readFile(`${root}frontend/${name}`, 'utf8');
@@ -27,6 +28,14 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   assert.match(viewport, /@media\(max-width:760px\)/);
   assert.match(style, /\.view,\.project-view\{display:none\}/);
   assert.match(html, /刷新后重置/);
+  // UI04 真实样例图：白名单同步、页面引用与诚实标注
+  const samples = ['sample-cream-original', 'sample-cream-hero', 'sample-cream-scene', 'sample-cream-benefit', 'sample-cream-detail', 'sample-lamp-hero'];
+  for (const name of samples) {
+    assert.ok(STATIC_FILES.includes(`assets/demo/${name}.jpg`), `STATIC_FILES 缺少 assets/demo/${name}.jpg`);
+    assert.ok(html.includes(`./assets/demo/${name}.jpg`), `index.html 未引用 ${name}.jpg`);
+  }
+  assert.match(style, /\.sample-photo\{[^}]*object-fit:cover/);
+  assert.match(html, /真实模型生成样例/);
 });
 
 test('M02 向导真实函数分支：确认拦截、失败重试、成功进入项目', async () => {

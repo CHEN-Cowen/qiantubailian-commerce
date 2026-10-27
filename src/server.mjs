@@ -10,6 +10,8 @@ export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-com
 export const STATIC_FILES = Object.freeze([
   'index.html', 'app.js', 'api.js', 'real-data.js', 'm04.js', 'm05.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
+  'assets/demo/sample-cream-original.jpg', 'assets/demo/sample-cream-hero.jpg', 'assets/demo/sample-cream-scene.jpg',
+  'assets/demo/sample-cream-benefit.jpg', 'assets/demo/sample-cream-detail.jpg', 'assets/demo/sample-lamp-hero.jpg',
 ]);
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.json': 'application/json; charset=utf-8', '.jpg': 'image/jpeg' };
 const defaultRoot = fileURLToPath(new URL('../frontend/', import.meta.url));
