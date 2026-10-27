@@ -99,7 +99,7 @@ async function start(t, options = {}) {
   const dir = await mkdtemp(path.join(TEST_ROOT, 'm09-'));
   const app = createApp({
     port: 0, storeDir: dir, allowedTenants: TENANTS,
-    initialCredits: 0, tickMs: 5, attemptTimeoutMs: 2_000,
+    initialCredits: 0, tickMs: 5, attemptTimeoutMs: 30_000,
     allowScenarioInjection: false, ...options,
   });
   t.after(async () => {

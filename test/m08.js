@@ -202,7 +202,9 @@ async function start(t, options = {}) {
   const dir = await mkdtemp(path.join(TEST_ROOT, 'm08-'));
   const app = createApp({
     port: 0, storeDir: dir, allowedTenants: TENANTS,
-    initialCredits: 400, tickMs: 5, attemptTimeoutMs: 2_000,
+    // 超时只作安全上限：测试用仿真 Provider 秒回，2s 在满负载并行跑测时会被误判成
+    // PROVIDER_TIMEOUT，触发一次"非修订"重试，导致修订历史为空（偶发失败）。这里用产品默认值。
+    initialCredits: 400, tickMs: 5, attemptTimeoutMs: 30_000,
     revisionMaxRounds: 6, allowScenarioInjection: false, ...options,
   });
   t.after(async () => {
@@ -435,9 +437,13 @@ test('M08 端到端（模拟）：首轮硬失败自动修订，复核后可导�
   assert.equal(run.revision.enabled, true);
   // 报价预算有限（24 演示额度，首轮已用 19），只允许对 1 个交付物做一次修订；
   // 这里刻意只让 main 首轮损坏，用来验证"修订只处理可修复硬失败"，而不是靠扩预算跑满全部。
-  assert.equal(run.revision.round, 1);
-  assert.equal(run.revision.stop_reason, null);
-  assert.equal(run.revision.history.length, 1);
+  const revisionDump = JSON.stringify({
+    round: run.revision.round, stop_reason: run.revision.stop_reason,
+    history: run.revision.history.length, attempts: run.attempts.map(attempt => attempt.status),
+  });
+  assert.equal(run.revision.round, 1, revisionDump);
+  assert.equal(run.revision.stop_reason, null, revisionDump);
+  assert.equal(run.revision.history.length, 1, revisionDump);
   for (const entry of run.revision.history) {
     assert.equal(entry.actions.length, 1, '每次只处理一个关键项');
     assert.equal(entry.outcome.improved, true, JSON.stringify(entry.outcome));

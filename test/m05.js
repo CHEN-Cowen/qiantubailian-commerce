@@ -56,7 +56,7 @@ async function start(t, options = {}) {
   const dir = await mkdtemp(path.join(TEST_ROOT, 'm05-'));
   const app = createApp({
     port: 0, storeDir: dir, allowedTenants: TENANTS,
-    initialCredits: 240, tickMs: 8, attemptTimeoutMs: 2_000, allowScenarioInjection: true, ...options,
+    initialCredits: 240, tickMs: 8, attemptTimeoutMs: 30_000, allowScenarioInjection: true, ...options,
   });
   t.after(async () => {
     // close() 会先排空写队列；此处再清理临时目录。
