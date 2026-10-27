@@ -385,6 +385,7 @@ export function countStoreTables(snapshot = {}) {
 /**
  * 可观测性快照：只给聚合数字，不含素材内容、提示词与操作者明文之外的隐私字段。
  * 任务积压按真实状态统计，不把"未开始"算进在途。
+ * R11：补充商业化指标——首张可用图耗时、采用率、失败/未知率、修订净改善、每张成本、付款转化。
  */
 export function buildObservabilitySnapshot({
   data = {}, tenantId = '', counters = {}, startedAt = null, at = null, provider = null, balance = null,
@@ -397,6 +398,65 @@ export function buildObservabilitySnapshot({
   const batches = scoped(data.batches);
   const exports = scoped(data.exports);
   const feedback = scoped(data.feedback);
+
+  // ---- R11 商业化指标 ----
+  const completedRuns = runs.filter(r => r.status === 'completed');
+  const failedRuns = runs.filter(r => r.status === 'failed');
+  const attentionRuns = runs.filter(r => r.status === 'needs_attention');
+  const totalFinished = completedRuns.length + failedRuns.length;
+
+  // 首张可用图耗时：从 run.created_at 到第一个 deliverable 成功的时间
+  const firstImageTimes = [];
+  for (const run of completedRuns) {
+    const createdAt = run.created_at ? Date.parse(run.created_at) : null;
+    if (createdAt === null) continue;
+    const firstSuccess = (run.deliverables ?? [])
+      .filter(d => d.status === 'succeeded')
+      .map(d => {
+        const attempts = (run.attempts ?? []).filter(a => a.deliverable_id === d.deliverable_id && a.status === 'succeeded');
+        return attempts.length > 0 ? Date.parse(attempts[attempts.length - 1].ended_at) : null;
+      })
+      .filter(t => t !== null)
+      .sort((a, b) => a - b)[0] ?? null;
+    if (firstSuccess !== null && firstSuccess >= createdAt) {
+      firstImageTimes.push(firstSuccess - createdAt);
+    }
+  }
+  const avgFirstImageMs = firstImageTimes.length > 0
+    ? Math.round(firstImageTimes.reduce((a, b) => a + b, 0) / firstImageTimes.length)
+    : null;
+
+  // 采用率：completed run 中有导出行为的占比（单个导出 run_id 在顶层，批量导出在 included[].run_id）
+  const exportedRunIds = new Set();
+  for (const e of exports) {
+    if (e.run_id) exportedRunIds.add(e.run_id);
+    for (const item of (e.included ?? [])) {
+      if (item.run_id) exportedRunIds.add(item.run_id);
+    }
+  }
+  const adoptedRuns = completedRuns.filter(r => exportedRunIds.has(r.id)).length;
+  const adoptionRate = completedRuns.length > 0 ? adoptedRuns / completedRuns.length : null;
+
+  // 失败率与未知率
+  const failureRate = totalFinished > 0 ? failedRuns.length / totalFinished : null;
+  const unknownRate = runs.length > 0 ? attentionRuns.length / runs.length : null;
+
+  // 修订净改善：有修订的 run 中最终完成的占比
+  const revisedRuns = runs.filter(r => (r.revision_count ?? 0) > 0 || (r.attempts ?? []).some(a => (a.iteration ?? 1) > 1));
+  const revisedCompleted = revisedRuns.filter(r => r.status === 'completed').length;
+  const revisionNetImprovement = revisedRuns.length > 0 ? revisedCompleted / revisedRuns.length : null;
+
+  // 每张成本：总扣减额度 / 总成功交付物数
+  const totalCaptured = completedRuns.reduce((sum, r) => sum + (r.budget?.captured_credits ?? 0), 0);
+  const totalSucceeded = completedRuns.reduce((sum, r) => sum + (r.deliverables ?? []).filter(d => d.status === 'succeeded').length, 0);
+  const costPerImage = totalSucceeded > 0 ? Math.round((totalCaptured / totalSucceeded) * 100) / 100 : null;
+
+  // 付款转化：真实订单中 settled_real 的占比
+  const orders = scoped(data.billing_orders);
+  const realOrders = orders.filter(o => o.real_money === true);
+  const settledRealOrders = realOrders.filter(o => o.status === 'settled_real').length;
+  const paymentConversion = realOrders.length > 0 ? settledRealOrders / realOrders.length : null;
+
   return {
     tenant_id: tenantId,
     generated_at: at ?? new Date().toISOString(),
@@ -416,6 +476,16 @@ export function buildObservabilitySnapshot({
       batches_running: batches.filter(item => item.status === 'running').length,
       exports: exports.length,
       feedback: feedback.length,
+    },
+    // R11：商业化指标
+    business: {
+      avg_first_image_ms: avgFirstImageMs,
+      adoption_rate: adoptionRate !== null ? Math.round(adoptionRate * 1000) / 1000 : null,
+      failure_rate: failureRate !== null ? Math.round(failureRate * 1000) / 1000 : null,
+      unknown_rate: unknownRate !== null ? Math.round(unknownRate * 1000) / 1000 : null,
+      revision_net_improvement: revisionNetImprovement !== null ? Math.round(revisionNetImprovement * 1000) / 1000 : null,
+      cost_per_image: costPerImage,
+      payment_conversion: paymentConversion !== null ? Math.round(paymentConversion * 1000) / 1000 : null,
     },
     credits: balance ? { available: balance.available, reserved: balance.reserved ?? null } : null,
     provider: provider ? {
