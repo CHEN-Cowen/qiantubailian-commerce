@@ -98,6 +98,8 @@ async function openSpec(projectId) {
   }
 }
 
+export { openSpec };
+
 function renderControls() {
   $('#spec-title').textContent = `${state.project.name} · 生产配置`;
   const template = $('#spec-template');

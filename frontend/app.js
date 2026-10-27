@@ -15,7 +15,11 @@ function toast(message) {
 function setView(view) {
   state.view = view;
   state.project = false;
-  $$('.view').forEach(panel => panel.classList.toggle('active', panel.dataset.viewPanel === view));
+  $$('.view').forEach(panel => {
+    const match = panel.dataset.viewPanel === view;
+    panel.classList.toggle('active', match);
+    panel.hidden = !match;
+  });
   $$('.nav-item').forEach(button => button.classList.toggle('active', button.dataset.view === view));
   $('#project-view').classList.remove('active');
   if (location.hash !== '#' + view) location.hash = view;

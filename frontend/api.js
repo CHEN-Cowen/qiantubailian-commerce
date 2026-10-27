@@ -156,4 +156,43 @@ export const api = {
     const suffix = query.toString() ? `?${query}` : '';
     return new EventSource(`/api/runs/${encodeURIComponent(id)}/events${suffix}`);
   },
+  // R05：任务相关的产物、版本、质量报告和导出
+  listRunsByProject: projectId => {
+    const query = new URLSearchParams();
+    if (projectId) query.set('project_id', String(projectId));
+    const suffix = query.toString() ? `?${query}` : '';
+    return call(`/api/runs${suffix}`);
+  },
+  listRunVersions: runId => call(`/api/runs/${encodeURIComponent(runId)}/versions`),
+  activateVersion: (runId, versionId) => call(
+    `/api/runs/${encodeURIComponent(runId)}/versions/${encodeURIComponent(versionId)}/activate`,
+    { method: 'POST' }),
+  listQualityReports: runId => {
+    const query = new URLSearchParams();
+    if (runId) query.set('run_id', String(runId));
+    const suffix = query.toString() ? `?${query}` : '';
+    return call(`/api/quality-reports${suffix}`);
+  },
+  getQualityReport: reportId => call(`/api/quality-reports/${encodeURIComponent(reportId)}`),
+  reviewQualityReport: (reportId, body = {}) => call(
+    `/api/quality-reports/${encodeURIComponent(reportId)}/reviews`,
+    { method: 'POST', json: body }),
+  listExports: ({ runId, projectId } = {}) => {
+    const query = new URLSearchParams();
+    if (runId) query.set('run_id', String(runId));
+    if (projectId) query.set('project_id', String(projectId));
+    const suffix = query.toString() ? `?${query}` : '';
+    return call(`/api/exports${suffix}`);
+  },
+  getExport: exportId => call(`/api/exports/${encodeURIComponent(exportId)}`),
+  createExport: (runId, { scope = 'complete' } = {}) => call(
+    `/api/runs/${encodeURIComponent(runId)}/exports`,
+    { method: 'POST', json: { scope } }),
+  /**
+   * 下载导出包：走同源直接打开即可，后端已经设置 attachment。
+   * 浏览器会处理跨域/CORS和文件保存对话框。
+   */
+  downloadExportUrl: exportId => `/api/exports/${encodeURIComponent(exportId)}/download`,
+  listGenerationRecords: runId => call(`/api/runs/${encodeURIComponent(runId)}/generation-records`),
+  reconcileRun: runId => call(`/api/runs/${encodeURIComponent(runId)}/reconcile`, { method: 'POST' }),
 };

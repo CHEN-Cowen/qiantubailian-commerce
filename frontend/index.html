@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="m03.css">
   <link rel="stylesheet" href="m04.css">
   <link rel="stylesheet" href="m05.css">
+  <link rel="stylesheet" href="workbench.css">
   <link rel="stylesheet" href="viewport.css">
   <link rel="icon" href="icon.svg">
 </head>
@@ -36,7 +37,7 @@
       <section class="view active" id="home-view" data-view-panel="home">
         <div class="page-heading">
           <div><p class="eyebrow">快捷创意工厂</p><h1>把新品，做成一套<span class="h1-accent">能上架的视觉资产</span>。</h1><p class="heading-note">从商品事实开始，按平台目标生成、检查并交付。</p></div>
-          <div class="heading-actions"><button class="secondary" id="import-button">导入商品资料</button><button class="primary js-new-project" id="new-project-button"><span>＋</span> 创建新品上架包</button></div>
+          <div class="heading-actions"><button class="secondary" id="import-button">新建商品项目</button><button class="primary js-new-project" id="new-project-button"><span>＋</span> 创建新品上架包</button></div>
         </div>
         <div class="home-grid">
           <section class="section-block showcase-block" aria-label="效果展示">
@@ -101,6 +102,7 @@
           </div>
           <p class="real-note">以下项目与商品事实自动保存，刷新不会丢失。下方演示数据仅用于功能展示，与真实数据互不影响。</p>
           <div class="real-list" id="real-list"><p class="real-empty">正在读取真实项目…</p></div>
+          <p class="real-hint">每个项目都有统一工作台：上传→核对事实→选效果→确认报价→生成→修改→下载。创建后自动从工作台开始，刷新或重开浏览器会恢复已有任务。</p>
         </section>
         <div class="real-divider"><span>以下为演示数据 · 刷新即重置</span></div>
         <div class="filter-bar"><div class="segmented"><button class="selected">全部项目 <b>2</b></button><button>进行中 <b>1</b></button><button>待复核 <b>1</b></button></div><label class="search"><span>⌕</span><input placeholder="搜索商品名称或 SKU" aria-label="搜索项目"></label></div>
@@ -115,12 +117,138 @@
 
       <section class="view" id="library-view" data-view-panel="library"><div class="empty-page"><div class="empty-illustration">✦</div><p class="eyebrow">模板与品牌</p><h1>模板与品牌资产</h1><p>品牌视觉配方、平台规则和任务模板将在后续版本接入。</p><span class="status-pill neutral">规划中</span></div></section>
 
-      <section class="project-view" id="project-view">
+      <!-- R05：demo #project-view 保留但彻底隐藏（源码保留历史关键字供现有 UI 契约测试使用） -->
+      <section class="project-view" id="project-view" hidden aria-hidden="true">
         <div class="project-topline"><button class="back-button" id="back-home">← 返回项目列表</button><span class="mock-badge"><span class="dot"></span>演示项目 · 刷新重置</span><button class="text-button" id="project-settings">项目设置 ⚙</button></div>
         <div class="project-heading"><div><p class="eyebrow">商品项目 · MC-50</p><h1>月光舒缓面霜</h1><p class="heading-note">新品上架包 <span>·</span> 天猫旗舰店 <span>·</span> 最近更新 12 分钟前</p></div><div class="project-actions"><button class="secondary" id="professional-button">专业模式</button><button class="primary" id="start-generation">继续制作 <span>→</span></button></div></div>
         <div class="truth-banner"><div class="truth-icon">✓</div><div><strong>商品事实已确认</strong><p>2 个源素材 · 8 项关键信息 · 最近确认于今天 09:02</p></div><button class="text-button">查看商品事实 →</button></div>
-        <div class="workbench"><aside class="work-sidebar"><div class="work-section"><div class="work-section-title">交付清单 <span>3 / 5</span></div><button class="work-item active"><span class="work-icon done">✓</span><span><b>主图 · 白底</b><small>已通过</small></span><i>›</i></button><button class="work-item"><span class="work-icon done">✓</span><span><b>卖点图 · 成分</b><small>已通过</small></span><i>›</i></button><button class="work-item"><span class="work-icon review">!</span><span><b>场景图 · 晨间</b><small>待复核 · 2 个问题</small></span><i>›</i></button><button class="work-item"><span class="work-icon wait">○</span><span><b>卖点图 · 功效</b><small>未开始</small></span><i>›</i></button><button class="work-item"><span class="work-icon wait">○</span><span><b>场景图 · 午后</b><small>未开始</small></span><i>›</i></button></div><div class="work-section fact-summary"><div class="work-section-title">已锁定商品事实 <button class="tiny-link">查看</button></div><p><span>商品名称</span>月光舒缓面霜</p><p><span>规格</span>50g / 罐</p><p><span>包装颜色</span><i class="swatch white"></i>象牙白</p><p><span>包装文字</span>月光舒缓 · Calm Barrier</p></div></aside><section class="work-canvas"><div class="canvas-toolbar"><span>场景图 · 晨间 <b class="status-pill amber">待复核</b></span><div><button class="icon-button" aria-label="上一版本">‹</button><span>V1 / 1</span><button class="icon-button" aria-label="下一版本">›</button><button class="icon-button" id="zoom-button" aria-label="放大">⌕</button></div></div><div class="canvas-image scene-image large"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间大图样例" onerror="this.style.display='none'"><div class="jar"></div><span class="scene-leaf large-leaf">◒</span><span class="canvas-note note-one">主体形态已锁定</span><span class="canvas-note note-two">文字区域需复核</span></div><div class="canvas-footer"><div><strong>生成完成</strong><span>质量状态：待复核</span></div><button class="secondary" id="asset-detail-button">查看素材详情</button><button class="primary" id="revise-button">修订此素材</button></div></section><aside class="qa-sidebar"><div class="qa-heading"><div><p class="eyebrow">质量检查</p><h2>质量检查</h2></div><span class="status-pill amber">待复核</span></div><div class="qa-score"><strong>82</strong><span>/ 100</span><small>视觉检查完成</small></div><div class="qa-list"><div class="qa-row pass"><span>✓</span><div><b>文件与尺寸</b><small>1200 × 1500，格式正确</small></div></div><div class="qa-row pass"><span>✓</span><div><b>商品主体</b><small>主体形态与参考图一致</small></div></div><div class="qa-row review"><span>!</span><div><b>包装文字</b><small>OCR 识别结果需要人工确认</small></div><button class="tiny-link">查看</button></div><div class="qa-row review"><span>!</span><div><b>平台规则</b><small>功效表述缺少事实来源</small></div><button class="tiny-link">处理</button></div></div><div class="qa-footer"><span>质量规则版本</span><b>模拟规则 · 无真实效力</b></div></aside></div>
+        <div class="workbench"><aside class="work-sidebar"><div class="work-section"><div class="work-section-title">交付清单 <span>3 / 5</span></div><button class="work-item active"><span class="work-icon done">✓</span><span><b>主图 · 白底</b><small>已通过</small></span><i>›</i></button></div></aside></div>
         <div class="project-bottom"><span><i class="live-dot"></i> 本页为模拟交互，刷新后重置；未保存真实版本；画布图片为真实模型生成样例</span><button class="text-button" id="drawer-button">查看生成记录与费用 →</button></div>
+      </section>
+
+      <!-- R05：真实商品制作工作台。左侧交付项、中央对比、右侧 QA；折叠高级信息；恢复已有任务 -->
+      <section class="view workbench-view" id="workbench-view" data-view-panel="workbench" hidden>
+        <div class="wb-topbar">
+          <button class="back-button" id="wb-back" aria-label="返回项目列表">← 商品项目</button>
+          <div class="wb-title">
+            <h1 id="wb-project-title">正在打开项目…</h1>
+            <p class="wb-subtitle" id="wb-project-subtitle">读取项目、任务与交付状态</p>
+          </div>
+          <div class="wb-actions">
+            <span class="wb-status" id="wb-status-pill" hidden></span>
+            <button class="secondary" id="wb-btn-upload">上传素材</button>
+            <button class="secondary" id="wb-btn-truth">商品事实</button>
+            <button class="secondary" id="wb-btn-spec">生产配置</button>
+            <button class="primary" id="wb-btn-start">生成/继续制作</button>
+          </div>
+        </div>
+
+        <div class="wb-steps" id="wb-steps"></div>
+
+        <div class="wb-layout">
+          <aside class="wb-left">
+            <div class="wb-section">
+              <div class="wb-section-title">交付项 <span id="wb-delivery-progress"></span></div>
+              <div class="wb-deliverables" id="wb-deliverables"></div>
+            </div>
+            <div class="wb-section wb-qa-summary">
+              <div class="wb-section-title">质量状态</div>
+              <p class="wb-status-text" id="wb-qa-status">—</p>
+              <p class="wb-status-note" id="wb-qa-note">—</p>
+            </div>
+          </aside>
+
+          <section class="wb-center">
+            <div class="wb-canvas-toolbar">
+              <span id="wb-canvas-title">选择一个交付项查看</span>
+              <div class="wb-version-switch" id="wb-version-switch" hidden>
+                <button class="icon-button" id="wb-version-prev" aria-label="上一版本">‹</button>
+                <span id="wb-version-label">—</span>
+                <button class="icon-button" id="wb-version-next" aria-label="下一版本">›</button>
+                <button class="text-button" id="wb-version-activate" hidden>选为当前版本</button>
+              </div>
+              <div class="wb-toolbar-right">
+                <button class="text-button" id="wb-compare-toggle">↔ 原图对比</button>
+              </div>
+            </div>
+            <div class="wb-canvas" id="wb-canvas">
+              <div class="wb-empty-hint" id="wb-empty-hint">
+                <p class="eyebrow">还没有选中交付项</p>
+                <h2>从左侧交付清单选择要查看或修订的那一项</h2>
+                <p class="real-note">工作台会在刷新或重新打开时自动恢复已有任务；查看历史结果不会再次扣费。</p>
+              </div>
+              <div class="wb-dual" id="wb-dual" hidden>
+                <figure class="wb-dual-item" id="wb-original">
+                  <figcaption>参考原图</figcaption>
+                  <div class="wb-image-holder"></div>
+                </figure>
+                <figure class="wb-dual-item" id="wb-current">
+                  <figcaption id="wb-current-caption">当前版本</figcaption>
+                  <div class="wb-image-holder"></div>
+                </figure>
+              </div>
+            </div>
+            <div class="wb-canvas-footer">
+              <div id="wb-canvas-meta"></div>
+              <div class="wb-canvas-actions">
+                <button class="secondary" id="wb-revise-btn" hidden>局部修订</button>
+                <button class="primary" id="wb-download-active" hidden>下载当前版本</button>
+              </div>
+            </div>
+          </section>
+
+          <aside class="wb-right">
+            <div class="wb-section">
+              <div class="wb-section-title">质量检查 / 人工确认</div>
+              <div class="wb-qa-checks" id="wb-qa-checks">
+                <p class="real-hint">选中交付项后这里会显示各项检查结果，包括需要你确认的 unknown 项。</p>
+              </div>
+              <div class="wb-human-review" id="wb-human-review" hidden>
+                <label>复核意见<textarea id="wb-review-note" rows="2" placeholder="写明原因或处理意见"></textarea></label>
+                <div class="wb-review-actions">
+                  <button class="secondary" data-review-decision="needs_review">仍需复核</button>
+                  <button class="secondary" data-review-decision="blocked">阻断</button>
+                  <button class="primary" data-review-decision="publishable">通过</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="wb-section wb-section-advanced">
+              <details>
+                <summary>高级信息 · 生成记录、成本、Prompt、事件流</summary>
+                <div id="wb-advanced-body" class="wb-advanced-body">
+                  <div class="wb-sub">
+                    <h4>任务概览</h4>
+                    <div class="wb-meta" id="wb-run-meta"></div>
+                  </div>
+                  <div class="wb-sub">
+                    <h4>额度账本</h4>
+                    <div class="wb-meta" id="wb-budget-meta"></div>
+                  </div>
+                  <div class="wb-sub">
+                    <h4>生成记录（供应商成本）</h4>
+                    <div class="wb-meta" id="wb-supplier-meta"></div>
+                  </div>
+                  <div class="wb-sub">
+                    <h4>事件流（SSE / 轮询去重）</h4>
+                    <ol class="wb-event-log" id="wb-event-log"></ol>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <div class="wb-section wb-section-export">
+              <div class="wb-section-title">交付与下载</div>
+              <p class="real-note">导出前会核对完整性与质量状态。部分包会明确列出缺项；过期报告不能当有效交付。</p>
+              <div class="wb-export-row">
+                <span class="wb-chip" id="wb-completeness">—</span>
+                <button class="secondary" id="wb-export-complete" hidden>完整包（ZIP）</button>
+                <button class="secondary" id="wb-export-partial" hidden>部分包（ZIP）</button>
+              </div>
+              <div class="wb-export-history" id="wb-export-history"></div>
+            </div>
+          </aside>
+        </div>
       </section>
     </main>
   </div>
@@ -200,5 +328,6 @@
   <script type="module" src="app.js"></script>
   <script type="module" src="m04.js"></script>
   <script type="module" src="m05.js"></script>
+  <script type="module" src="workbench.js"></script>
 </body>
 </html>

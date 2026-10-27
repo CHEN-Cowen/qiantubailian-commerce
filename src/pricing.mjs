@@ -27,6 +27,15 @@ const PER_TEXT_BLOCK = 1;
 const PER_EXTRA_COPY = 3; // 同一交付物多于 1 张时，第 2 张起按此价计，避免数量线性放大预算
 export const EXTRA_COPY_CREDITS = PER_EXTRA_COPY;
 
+/** 把尺寸/比例/格式拼成前端可读的规格字符串，如 "1200×1200 · 1:1 · PNG"。 */
+export function formatDeliverableSpec(item) {
+  const parts = [];
+  if (Number(item.width) && Number(item.height)) parts.push(`${item.width}×${item.height}`);
+  if (item.ratio) parts.push(String(item.ratio));
+  if (Array.isArray(item.formats) && item.formats.length > 0) parts.push(item.formats.map(f => String(f).toUpperCase()).join('/'));
+  return parts.join(' · ');
+}
+
 export const priceOfDeliverable = item => {
   const base = BASE_BY_TYPE[item.type] ?? FALLBACK_BASE;
   const units = Math.max(1, Number(item.count) || 1);
@@ -58,6 +67,12 @@ export function quoteFromSpec({
     required: Boolean(item.required),
     count: Math.max(1, Number(item.count) || 1),
     credits: priceOfDeliverable(item),
+    // 规格字段来自冻结快照（由 spec 层按平台规则计算好），不再硬编码
+    width: Number(item.width) || null,
+    height: Number(item.height) || null,
+    ratio: item.ratio ?? null,
+    formats: Array.isArray(item.formats) ? [...item.formats] : null,
+    spec: formatDeliverableSpec(item),
     note: item.text_blocks?.length ? `含 ${item.text_blocks.length} 处需核对的文字块` : '无文字块',
   }));
 

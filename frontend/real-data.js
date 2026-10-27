@@ -190,9 +190,21 @@ function onRealListClick(event) {
   const card = event.target.closest('[data-project-id]');
   const projectId = card?.dataset.projectId;
   if (!projectId) return;
-  if (trigger.dataset.action === 'truth') void openTruthDialog(projectId);
-  if (trigger.dataset.action === 'upload') openUploadDialog(projectId);
+  const action = trigger.dataset.action;
+  if (action === 'truth') void openTruthDialog(projectId);
+  if (action === 'upload') openUploadDialog(projectId);
+  if (action === 'spec') {
+    // openSpec 来自 m04.js（在 index.html 中已作为模块引入，window 上暂不挂），
+    // 此处先抛出自定义事件让 workbench 或其它模块接住
+    window.dispatchEvent(new CustomEvent('qb:open-spec', { detail: { projectId } }));
+  }
+  if (action === 'run' || action === 'workbench') {
+    window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId } }));
+  }
 }
+
+// R05：导出给 workbench / 其它模块调用
+export { openTruthDialog, openUploadDialog, refresh as refreshProjects };
 
 async function openTruthDialog(projectId) {
   try {

@@ -194,7 +194,7 @@ export function createApi({
     }
     if (resource === 'runs') {
       if (rest.length === 1 && method === 'POST') return createRun(ctx, req, send);
-      if (rest.length === 1) { requireMethod(method, ['GET', 'HEAD', 'POST']); return listRunsRoute(ctx, send); }
+      if (rest.length === 1) { requireMethod(method, ['GET', 'HEAD', 'POST']); return listRunsRoute(ctx, query, send); }
       if (rest.length === 2) { requireMethod(method, ['GET', 'HEAD']); return jobs.getRun(ctx, rest[1]).then(result => send(200, result)); }
       if (rest.length === 5 && rest[2] === 'versions' && rest[4] === 'activate') {
         requireMethod(method, ['POST']);
@@ -1790,8 +1790,9 @@ export function createApi({
     });
   }
 
-  function listRunsRoute(ctx, send) {
-    return jobs.listRuns(ctx, null).then(result => send(200, result));
+  function listRunsRoute(ctx, query, send) {
+    const projectId = String(query?.get('project_id') ?? '').trim() || null;
+    return jobs.listRuns(ctx, projectId).then(result => send(200, result));
   }
 
   async function cancelRunRoute(ctx, req, runId, send) {

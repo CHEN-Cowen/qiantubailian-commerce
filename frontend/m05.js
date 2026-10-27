@@ -130,9 +130,14 @@ function renderBody() {
   const specs = state.specs;
   const specRows = specs.length === 0
     ? '<p class="truth-hint">该项目还没有冻结的生产配置。请先在「生产配置」里冻结一个快照。</p>'
-    : `<ul class="run-specs">${specs.map(spec => `
-        <li><b>v${spec.version}</b><span>${escapeHtml(spec.template?.name ?? spec.template_id ?? '模板')} · ${escapeHtml(spec.platform ?? '未指定平台')}</span>
-        <span class="run-spec-state ${spec.stale ? 'stale' : 'fresh'}">${spec.stale ? '已过期' : '可用'}</span></li>`).join('')}</ul>`;
+    : `<ul class="run-specs">${specs.map(spec => {
+        // R05：真实字段在 spec.channel.platform / spec.validity.validity，不再猜
+        const platform = spec.channel?.platform ?? spec.platform ?? '未指定平台';
+        const validity = spec.validity?.validity ?? 'current';
+        const stale = validity !== 'current';
+        return `<li><b>v${spec.version}</b><span>${escapeHtml(spec.template?.name ?? spec.template_id ?? '模板')} · ${escapeHtml(platform)}</span>
+        <span class="run-spec-state ${stale ? 'stale' : 'fresh'}">${stale ? `已过期 · ${escapeHtml((spec.validity?.reasons ?? []).join('；') || validity)}` : '可用'}</span></li>`;
+      }).join('')}</ul>`;
 
   body.innerHTML = `
     <section class="run-section">
@@ -182,7 +187,8 @@ function renderQuote() {
 function updateStartAvailability() {
   const start = $('#run-start');
   if (!start) return;
-  const spec = state.specs.find(item => !item.stale) ?? state.specs[0];
+  const notStale = item => (item.validity?.validity ?? 'current') === 'current';
+  const spec = state.specs.find(notStale) ?? state.specs[0];
   const ready = Boolean(state.project && state.quote && spec);
   start.disabled = !ready;
   start.textContent = state.run ? '任务进行中' : (ready ? '确认并开始' : '缺少可用的冻结快照或报价');
