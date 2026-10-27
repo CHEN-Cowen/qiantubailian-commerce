@@ -17,6 +17,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { ApiError } from './errors.mjs';
 import { appendEntry, balanceOf } from './credits.mjs';
 import { isRetryable } from './provider.mjs';
+import { EXTRA_COPY_CREDITS } from './pricing.mjs';
 import { matchChannelRule } from './catalog.mjs';
 import {
   MASK_VERSION, buildReferencePlan, checkReferenceCapacity, checkSubjectProtection, compositeSubject,
@@ -43,7 +44,14 @@ const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
 const sha = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export const ACTIVE_STATES = new Set(['queued', 'running', 'evaluating', 'awaiting_confirmation']);
-export const TERMINAL_STATES = new Set(['completed', 'limit_reached', 'failed', 'cancelled']);
+export const TERMINAL_STATES = new Set(['completed', 'limit_reached', 'failed', 'cancelled', 'needs_attention']);
+
+/**
+ * R02：attempt 的终态集合。
+ * `unknown` 表示本地已超时/供应商查不到，但**不是**确认失败：保留 provider_job_id 继续查询，
+ * 不换新请求、不释放预算、不标记交付失败。只有人工核对或供应商确认后才落 failed/succeeded。
+ */
+export const CONFIRMED_FAILURE_STATES = new Set(['failed']);
 
 const RUN_STAGES = new Set([
   'spec_confirmed', 'budget_reserved', 'queued', 'generation',
@@ -81,9 +89,19 @@ export function createJobs({
   maxConcurrency = 2,
   tickMs = 25,
   revisionMaxRounds = REVISION_MAX_ROUNDS,
+  // R02：未知调用的对账窗口。超过窗口仍未确认的调用转人工核对，不自动重提。
+  unknownReconcileMs = null,
+  // R02：供应商级与租户级并发上限。单任务并发上限不等于全局上限。
+  providerMaxConcurrency = 4,
+  tenantMaxConcurrency = 2,
 } = {}) {
   if (!store) throw new Error('jobs 缺少存储实例');
   if (!provider) throw new Error('jobs 缺少 Provider');
+  if (!Number.isInteger(providerMaxConcurrency) || providerMaxConcurrency < 1) throw new Error('供应商并发上限无效');
+  if (!Number.isInteger(tenantMaxConcurrency) || tenantMaxConcurrency < 1) throw new Error('租户并发上限无效');
+  const reconcileWindowMs = Number.isInteger(unknownReconcileMs) && unknownReconcileMs > 0
+    ? unknownReconcileMs
+    : attemptTimeoutMs * 6;
   const timers = new Set();
   let running = false;
   const wake = new Set();
@@ -309,27 +327,40 @@ export function createJobs({
         },
         provider_validation: validation,
         scenario,
-        deliverables: quote.lines.map(line => {
+        deliverables: quote.lines.flatMap(line => {
           const detail = specDeliverables.get(line.deliverable_id) ?? null;
-          return {
-            deliverable_id: line.deliverable_id,
-            label: line.label,
-            type: line.type ?? detail?.type ?? null,
-            count: line.count,
-            credits: line.credits,
-            // M06：实际尺寸与格式取自冻结快照，不再硬编码 1024×1024
-            width: detail?.width ?? 1024,
-            height: detail?.height ?? 1024,
-            ratio: detail?.ratio ?? null,
-            formats: Array.isArray(detail?.formats) ? [...detail.formats] : ['png'],
-            prompt: `生成「${line.label}」；商品主体必须与参考图完全一致，不得改变形状、文字、Logo 与颜色。`,
-            status: 'pending',
-            attempts_used: 0,
-            succeeded_attempt_id: null,
-            // M08：当前选用的版本，回退时只改这里与 versions[].active
-            active_version_id: null,
-            revision: null,
-          };
+          // R02：交付数量必须展开成可单独追踪的图片项，报价、生成、检查、导出核对同一张数。
+          // 第 1 张沿用原 deliverable_id（版本/导出契约不变），其余按 #2…#n 追加。
+          const units = Math.max(1, Number(line.count) || 1);
+          return Array.from({ length: units }, (_, index) => {
+            const unit = index + 1;
+            return {
+              deliverable_id: units === 1 ? line.deliverable_id : `${line.deliverable_id}#${unit}`,
+              template_deliverable_id: line.deliverable_id,
+              label: units === 1 ? line.label : `${line.label}（第 ${unit}/${units} 张）`,
+              type: line.type ?? detail?.type ?? null,
+              // 每一张都按 1 张交付，数量不再藏在单条记录里
+              count: 1,
+              unit_index: unit,
+              unit_total: units,
+              // 报价总额不变：第 1 张含基础价与文字块，后续每张按追加价计
+              credits: unit === 1 ? line.credits - (units - 1) * EXTRA_COPY_CREDITS : EXTRA_COPY_CREDITS,
+              // M06：实际尺寸与格式取自冻结快照，不再硬编码 1024×1024
+              width: detail?.width ?? 1024,
+              height: detail?.height ?? 1024,
+              ratio: detail?.ratio ?? null,
+              formats: Array.isArray(detail?.formats) ? [...detail.formats] : ['png'],
+              prompt: units === 1
+                ? `生成「${line.label}」；商品主体必须与参考图完全一致，不得改变形状、文字、Logo 与颜色。`
+                : `生成「${line.label}」的第 ${unit}/${units} 张；商品主体必须与参考图完全一致，不得改变形状、文字、Logo 与颜色，并与同组其他图片保持一致的风格。`,
+              status: 'pending',
+              attempts_used: 0,
+              succeeded_attempt_id: null,
+              // M08：当前选用的版本，回退时只改这里与 versions[].active
+              active_version_id: null,
+              revision: null,
+            };
+          });
         }),
         // M06：主体保护要求与允许的变换（区域与变换版本随任务冻结，后续可追溯）
         subject_protection: {
@@ -410,8 +441,11 @@ export function createJobs({
         events.push(pushEvent(data, run, { stage: 'cancelled', status: 'cancel_requested', at: clock(), payload: { reason } }));
       }
       // 重复请求幂等：返回同一份快照，不重复处理
-      for (const attempt of run.attempts.filter(item => item.status === 'submitted')) {
-        const outcome = provider.cancel({ provider_job_id: attempt.provider_job_id });
+      // 未知调用也要尝试撤销，避免恢复后又被供应商执行
+      for (const attempt of run.attempts.filter(item =>
+        item.status === 'submitted' || item.status === 'unknown')) {
+        let outcome;
+        try { outcome = provider.cancel({ provider_job_id: attempt.provider_job_id }); } catch { outcome = { status: 'cannot_cancel' }; }
         attempt.provider_cancel = outcome.status;
         events.push(pushEvent(data, run, {
           stage: 'cancelled', status: 'provider_cancel', at: clock(), attemptId: attempt.id,
@@ -424,6 +458,108 @@ export function createJobs({
       kick();
       return { run: result.run };
     });
+  }
+
+  /**
+   * R02：未知调用的人工收口入口。
+   * 只有任务处于 needs_attention，或存在未知 attempt 时可用；结果写入事件与账本，可追溯。
+   */
+  async function reconcileRun({ ctx, runId, outcome, note = '' }) {
+    if (!['provider_failed', 'provider_succeeded_unavailable', 'cancelled'].includes(outcome)) {
+      throw new ApiError(422, 'INVALID_RECONCILE_OUTCOME', '核对结论必须是 provider_failed、provider_succeeded_unavailable 或 cancelled');
+    }
+    const result = await store.mutate(async data => {
+      const run = findRun(data, ctx, runId);
+      const events = [];
+      const unknown = run.attempts.filter(attempt => attempt.status === 'unknown');
+      if (run.status !== 'needs_attention' && unknown.length === 0) {
+        throw new ApiError(409, 'RUN_NOT_NEEDS_ATTENTION', '任务不存在待核对的未知调用');
+      }
+      if (outcome === 'cancelled') {
+        // 取消路径复用统一收尾：释放未发生额度，迟到结果不再复活
+        return { run, events, cancel: true };
+      }
+      for (const attempt of unknown) {
+        if (outcome === 'provider_failed') {
+          attempt.status = 'failed';
+          attempt.ended_at = new Date(clock()).toISOString();
+          attempt.error = {
+            code: 'PROVIDER_FAILED_CONFIRMED',
+            message: note || '人工核对确认供应商未产生结果',
+            retryable: false,
+            confirmed_by: ctx.actorId,
+          };
+          const target = run.deliverables.find(item => item.deliverable_id === attempt.deliverable_id);
+          if (target && target.status !== 'succeeded') target.status = 'failed';
+          events.push(pushEvent(data, run, {
+            stage: 'generation', status: 'reconciled_failed', at: clock(), attemptId: attempt.id,
+            payload: { note: note || '人工核对确认供应商未产生结果，按失败释放额度', actor: ctx.actorId },
+          }));
+          continue;
+        }
+        // 供应商确认已产出但结果无法取回：成本真实发生，内部额度按已发生阶段结算
+        attempt.status = 'succeeded_unavailable';
+        attempt.ended_at = new Date(clock()).toISOString();
+        const capture = appendEntry(data, {
+          type: 'capture',
+          amount: attempt.planned_credits,
+          tenantId: run.tenant_id,
+          jobId: run.id,
+          attemptId: attempt.id,
+          uniqueOperationKey: `capture:${attempt.id}`,
+          memo: '人工核对确认供应商已产出但结果不可取回，按已发生阶段结算',
+          actor: ctx.actorId,
+          initialCredits,
+          at: clock(),
+        });
+        run.budget.captured_credits += capture.applied ? attempt.planned_credits : 0;
+        const target = run.deliverables.find(item => item.deliverable_id === attempt.deliverable_id);
+        if (target && target.status !== 'succeeded') target.status = 'failed';
+        const record = makeFailedGenerationRecord({
+          run, attempt, request: attempt.provider_request ?? {}, provider: attempt.provider_meta ?? {},
+          error: {
+            code: 'RESULT_UNAVAILABLE',
+            message: note || '人工核对确认供应商已产出但结果不可取回',
+            retryable: false,
+          },
+          at: clock(),
+        });
+        record.cost = {
+          billing_unit: 'internal_credit',
+          internal_credits: attempt.planned_credits,
+          provider_cost: null,
+          note: '供应商成本已发生；真实账单金额待供应商结算单核对',
+        };
+        data.generation_records[record.id] = record;
+        run.generation_record_ids.push(record.id);
+        events.push(pushEvent(data, run, {
+          stage: 'generation', status: 'reconciled_result_unavailable', at: clock(), attemptId: attempt.id,
+          payload: {
+            note: note || '人工核对确认已产出但结果不可取回，按已发生阶段结算',
+            actor: ctx.actorId, charged: attempt.planned_credits, generation_record_id: record.id,
+          },
+        }));
+      }
+      refreshRunQuality(data, run);
+      await releaseRemaining(data, run, events, clock(), '人工核对后释放未发生的额度');
+      run.status = 'failed';
+      run.terminal_reason = outcome === 'provider_failed' ? 'provider_failed_confirmed' : 'provider_result_unavailable';
+      run.attention = { ...(run.attention ?? {}), resolved_at: new Date(clock()).toISOString(), resolved_by: ctx.actorId, outcome };
+      referenceCache.delete(run.id);
+      events.push(pushEvent(data, run, {
+        stage: 'settled', status: 'reconciled', at: clock(),
+        payload: {
+          terminal_reason: run.terminal_reason,
+          outcome,
+          captured_credits: run.budget.captured_credits,
+          released_credits: run.budget.released_credits,
+        },
+      }));
+      return { run: serializeRun(run, data), events };
+    });
+    for (const event of result.events ?? []) emit(event);
+    if (result.cancel) return cancelRun({ ctx, runId, reason: 'attention_reconciled_cancelled' });
+    return { run: result.run };
   }
 
   // ---------- 需要用户确认追加预算时 ----------
@@ -494,24 +630,62 @@ export function createJobs({
 
       if (run.status === 'awaiting_confirmation') return { changed: false, events };
 
-      const inflight = run.attempts.filter(attempt => attempt.status === 'submitted');
+      const inflight = run.attempts.filter(attempt =>
+        attempt.status === 'submitted' || attempt.status === 'unknown');
       for (const attempt of inflight) {
-        const timedOut = new Date(at).getTime() - new Date(attempt.started_at).getTime() > attemptTimeoutMs;
-        const polled = provider.poll({ provider_job_id: attempt.provider_job_id });
+        const startedAt = new Date(attempt.started_at).getTime();
+        const ageMs = new Date(at).getTime() - startedAt;
+        const timedOut = ageMs > attemptTimeoutMs;
+        let polled;
+        try {
+          polled = provider.poll({ provider_job_id: attempt.provider_job_id });
+        } catch (error) {
+          // 供应商查单不可用时不能当作免费失败：保留原调用，转入未知等待人工核对
+          polled = {
+            status: 'unknown',
+            code: error?.code ?? 'PROVIDER_POLL_ERROR',
+            message: error?.message ?? '供应商查单失败',
+          };
+        }
         if (polled.status === 'succeeded') {
           await settleAttemptSuccess(data, run, attempt, polled.result, events, at);
         } else if (polled.status === 'failed') {
           await settleAttemptFailure(data, run, attempt, { code: polled.code, message: polled.message, retryable: Boolean(polled.retryable) }, events, at);
-        } else if (timedOut) {
-          await settleAttemptFailure(data, run, attempt, { code: 'PROVIDER_TIMEOUT', message: '本地超时，未知调用不再等待', retryable: true }, events, at);
-        } else {
-          // queued / running / unknown：都不改变账面，unknown 绝不触发重提
-          if (polled.status === 'unknown') {
-            events.push(pushEvent(data, run, {
-              stage: 'generation', status: 'provider_unknown', at, attemptId: attempt.id,
-              payload: { code: polled.code, note: '未知不等于失败，不重复提交也不额外收费' },
-            }));
+        } else if (attempt.status === 'submitted' && timedOut) {
+          // R02：本地超时只把调用标记为未知，保留 provider_job_id 继续查询；
+          // 不释放预算、不标记失败、不换新请求重提。
+          attempt.status = 'unknown';
+          attempt.unknown_since = new Date(at).toISOString();
+          attempt.unknown_reason = 'LOCAL_TIMEOUT';
+          attempt.provider_job_id = attempt.provider_job_id ?? null;
+          events.push(pushEvent(data, run, {
+            stage: 'generation', status: 'provider_timeout_unknown', at, attemptId: attempt.id,
+            payload: {
+              code: 'PROVIDER_TIMEOUT_UNKNOWN',
+              provider_job_id: attempt.provider_job_id,
+              note: '本地超时，原供应商调用仍在查询；未确认失败前不重复提交、不释放预算、不标记交付失败',
+            },
+          }));
+        } else if (polled.status === 'unknown') {
+          // 供应商明确查不到或查单失败：同样保留原调用，累计窗口后转人工
+          if (attempt.status === 'submitted') {
+            attempt.status = 'unknown';
+            attempt.unknown_since = new Date(at).toISOString();
+            attempt.unknown_reason = polled.code ?? 'PROVIDER_UNKNOWN';
           }
+          events.push(pushEvent(data, run, {
+            stage: 'generation', status: 'provider_unknown', at, attemptId: attempt.id,
+            payload: {
+              code: polled.code ?? 'PROVIDER_UNKNOWN',
+              provider_job_id: attempt.provider_job_id,
+              note: '未知不等于失败，不重复提交也不额外收费',
+            },
+          }));
+        }
+        // 未知调用超过对账窗口仍未确认：停止自动推进，转人工核对，预算保持冻结
+        if (attempt.status === 'unknown' && ageMs > reconcileWindowMs) {
+          await requireAttention(data, run, attempt, events, at);
+          return { changed: true, events };
         }
       }
 
@@ -836,11 +1010,39 @@ export function createJobs({
   }
 
   async function scheduleAttempts(data, run, events, at) {
+    // R02：并发上限分三层。单任务上限只约束本任务，供应商与租户上限约束全局。
+    let providerInFlight = 0;
+    let tenantInFlight = 0;
+    for (const other of Object.values(data.runs ?? {})) {
+      const flying = other.attempts.filter(attempt => attempt.status === 'submitted').length;
+      providerInFlight += flying;
+      if (other.tenant_id === run.tenant_id) tenantInFlight += flying;
+    }
+    if (providerInFlight >= providerMaxConcurrency || tenantInFlight >= tenantMaxConcurrency) {
+      // 触达上限只是延后，不是失败：保持 queued/running，下一 tick 继续
+      if (run.queued_reason !== 'provider_rate_limit') {
+        run.queued_reason = 'provider_rate_limit';
+        run.rate_limited_count = (run.rate_limited_count ?? 0) + 1;
+        events.push(pushEvent(data, run, {
+          stage: 'generation', status: 'rate_limited', at,
+          payload: {
+            provider_in_flight: providerInFlight,
+            provider_max_concurrency: providerMaxConcurrency,
+            tenant_in_flight: tenantInFlight,
+            tenant_max_concurrency: tenantMaxConcurrency,
+            note: '触达供应商或租户并发上限，本 tick 不再提交新调用',
+          },
+        }));
+      }
+      return;
+    }
+    delete run.queued_reason;
     const inflight = run.attempts.filter(attempt => attempt.status === 'submitted').length;
     let slots = Math.max(0, maxConcurrency - inflight);
     const pending = run.deliverables.filter(item => item.status === 'pending' || item.status === 'failed');
     for (const target of pending) {
       if (slots === 0) break;
+      if (providerInFlight >= providerMaxConcurrency || tenantInFlight >= tenantMaxConcurrency) break;
       const attemptsUsed = run.attempts.filter(attempt => attempt.deliverable_id === target.deliverable_id).length;
       if (target.status === 'failed') {
         const last = [...run.attempts].reverse().find(attempt => attempt.deliverable_id === target.deliverable_id);
@@ -849,7 +1051,7 @@ export function createJobs({
       }
       // 已提交但尚未结算的 attempt 也占用预算，否则并发回填可能超出预留额度
       const committed = run.attempts
-        .filter(attempt => attempt.status === 'submitted')
+        .filter(attempt => attempt.status === 'submitted' || attempt.status === 'unknown')
         .reduce((sum, attempt) => sum + attempt.planned_credits, 0);
       const remaining = run.budget.reserved_credits - run.budget.captured_credits - run.budget.released_credits - committed;
       if (remaining < target.credits) {
@@ -974,6 +1176,8 @@ export function createJobs({
       run.attempts.push(attempt);
       target.attempts_used = iteration;
       slots -= 1;
+      providerInFlight += 1;
+      tenantInFlight += 1;
       events.push(pushEvent(data, run, {
         stage: 'generation', status: 'attempt_submitted', at, attemptId: attempt.id, iteration,
         payload: {
@@ -1223,7 +1427,8 @@ export function createJobs({
 
   async function settleIfDone(data, run, events, at) {
     if (run.cancel_requested) { await finishCancelled(data, run, events, at); return; }
-    const inflight = run.attempts.some(attempt => attempt.status === 'submitted');
+    const inflight = run.attempts.some(attempt =>
+      attempt.status === 'submitted' || attempt.status === 'unknown');
     if (run.status === 'awaiting_confirmation') return;
     if (inflight) return;
 
@@ -1277,12 +1482,47 @@ export function createJobs({
     }));
   }
 
+  /** 未知调用超过对账窗口：任务停在待核对，预算继续冻结，等待人工出口。 */
+  async function requireAttention(data, run, attempt, events, at) {
+    if (run.status === 'needs_attention') return;
+    run.status = 'needs_attention';
+    run.terminal_reason = 'provider_result_unknown';
+    run.attention = {
+      reason: 'PROVIDER_RESULT_UNKNOWN',
+      attempt_id: attempt.id,
+      deliverable_id: attempt.deliverable_id,
+      provider_job_id: attempt.provider_job_id ?? null,
+      unknown_since: attempt.unknown_since ?? null,
+      reconcile_window_ms: reconcileWindowMs,
+      reserved_credits: run.budget.reserved_credits,
+      options: ['provider_failed', 'provider_succeeded_unavailable'],
+      note: '供应商结果长期未知：不自动重提、不释放预算、不标记交付完成；核对后由有权限成员人工收口',
+      at: new Date(at).toISOString(),
+    };
+    referenceCache.delete(run.id);
+    events.push(pushEvent(data, run, {
+      stage: 'generation', status: 'needs_attention', at, attemptId: attempt.id,
+      payload: { ...run.attention },
+    }));
+    events.push(pushEvent(data, run, {
+      stage: 'settled', status: 'needs_attention', at,
+      payload: {
+        terminal_reason: run.terminal_reason,
+        captured_credits: run.budget.captured_credits,
+        reserved_credits: run.budget.reserved_credits,
+        note: '未知调用占用预算直到人工核对，避免把未知伪装成免费失败',
+      },
+    }));
+  }
+
   async function finishCancelled(data, run, events, at) {
-    const stillFlying = run.attempts.filter(attempt => attempt.status === 'submitted');
+    const stillFlying = run.attempts.filter(attempt =>
+      attempt.status === 'submitted' || attempt.status === 'unknown');
     if (stillFlying.length > 0) {
       // 先给供应商一次机会，把"取消后才返回的结果"审计掉，再落终态
       for (const attempt of stillFlying) {
-        const polled = provider.poll({ provider_job_id: attempt.provider_job_id });
+        let polled;
+        try { polled = provider.poll({ provider_job_id: attempt.provider_job_id }); } catch { polled = { status: 'unknown' }; }
         if (polled.status === 'succeeded') await settleAttemptSuccess(data, run, attempt, polled.result, events, at);
         else attempt.status = 'abandoned';
       }
@@ -1403,8 +1643,43 @@ export function createJobs({
       clone.subject_context.reference_images = clone.subject_context.reference_images
         .map(({ data_uri, ...rest }) => rest);
     }
+    const records = (run.generation_record_ids ?? [])
+      .map(id => data.generation_records?.[id]).filter(Boolean);
+    // R02：供应商成本与用户额度分账展示。真实账单未接入时如实标记为未上报。
+    const internalCharged = records.reduce((sum, record) =>
+      sum + (Number(record.cost?.internal_credits) || 0), 0);
+    const providerCosts = records
+      .map(record => record.cost?.provider_cost).filter(value => value !== null && value !== undefined);
+    const supplierCost = {
+      records: records.length,
+      succeeded: records.filter(record => record.status === 'succeeded').length,
+      failed: records.filter(record => record.status === 'failed').length,
+      rejected: records.filter(record => record.status === 'rejected').length,
+      revision_calls: records.filter(record => Boolean(record.request_hash && record.revision_round)).length,
+      internal_credits_charged: internalCharged,
+      provider_cost_reported: providerCosts.length > 0,
+      provider_cost_records: providerCosts.length,
+      note: providerCosts.length > 0
+        ? '供应商成本按供应商回传字段记录，真实金额以结算单为准'
+        : '供应商成本未回传金额，仅记录用量；真实账单以结算单为准',
+    };
+    const expectedUnits = run.deliverables.reduce((sum, item) => sum + (Number(item.count) || 1), 0);
+    const producedUnits = run.deliverables
+      .filter(item => item.status === 'succeeded')
+      .reduce((sum, item) => sum + (Number(item.count) || 1), 0);
     return {
       ...clone,
+      supplier_cost: supplierCost,
+      // 交付完整性独立于任务状态：少图不能算完整交付
+      delivery_completeness: {
+        expected_units: expectedUnits,
+        produced_units: producedUnits,
+        missing_units: Math.max(0, expectedUnits - producedUnits),
+        complete: producedUnits >= expectedUnits && expectedUnits > 0,
+        note: producedUnits >= expectedUnits && expectedUnits > 0
+          ? '全部交付项均已产出'
+          : '存在缺项，导出只能按部分交付标注',
+      },
       events_tail: eventsOf(data, run.id, Math.max(0, run.last_sequence - 20)).map(event => ({
         sequence: event.sequence, event_id: event.event_id, stage: event.stage, status: event.status, timestamp: event.timestamp,
       })),
@@ -2395,7 +2670,7 @@ export function createJobs({
   }
 
   return {
-    start, stop, createRun, cancelRun, confirmBudget, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
+    start, stop, createRun, cancelRun, confirmBudget, reconcileRun, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
     listGenerationRecords, getGenerationRecord,
     listQualityReports, getQualityReport, reviewQualityReport,
     listRunVersions, activateVersion, createExport, listExports, getExport, readExportPackage,

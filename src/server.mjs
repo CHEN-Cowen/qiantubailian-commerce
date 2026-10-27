@@ -59,6 +59,10 @@ export function createApp({
   initialCredits = 240,
   attemptTimeoutMs = 30_000,
   maxConcurrency = 2,
+  // R02：供应商级/租户级并发与未知调用对账窗口
+  providerMaxConcurrency = 4,
+  tenantMaxConcurrency = 2,
+  unknownReconcileMs = null,
   tickMs = 25,
   allowScenarioInjection = false,
   revisionMaxRounds = 3,
@@ -78,6 +82,7 @@ export function createApp({
   const api = createApi({
     store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock,
     initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection, revisionMaxRounds,
+    providerMaxConcurrency, tenantMaxConcurrency, unknownReconcileMs,
     provider, providerOptions, paymentProvider,
     demoMode, sessionTtlMs, secureCookies, emailRecoveryConfigured,
   });

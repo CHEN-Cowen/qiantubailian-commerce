@@ -67,6 +67,9 @@ export function createApi({
   allowScenarioInjection = false,
   // M08：自动修订轮数上限可在测试或宿主侧收紧/放宽，默认 3
   revisionMaxRounds = 3,
+  providerMaxConcurrency = 4,
+  tenantMaxConcurrency = 2,
+  unknownReconcileMs = null,
   // M06：Provider 可注入（测试或宿主自建 Adapter）；不注入时按环境变量选择，默认 mock
   provider: injectedProvider = null,
   providerOptions = {},
@@ -98,6 +101,7 @@ export function createApi({
   };
   const jobs = createJobs({
     store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, revisionMaxRounds,
+    providerMaxConcurrency, tenantMaxConcurrency, unknownReconcileMs,
   });
   // M12：进程内指标只保留聚合计数，不记录请求体、素材或提示词
   const metrics = { total: 0, by_status: {}, errors: 0, by_error: {} };
@@ -193,6 +197,7 @@ export function createApi({
       if (rest.length !== 3) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
       if (rest[2] === 'cancel') { requireMethod(method, ['POST']); return cancelRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'budget-confirmation') { requireMethod(method, ['POST']); return confirmBudgetRoute(ctx, req, rest[1], send); }
+      if (rest[2] === 'reconcile') { requireMethod(method, ['POST']); return reconcileRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'events') {
         requireMethod(method, ['GET', 'HEAD']);
         return streamRunEvents(ctx, req, res, rest[1], query, send);
@@ -579,6 +584,7 @@ export function createApi({
         if (second === undefined) return write ? 'run:create' : 'run:read';
         if (third === 'cancel') return 'run:cancel';
         if (third === 'budget-confirmation') return 'run:budget';
+        if (third === 'reconcile') return 'run:reconcile';
         if (third === 'exports' && write) return 'export:create';
         if (third === 'versions' && fourth === 'activate' && write) return 'version:activate';
         return 'run:read';
@@ -1662,6 +1668,17 @@ export function createApi({
       ctx, runId,
       extraCredits: Number(body.extra_credits ?? 0),
       confirm: body.confirm !== false,
+    });
+    send(200, { run: result.run });
+  }
+
+  /** R02：供应商结果长期未知时的人工核对收口。 */
+  async function reconcileRunRoute(ctx, req, runId, send) {
+    const body = await readJson(req);
+    const result = await jobs.reconcileRun({
+      ctx, runId,
+      outcome: String(body.outcome ?? '').trim(),
+      note: typeof body.note === 'string' ? body.note.slice(0, 500) : '',
     });
     send(200, { run: result.run });
   }

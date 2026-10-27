@@ -25,6 +25,7 @@ const BASE_BY_TYPE = Object.freeze({
 const FALLBACK_BASE = 6;
 const PER_TEXT_BLOCK = 1;
 const PER_EXTRA_COPY = 3; // 同一交付物多于 1 张时，第 2 张起按此价计，避免数量线性放大预算
+export const EXTRA_COPY_CREDITS = PER_EXTRA_COPY;
 
 export const priceOfDeliverable = item => {
   const base = BASE_BY_TYPE[item.type] ?? FALLBACK_BASE;

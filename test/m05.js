@@ -433,17 +433,44 @@ test('M05 限流重试：轮数上限触达后 limit_reached，不自动改资�
   assert.ok(run.attempts.every(attempt => attempt.charged_credits === 0));
 });
 
-test('M05 超时：本地超时判定后回到可重试失败，不无限等待', async t => {
-  const { port } = await start(t, { attemptTimeoutMs: 200 });
+test('M05 超时：本地超时只转未知，不盲重提，核对后才释放额度', async t => {
+  const { port } = await start(t, { attemptTimeoutMs: 200, unknownReconcileMs: 400 });
   const { project } = await readyProject(port);
   const quote = (await createQuote(port, project.id)).json.quote;
   const created = await startRun(port, {
     projectId: project.id, quoteId: quote.quote_id, key: 'timeout-run', scenario: 'timeout',
   });
-  const run = await waitTerminal(port, created.json.run.id, TENANT_A, 20_000);
-  assert.equal(run.status, 'limit_reached');
-  assert.ok(run.attempts.some(attempt => attempt.error?.code === 'PROVIDER_TIMEOUT'));
-  assert.equal(run.budget.captured_credits, 0, '超时未产生成果不得收费');
+  // R02：超时不再算可重试失败，而是保留原调用进入未知；超过对账窗口转人工核对
+  let run = null;
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    const snapshot = await request(port, `/api/runs/${created.json.run.id}`, { headers: as() });
+    if (['needs_attention', 'limit_reached', 'failed'].includes(snapshot.json.run.status)) {
+      run = snapshot.json.run;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(run, '必须落到待核对或终态，不能无限等待');
+  assert.equal(run.status, 'needs_attention');
+  assert.equal(run.terminal_reason, 'provider_result_unknown');
+  assert.equal(run.attempts.filter(attempt => attempt.status === 'unknown').length > 0, true);
+  for (const deliverable of run.deliverables) {
+    const attempts = run.attempts.filter(item => item.deliverable_id === deliverable.deliverable_id);
+    assert.equal(attempts.length, 1, '未知调用期间不得以新请求盲重试');
+  }
+  assert.equal(run.budget.captured_credits, 0, '未知未确认不得收费');
+  const held = (await request(port, '/api/credits', { headers: as() })).json.balance;
+  assert.equal(held.reserved, quote.max_credits, '未知调用期间预算继续冻结，不伪装成免费失败');
+
+  const reconciled = await request(port, `/api/runs/${created.json.run.id}/reconcile`, {
+    method: 'POST', headers: as(), body: { outcome: 'provider_failed', note: '供应商后台确认无结果' },
+  });
+  assert.equal(reconciled.status, 200, JSON.stringify(reconciled.json));
+  assert.equal(reconciled.json.run.status, 'failed');
+  assert.equal(reconciled.json.run.terminal_reason, 'provider_failed_confirmed');
+  const after = (await request(port, '/api/credits', { headers: as() })).json.balance;
+  assert.equal(after.reserved, 0);
+  assert.equal(after.consumed, 0);
 });
 
 // ---------- 6. unknown 不重复提交 ----------
@@ -524,7 +551,8 @@ test('M05 预算不足：进入 awaiting_confirmation 且不自动扩大预算',
   assert.ok(pending.pending_confirmation.needed_credits > 0);
   assert.ok(pending.pending_confirmation.note.includes('不会自动扩大'));
   const balanceWhileWaiting = (await request(port, '/api/credits', { headers: as() })).json.balance;
-  assert.equal(balanceWhileWaiting.reserved, quote.max_credits, '等待期间不偷偷多留');
+  assert.equal(balanceWhileWaiting.reserved + balanceWhileWaiting.consumed, quote.max_credits,
+    '等待期间不偷偷多留：已结算 + 仍冻结不得超过报价上限');
 
   const confirmed = await request(port, `/api/runs/${runId}/budget-confirmation`, {
     method: 'POST', headers: as(), body: { confirm: true, extra_credits: 20 },
