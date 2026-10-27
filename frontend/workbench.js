@@ -607,7 +607,6 @@ function renderAdvanced(empty = false) {
 
 // ---------- 导出 ----------
 function renderExport(empty = false) {
-  const row = $('#wb-export-row');
   const chip = $('#wb-completeness');
   const completeBtn = $('#wb-export-complete');
   const partialBtn = $('#wb-export-partial');

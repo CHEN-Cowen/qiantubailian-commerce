@@ -81,3 +81,22 @@ test('M02 项目搜索无结果与分类筛选执行真实函数', async () => {
   vm.runInContext('filterProjects()', context);
   assert.equal(rows[0].hidden, true); assert.equal(rows[1].hidden, false); assert.equal(empty.hidden, true);
 });
+
+test('前端脚本不得引用已被删除的 DOM 节点（防止首屏 addEventListener 崩溃）', async () => {
+  const html = await read('index.html');
+  const files = ['app.js', 'real-data.js', 'workbench.js', 'm04.js', 'm05.js'];
+  for (const file of files) {
+    const src = await read(file);
+    // 直接链式调用（无 ?. 保护）会在节点缺失时抛错，必须存在于 index.html
+    const chained = [...src.matchAll(/\$\('#([A-Za-z0-9_-]+)'\)\.(addEventListener|classList|showModal|close)/g)];
+    for (const [, id] of chained) {
+      assert.ok(html.includes(`id="${id}"`), `${file} 直接引用了不存在的 #${id}`);
+    }
+    // 全部 #id 引用：要么写在 index.html，要么由同一脚本运行时注入
+    const all = [...new Set([...src.matchAll(/\$\('#([A-Za-z0-9_-]+)'/g)].map(m => m[1]))];
+    for (const id of all) {
+      assert.ok(html.includes(`id="${id}"`) || src.includes(`id="${id}"`),
+        `${file} 引用了既不在 index.html 也未运行时注入的 #${id}`);
+    }
+  }
+});

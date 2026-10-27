@@ -3,7 +3,7 @@ import { initRealData } from './real-data.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-const state = { view: 'home', project: false, drawer: false, selectedAsset: 'scene', previousFocus: null };
+const state = { view: 'home', drawer: false, selectedAsset: 'scene', previousFocus: null };
 
 function toast(message) {
   const node = $('#toast');
@@ -14,7 +14,6 @@ function toast(message) {
 
 function setView(view) {
   state.view = view;
-  state.project = false;
   $$('.view').forEach(panel => {
     const match = panel.dataset.viewPanel === view;
     panel.classList.toggle('active', match);
@@ -29,16 +28,12 @@ function setView(view) {
 }
 
 function openProject(project = 'skin') {
+  // R06 起旧演示项目详情页已下线，这里只做引导，不再切换视图（否则会落到空白页）
   if (project !== 'skin') {
     toast('演示项目不接入真实商品事实与生产闸口；请在「商品项目」页创建真实项目并确认事实');
     return;
   }
-  state.project = true;
-  $$('.view').forEach(panel => panel.classList.remove('active'));
-  $$('.nav-item').forEach(button => button.classList.remove('active'));
-  $('#project-view').classList.add('active');
-  if (location.hash !== '#project') location.hash = 'project';
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  toast('示例项目仅作演示；请在「商品项目」中选择真实项目进入工作台');
 }
 
 function activateProject(event) {
@@ -84,9 +79,6 @@ $('#start-generation').addEventListener('click', startWizard);
 $('#project-settings').addEventListener('click', () => toast('此页为演示项目，不会保存；真实项目请在「商品项目」页打开'));
 $('#professional-button').addEventListener('click', openDrawer);
 $('#drawer-button').addEventListener('click', openDrawer);
-$('#asset-detail-button').addEventListener('click', () => showAsset(state.selectedAsset));
-$('#revise-button').addEventListener('click', () => toast('演示页暂不支持修订；请在真实项目中使用自动修订'));
-$('#zoom-button').addEventListener('click', () => showAsset(state.selectedAsset));
 $('#help-button').addEventListener('click', showHelp);
 $('#data-note-button').addEventListener('click', showHelp);
 $('#data-note-button').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showHelp(); } });
@@ -198,18 +190,6 @@ $$('.work-item').forEach((button, index) => button.addEventListener('click', () 
   if (index >= ids.length) { toast('午后场景图尚未生成（模拟空态）'); return; }
   state.selectedAsset = ids[index];
   $$('.work-item').forEach(item => item.classList.toggle('active', item === button));
-  const card = $(`[data-asset="${state.selectedAsset}"]`);
-  $('.canvas-toolbar>span').textContent = $('b', card).textContent + ' · 模拟素材';
-  const image = $('.canvas-image');
-  image.className = 'canvas-image ' + $('.asset-image', card).className.replace('asset-image', '').trim();
-  const quality = $('.asset-card-body span', card).textContent;
-  $('.canvas-footer strong').textContent = '生成完成（模拟）';
-  $('.canvas-footer span').textContent = '质量状态：' + quality + '（模拟）';
-  $('.qa-heading .status-pill').textContent = quality + '（模拟）';
-  $('.qa-score strong').textContent = '—';
-  $('.qa-score small').textContent = '未执行真实检查';
-  $('.qa-list').textContent = quality + '：示例 QA，需真实文件、商品事实及规则复检。';
-  $$('.canvas-note').forEach(note => { note.hidden = true; });
 }));
 $('.drawer-panel').setAttribute('role', 'dialog');
 $('.drawer-panel').setAttribute('aria-modal', 'true');
@@ -222,7 +202,7 @@ document.addEventListener('keydown', event => {
 });
 function restoreRoute() {
   const route = location.hash.slice(1) || new URL(location.href).searchParams.get('view') || 'home';
-  if (route === 'project') openProject('skin');
+  if (route === 'project') setView('projects');
   else setView(['home', 'projects', 'assets', 'library'].includes(route) ? route : 'home');
 }
 window.addEventListener('hashchange', restoreRoute);
