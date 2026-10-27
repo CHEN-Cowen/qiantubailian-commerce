@@ -18,7 +18,7 @@ import { ApiError } from './errors.mjs';
 import { appendEntry, balanceOf } from './credits.mjs';
 import { isRetryable } from './provider.mjs';
 import { EXTRA_COPY_CREDITS } from './pricing.mjs';
-import { matchChannelRule } from './catalog.mjs';
+import { matchChannelRule, listChannelRules, ruleStatus } from './catalog.mjs';
 import {
   MASK_VERSION, buildReferencePlan, checkReferenceCapacity, checkSubjectProtection, compositeSubject,
   createSubjectMask, makeFailedGenerationRecord, makeGenerationRecord, makeRejectedGenerationRecord,
@@ -2689,7 +2689,46 @@ export function createJobs({
           itemImages.push(row);
           images.push(row);
         }
-        included.push({ item_id: item.id, sku: item.sku, run_id: run.id, images: itemImages });
+        // R10：导出清单必须可核对——张数、尺寸与任务冻结的规格一致；平台规则带来源与核验日期
+        const expectedDeliverables = run.deliverables ?? [];
+        const dimensionCheck = itemImages.map(img => {
+          const expected = expectedDeliverables.find(d => d.deliverable_id === img.deliverable_id) ?? null;
+          if (!expected) return { deliverable_id: img.deliverable_id, match: false, reason: 'DELIVERABLE_NOT_IN_SPEC' };
+          const match = img.width === expected.width && img.height === expected.height;
+          return {
+            deliverable_id: img.deliverable_id,
+            expected: { width: expected.width, height: expected.height },
+            actual: { width: img.width, height: img.height },
+            match,
+          };
+        });
+        const countCheck = {
+          expected: expectedDeliverables.length,
+          exported: itemImages.length,
+          match: itemImages.length === expectedDeliverables.length,
+        };
+        // 规则溯源：任务冻结时的 rule_ref + 目录中的来源与核验日期
+        const ruleRef = run.rule_ref ?? null;
+        let enrichedRuleRef = null;
+        if (ruleRef?.rule_id) {
+          const catalogRule = listChannelRules().find(r => r.id === ruleRef.rule_id) ?? null;
+          const currentStatus = catalogRule ? ruleStatus(catalogRule, at) : null;
+          enrichedRuleRef = {
+            ...ruleRef,
+            source_name: catalogRule?.source?.name ?? null,
+            source_url: catalogRule?.source?.url ?? null,
+            effective_at: catalogRule?.effective_at ?? null,
+            review_due_at: catalogRule?.review_due_at ?? null,
+            current_status: currentStatus?.status ?? null,
+            days_to_review: currentStatus?.days_to_review ?? null,
+          };
+        } else if (ruleRef) {
+          enrichedRuleRef = { ...ruleRef };
+        }
+        included.push({
+          item_id: item.id, sku: item.sku, run_id: run.id, images: itemImages,
+          rule_ref: enrichedRuleRef, dimension_check: dimensionCheck, count_check: countCheck,
+        });
       }
 
       if (scope === 'complete' && missing.length > 0) {
@@ -2716,6 +2755,9 @@ export function createJobs({
         },
         items: included.map(item => ({
           item_id: item.item_id, sku: item.sku, run_id: item.run_id,
+          rule_ref: item.rule_ref ?? null,
+          count_check: item.count_check ?? null,
+          dimension_check: item.dimension_check ?? [],
           images: item.images.map(row => ({
             deliverable_id: row.deliverable_id, label: row.label, file: row.file,
             sha256: row.sha256, format: row.format, width: row.width, height: row.height,
