@@ -18,7 +18,7 @@ import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
 import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
-import { appendEntry, balanceOf, ledgerEntries } from './credits.mjs';
+import { appendEntry, balanceOf, grantExperienceCredits, ledgerEntries, sweepExpiredLots } from './credits.mjs';
 import { RETRYABLE_CODES } from './provider.mjs';
 import { createProviderFromEnv } from './providers/index.mjs';
 import { createJobs, ACTIVE_STATES, TERMINAL_STATES } from './jobs.mjs';
@@ -732,12 +732,19 @@ export function createApi({
       data.tenants[tenant.id] = tenant;
       const member = makeOwnerMember({ tenantId: tenant.id, accountId: account.id, at: clock() });
       data.members[member.id] = member;
-      // 新账户不发放演示额度；体验额度与套餐权益由 R03/R07 按规则发放
+      // R03：新账户发一次体验额度（3 张、90 天、仅限 1 个商品），不发现金等价物。
+      // 不发放旧的"开通演示额度"；套餐权益只能通过订单流程到账（R07/R08）。
+      const experience = grantExperienceCredits(data, {
+        tenantId: tenant.id, actor: 'system', at: clock(),
+      });
       const session = createSession(data, {
         accountId: account.id, tenantId: tenant.id, ttlMs: sessionTtlMs,
         at: clock(), ip, userAgent: req.headers['user-agent'],
       });
-      return { account, tenant, role: 'owner', token: session.token, session: session.session };
+      return {
+        account, tenant, role: 'owner', token: session.token, session: session.session,
+        experience_credits: experience.entry.amount,
+      };
     });
     res.setHeader('Set-Cookie', sessionCookie(created.token, {
       maxAgeSeconds: Math.floor(sessionTtlMs / 1000), secure: secureCookies,
@@ -747,6 +754,7 @@ export function createApi({
       tenant: { id: created.tenant.id, name: created.tenant.name },
       role: created.role,
       csrf_token: created.session.csrf_token,
+      experience_credits: created.experience_credits,
       demo_mode: demoMode,
     });
   }
@@ -1499,7 +1507,9 @@ export function createApi({
   }
 
   // ---------- M05 额度、报价与任务 ----------
-  function getCredits(ctx, send) {
+  async function getCredits(ctx, send) {
+    // R03：读取前先回收已到期未使用的批次，避免把过期额度继续算作可用
+    await store.mutate(data => sweepExpiredLots(data, ctx.tenantId, new Date(clock()), { initialCredits }));
     return store.read(data => send(200, {
       tenant_id: ctx.tenantId,
       balance: balanceOf(data, ctx.tenantId, { initialCredits }),

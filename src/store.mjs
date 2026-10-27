@@ -28,6 +28,8 @@ const TABLES = Object.freeze([
   'feedback', 'outcome_imports', 'experiments', 'billing_orders', 'payment_events', 'backups',
   // R01：账户、租户、会话与登录限流（旧数据缺表时按空表迁移，无需改 schema_version）
   'accounts', 'tenants', 'sessions', 'auth_throttle',
+  // R03：成品额度批次与按任务预留记录（旧数据缺表时按空表迁移，并在首次访问时补一个遗留批次）
+  'credit_lots', 'credit_reservations',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -39,6 +41,7 @@ const EMPTY_DATA = () => ({
   batches: {}, batch_items: {}, members: {}, recipes: {}, recipe_versions: {}, recipe_usages: {},
   feedback: {}, outcome_imports: {}, experiments: {}, billing_orders: {}, payment_events: {}, backups: {},
   accounts: {}, tenants: {}, sessions: {}, auth_throttle: {},
+  credit_lots: {}, credit_reservations: {},
 });
 
 function normalize(raw) {
