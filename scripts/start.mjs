@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url';
-import { loadConfig, loadRuntimeConfig } from '../src/config.mjs';
+import { loadAuthConfig, loadConfig, loadRuntimeConfig } from '../src/config.mjs';
 import { createApp } from '../src/server.mjs';
 
 let app;
@@ -16,7 +16,7 @@ try {
   try { process.loadEnvFile(fileURLToPath(new URL('../.env', import.meta.url))); }
   catch (error) { if (error.code !== 'ENOENT') throw new Error('环境文件加载失败'); }
   const config = loadConfig();
-  app = createApp({ ...config, ...loadRuntimeConfig() });
+  app = createApp({ ...config, ...loadRuntimeConfig(), ...loadAuthConfig() });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   if (process.send) process.on('message', message => {

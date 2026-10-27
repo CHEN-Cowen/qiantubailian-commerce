@@ -6,9 +6,9 @@ import { LOOPBACK_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
 
-export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.12.0', module: 'M12' });
+export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.13.0', module: 'R01' });
 export const STATIC_FILES = Object.freeze([
-  'index.html', 'app.js', 'api.js', 'real-data.js', 'm04.js', 'm05.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'viewport.css', 'icon.svg', 'architecture.svg',
+  'index.html', 'app.js', 'api.js', 'auth.js', 'real-data.js', 'm04.js', 'm05.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
   'assets/demo/sample-cream-original.jpg', 'assets/demo/sample-cream-hero.jpg', 'assets/demo/sample-cream-scene.jpg',
   'assets/demo/sample-cream-benefit.jpg', 'assets/demo/sample-cream-detail.jpg', 'assets/demo/sample-lamp-hero.jpg',
@@ -65,20 +65,30 @@ export function createApp({
   provider = null,
   providerOptions = {},
   paymentProvider = null,
+  demoMode = process.env.NODE_ENV !== 'production',
+  sessionTtlMs = 7 * 24 * 60 * 60 * 1000,
+  secureCookies = process.env.NODE_ENV === 'production',
+  emailRecoveryConfigured = false,
 } = {}) {
   if (!LOOPBACK_HOSTS.includes(host)) throw new Error('HOST 必须为 loopback 地址');
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('PORT 配置无效');
+  if (process.env.NODE_ENV === 'production' && demoMode === true) throw new Error('生产环境不允许开启演示身份');
   const root = path.resolve(staticRoot);
   const store = createStore({ dir: storeDir });
   const api = createApi({
     store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock,
     initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection, revisionMaxRounds,
     provider, providerOptions, paymentProvider,
+    demoMode, sessionTtlMs, secureCookies, emailRecoveryConfigured,
   });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Referrer-Policy', 'no-referrer');
+    // R01：禁止被第三方站点内嵌，收敛浏览器能力，避免点击劫持类风险
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
     const send = (status, body, type = 'application/json; charset=utf-8') => {
       const bytes = Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
       res.writeHead(status, { 'Content-Type': type, 'Content-Length': bytes.length });

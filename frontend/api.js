@@ -7,9 +7,42 @@ const ACTOR_ID = 'demo_operator';
 // 当前工作区的租户标识：普通请求走请求头，SSE 订阅必须走 query
 // （浏览器 EventSource 不能自定义请求头，服务端因此在 SSE 路由上接受 tenant_id 参数）
 let currentTenant = null;
+// R01：会话模式下的 CSRF 令牌由登录/会话接口下发，所有写请求必须带上
+let csrfToken = null;
 
 export function currentTenantId() {
   return currentTenant;
+}
+
+export function setSession(session) {
+  csrfToken = session?.csrf_token ?? null;
+  if (session?.tenant?.id) currentTenant = session.tenant.id;
+  // 会话模式下服务端只认 Cookie，不再发送可伪造的操作人头
+  sessionBound = Boolean(session?.authenticated);
+}
+
+let sessionBound = false;
+
+/** 认证接口不能等待“登录完成”这个 Promise，否则登录请求会自己把自己锁住。 */
+async function authCall(route, { method = 'GET', json } = {}) {
+  const response = await fetch(route, {
+    method,
+    credentials: 'same-origin',
+    headers: { ...(json !== undefined ? { 'Content-Type': 'application/json' } : {}) },
+    body: json !== undefined ? JSON.stringify(json) : undefined,
+  });
+  const text = await response.text();
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch { payload = null; }
+  if (!response.ok) {
+    throw new ApiFailure(
+      response.status,
+      payload?.error ?? 'REQUEST_FAILED',
+      payload?.message ?? `请求失败（HTTP ${response.status}）`,
+      payload?.details,
+    );
+  }
+  return payload;
 }
 
 export class ApiFailure extends Error {
@@ -23,13 +56,19 @@ export class ApiFailure extends Error {
 }
 
 async function call(route, { json, headers = {}, ...rest } = {}) {
+  // R01：生产模式下登录闸口未通过前，业务请求一律等待，避免刷出一屏 401
+  if (window.__qtbAuthReady) await window.__qtbAuthReady;
   const hasJson = json !== undefined;
+  const method = (rest.method ?? 'GET').toUpperCase();
+  const needsCsrf = csrfToken && !['GET', 'HEAD'].includes(method);
   const response = await fetch(route, {
     ...rest,
+    credentials: 'same-origin',
     headers: {
-      'x-actor-id': ACTOR_ID,
+      ...(sessionBound ? {} : { 'x-actor-id': ACTOR_ID }),
       ...(currentTenant ? { 'x-tenant-id': currentTenant } : {}),
       ...(hasJson ? { 'Content-Type': 'application/json' } : {}),
+      ...(needsCsrf ? { 'X-CSRF-Token': csrfToken } : {}),
       ...headers,
     },
     body: rest.body ?? (hasJson ? JSON.stringify(json) : undefined),
@@ -49,6 +88,12 @@ async function call(route, { json, headers = {}, ...rest } = {}) {
 }
 
 export const api = {
+  // R01：认证与会话
+  authConfig: () => authCall('/api/auth/config'),
+  session: () => authCall('/api/auth/session'),
+  login: body => authCall('/api/auth/login', { method: 'POST', json: body }),
+  register: body => authCall('/api/auth/register', { method: 'POST', json: body }),
+  logout: () => authCall('/api/auth/logout', { method: 'POST' }),
   async tenant() {
     const result = await call('/api/tenant');
     if (result?.tenant_id) currentTenant = result.tenant_id;

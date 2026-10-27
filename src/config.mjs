@@ -41,3 +41,29 @@ export function loadRuntimeConfig(env = process.env) {
     allowScenarioInjection: env.QTB_ALLOW_SCENARIO === '1',
   });
 }
+
+/**
+ * R01 身份与会话配置。
+ * 生产环境强制关闭演示身份；演示模式只在非生产环境可用，且必须由服务端配置。
+ */
+export function loadAuthConfig(env = process.env) {
+  const nodeEnv = env.NODE_ENV ?? 'development';
+  if (!['development', 'test', 'production'].includes(nodeEnv)) throw new Error('NODE_ENV 配置无效');
+  const explicitDemo = env.QTB_DEMO_MODE;
+  if (nodeEnv === 'production' && explicitDemo === '1') {
+    throw new Error('生产环境不允许开启演示身份');
+  }
+  const demoMode = nodeEnv !== 'production' && explicitDemo !== '0';
+  const sessionTtlMs = Number(env.QTB_SESSION_TTL_MS ?? 7 * 24 * 60 * 60 * 1000);
+  if (!Number.isInteger(sessionTtlMs) || sessionTtlMs < 60_000 || sessionTtlMs > 90 * 24 * 60 * 60 * 1000) {
+    throw new Error('会话有效期配置无效');
+  }
+  const secureCookies = nodeEnv === 'production' || env.QTB_SECURE_COOKIES === '1';
+  return Object.freeze({
+    demoMode,
+    sessionTtlMs,
+    secureCookies,
+    // 邮件服务未接入时账户恢复能力显式关闭
+    emailRecoveryConfigured: env.QTB_EMAIL_RECOVERY === '1',
+  });
+}

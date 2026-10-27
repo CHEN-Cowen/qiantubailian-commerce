@@ -531,7 +531,7 @@ test('M03 路由语义：未知接口 404、错误方法 405 带 Allow（M05 后
   const tenant = await request(port, '/api/tenant', { headers: as() });
   assert.equal(tenant.status, 200);
   assert.equal(tenant.json.tenant_id, TENANT_A);
-  assert.match(tenant.json.module, /^M\d{2}$/, '模块标识随版本推进，不在旧用例里钉死具体模块号');
+  assert.match(tenant.json.module, /^(M|R)\d{2}$/, '模块标识随版本推进，不在旧用例里钉死具体模块号');
 });
 
 // ---------- 12. 重新加载后数据仍在 ----------

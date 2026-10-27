@@ -33,23 +33,45 @@ export const ROLES = Object.freeze(['owner', 'editor', 'reviewer', 'viewer']);
 
 export const PERMISSIONS = Object.freeze({
   owner: Object.freeze([
+    // R01：主链路写权限与读取权限统一由服务端判定
+    'project:read', 'project:create', 'project:write',
+    'asset:write', 'truth:write', 'spec:write',
+    'quote:read', 'quote:create',
+    'run:read', 'run:create', 'run:cancel', 'run:budget',
+    'quality:read', 'quality:review',
+    'export:read', 'export:create', 'export:download',
+    'version:read', 'version:activate',
+    'credits:read',
     'batch:read', 'batch:create', 'batch:preview', 'batch:start', 'batch:export',
-    'recipe:read', 'recipe:write', 'recipe:approve', 'member:manage', 'project:read',
+    'recipe:read', 'recipe:write', 'recipe:approve', 'member:read', 'member:manage',
     // M12：结果回流、效果导入、套餐与备份
     'feedback:read', 'feedback:write', 'outcome:read', 'outcome:write',
     'billing:read', 'billing:manage', 'backup:manage', 'metrics:read',
   ]),
   editor: Object.freeze([
+    'project:read', 'project:create', 'project:write',
+    'asset:write', 'truth:write', 'spec:write',
+    'quote:read', 'quote:create',
+    'run:read', 'run:create', 'run:cancel', 'run:budget',
+    'quality:read', 'quality:review',
+    'export:read', 'export:create', 'export:download',
+    'version:read', 'version:activate',
+    'credits:read',
     'batch:read', 'batch:create', 'batch:preview', 'batch:start', 'batch:export',
-    'recipe:read', 'recipe:write', 'project:read',
+    'recipe:read', 'recipe:write', 'member:read',
     'feedback:read', 'feedback:write', 'outcome:read', 'outcome:write', 'billing:read', 'metrics:read',
   ]),
   reviewer: Object.freeze([
-    'batch:read', 'recipe:read', 'project:read',
+    'project:read', 'quote:read', 'run:read',
+    'quality:read', 'quality:review',
+    'export:read', 'export:download', 'version:read', 'credits:read',
+    'batch:read', 'recipe:read', 'member:read',
     'feedback:read', 'feedback:write', 'outcome:read', 'billing:read', 'metrics:read',
   ]),
   viewer: Object.freeze([
-    'batch:read', 'recipe:read', 'project:read',
+    'project:read', 'quote:read', 'run:read',
+    'quality:read', 'export:read', 'export:download', 'version:read', 'credits:read',
+    'batch:read', 'recipe:read', 'member:read',
     'feedback:read', 'outcome:read', 'billing:read', 'metrics:read',
   ]),
 });

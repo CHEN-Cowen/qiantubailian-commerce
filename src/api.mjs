@@ -1,7 +1,13 @@
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { ApiError, toApiError } from './errors.mjs';
+import {
+  SESSION_COOKIE, SESSION_TTL_MS, assertLoginAllowed, clearAuthFailures, clearedSessionCookie,
+  clientIp, createSession, findSession, makeAccountRecord, makeOwnerMember, makeTenantRecord,
+  normalizeEmail, parseCookies, pruneAuthState, recordAuthFailure, revokeSession, sessionCookie,
+  sessionView, throttleKey, throttleStatus, touchSession, validateRegistration, verifyPassword,
+} from './auth.mjs';
 import { IMAGE_TYPES, inspectImage } from './images.mjs';
 import {
   ASSET_ROLES, LIMITS, activeAssets, computeReadiness, sha256,
@@ -66,10 +72,16 @@ export function createApi({
   providerOptions = {},
   // M12：支付 Provider 默认未配置；只有宿主显式注入真实能力时才允许真实收款
   paymentProvider = null,
+  // R01：演示身份只在非生产环境可用；生产默认拒绝未认证访问
+  demoMode = true,
+  sessionTtlMs = SESSION_TTL_MS,
+  secureCookies = false,
+  emailRecoveryConfigured = false,
 } = {}) {
   if (!store) throw new Error('API 缺少存储实例');
   if (!Array.isArray(allowedTenants) || allowedTenants.length === 0) throw new Error('API 租户配置无效');
   if (!Number.isInteger(initialCredits) || initialCredits < 0) throw new Error('初始额度配置无效');
+  if (process.env.NODE_ENV === 'production' && demoMode === true) throw new Error('生产环境不允许开启演示身份');
   const resolvedProvider = injectedProvider
     ? {
       provider: injectedProvider,
@@ -106,6 +118,9 @@ export function createApi({
   // 暴露 drain：关闭服务时先排空写队列，再让调用方清理数据目录
   publish.drain = () => (typeof store.drain === 'function' ? store.drain() : Promise.resolve());
   const backupDirOf = backupId => path.join(store.dir, 'backups', backupId);
+  // R01：状态变更方法集合。createApi 在下方提前 return publish，所有 const 声明必须在此之前，
+  // 否则被提升的函数访问时会处于暂时性死区（ReferenceError）。
+  const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
   return publish;
 
@@ -134,15 +149,28 @@ export function createApi({
     const query = new URLSearchParams(req.url.includes('?') ? req.url.slice(req.url.indexOf('?') + 1) : '');
     const rest = route.split('/').filter(part => part !== '').slice(1);
     const method = req.method;
+    if (rest.length === 0) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    // R01：认证接口在解析身份之前处理（登录/注册本身还没有会话）
+    if (rest[0] === 'auth') return handleAuth(req, res, rest, method, send);
     // SSE 订阅走 EventSource，浏览器无法带自定义头，因此允许用 query 传租户
     const isEventStream = rest.length === 3 && rest[0] === 'runs' && rest[2] === 'events';
-    const ctx = resolveContext(req, { allowQueryTenant: isEventStream, query });
-    if (rest.length === 0) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    const ctx = await resolveContext(req, { allowQueryTenant: isEventStream, query });
+    assertSameOrigin(req);
+    assertCsrf(req, ctx);
+    // 统一权限闸口：主链路与商业化接口都由服务端角色矩阵判定，前端不能自授权
+    const action = actionForRoute(rest, method);
+    if (action) await requireAction(ctx, action);
     const [resource, projectId, section, third] = rest;
 
     if (resource === 'tenant' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
-      return send(200, { tenant_id: ctx.tenantId, actor_id: ctx.actorId, module: 'M12' });
+      return send(200, {
+        tenant_id: ctx.tenantId,
+        actor_id: ctx.actorId,
+        mode: ctx.mode,
+        module: 'R01',
+        authenticated: ctx.mode === 'session',
+      });
     }
     if (resource === 'credits' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
@@ -452,7 +480,49 @@ export function createApi({
     throw new ApiError(404, 'NOT_FOUND', '接口不存在');
   }
 
-  function resolveContext(req, { allowQueryTenant = false, query = null } = {}) {
+  /**
+   * R01：身份只从可信来源解析。
+   * - 有会话：账户与租户来自服务端会话；x-tenant-id 仅能在本人所属租户间切换。
+   * - 无会话：非生产演示模式回落到服务端配置的演示身份；生产环境直接 401。
+   * - 任何模式下 x-actor-id 都不能冒充他人（会话模式完全忽略，演示模式只用于本地角色演练）。
+   */
+  async function resolveContext(req, { allowQueryTenant = false, query = null } = {}) {
+    const cookies = parseCookies(req.headers.cookie);
+    const token = cookies[SESSION_COOKIE];
+    const session = token
+      ? await store.read(data => findSession(data, token, new Date(clock())))
+      : null;
+    if (token && !session) {
+      throw new ApiError(401, 'SESSION_INVALID', '登录状态已失效，请重新登录');
+    }
+    if (session) {
+      const account = await store.read(data => data.accounts?.[session.account_id] ?? null);
+      if (!account || account.status !== 'active') {
+        throw new ApiError(401, 'ACCOUNT_DISABLED', '账户不可用，请重新登录');
+      }
+      const requestedTenant = req.headers['x-tenant-id'] !== undefined
+        ? String(req.headers['x-tenant-id']).trim()
+        : allowQueryTenant && query?.get('tenant_id') ? String(query.get('tenant_id')).trim() : null;
+      let tenantId = session.tenant_id;
+      if (requestedTenant && requestedTenant !== tenantId) {
+        const member = await store.read(data => Object.values(data.members ?? {}).some(item =>
+          item.tenant_id === requestedTenant && item.actor_id === session.account_id));
+        if (!member) throw new ApiError(403, 'TENANT_FORBIDDEN', '当前账户无权访问该工作区');
+        tenantId = requestedTenant;
+      }
+      // 会话只读：每次请求都落盘 last_seen 会把整份数据重写，代价远高于收益
+      return {
+        tenantId,
+        actorId: session.account_id,
+        accountId: session.account_id,
+        session,
+        csrf: session.csrf_token,
+        mode: 'session',
+      };
+    }
+    if (!demoMode) {
+      throw new ApiError(401, 'UNAUTHENTICATED', '请先登录后再访问工作区');
+    }
     const tenantHeader = req.headers['x-tenant-id'];
     // 浏览器 EventSource 不能自定义请求头，SSE 订阅必须能通过 query 传租户。
     // 只在显式允许的路由上放宽，且请求头优先；租户白名单校验不变。
@@ -467,7 +537,320 @@ export function createApi({
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(actorId)) {
       throw new ApiError(400, 'INVALID_ACTOR', '操作人标识无效');
     }
-    return { tenantId, actorId };
+    return { tenantId, actorId, accountId: null, session: null, csrf: null, mode: 'demo' };
+  }
+
+  /** 拒绝跨站写请求：浏览器带 Origin 时必须与当前 Host 一致。 */
+  function assertSameOrigin(req) {
+    if (!STATE_CHANGING.has(req.method)) return;
+    const origin = req.headers.origin;
+    if (origin === undefined || origin === '') return;
+    let host;
+    try { host = new URL(origin).host; } catch { throw new ApiError(403, 'CROSS_ORIGIN_DENIED', '请求来源无效'); }
+    if (!req.headers.host || host !== req.headers.host) {
+      throw new ApiError(403, 'CROSS_ORIGIN_DENIED', '不接受跨站写请求');
+    }
+  }
+
+  /** 会话模式的状态变更必须带 CSRF 令牌；演示模式保留本地演练行为。 */
+  function assertCsrf(req, ctx) {
+    if (ctx.mode !== 'session' || !STATE_CHANGING.has(req.method)) return;
+    const token = req.headers['x-csrf-token'];
+    if (typeof token !== 'string' || token.length === 0) {
+      throw new ApiError(403, 'CSRF_REQUIRED', '缺少 CSRF 令牌，请刷新页面后重试');
+    }
+    const provided = Buffer.from(token);
+    const expected = Buffer.from(ctx.csrf ?? '');
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      throw new ApiError(403, 'CSRF_INVALID', 'CSRF 令牌无效，请刷新页面后重试');
+    }
+  }
+
+  /**
+   * 路由到权限动作的集中映射。处理函数内的细粒度检查继续保留，
+   * 这里保证主链路没有“漏挂权限”的接口。
+   */
+  function actionForRoute([resource, second, third, fourth], method) {
+    const write = STATE_CHANGING.has(method);
+    switch (resource) {
+      case 'credits': return 'credits:read';
+      case 'quotes': return write ? 'quote:create' : 'quote:read';
+      case 'runs': {
+        if (second === undefined) return write ? 'run:create' : 'run:read';
+        if (third === 'cancel') return 'run:cancel';
+        if (third === 'budget-confirmation') return 'run:budget';
+        if (third === 'exports' && write) return 'export:create';
+        if (third === 'versions' && fourth === 'activate' && write) return 'version:activate';
+        return 'run:read';
+      }
+      case 'exports': return second !== undefined && third === 'download' ? 'export:download' : 'export:read';
+      case 'quality-reports': return third === 'reviews' && write ? 'quality:review' : 'quality:read';
+      case 'detail-pages':
+      case 'video-plans':
+      case 'brand-kits':
+        return write ? 'project:write' : 'project:read';
+      case 'members': return write ? 'member:manage' : 'member:read';
+      case 'recipes':
+        if (third === 'approve' && write) return 'recipe:approve';
+        return write ? 'recipe:write' : 'recipe:read';
+      case 'feedback': return write ? 'feedback:write' : 'feedback:read';
+      case 'outcomes': case 'experiments': return write ? 'outcome:write' : 'outcome:read';
+      case 'plans': return 'billing:read';
+      case 'billing': return write ? 'billing:manage' : 'billing:read';
+      case 'backups': return 'backup:manage';
+      case 'metrics': return 'metrics:read';
+      case 'eval': case 'models': case 'provider': return 'metrics:read';
+      case 'generation-records': return 'run:read';
+      case 'catalog': return 'project:read';
+      case 'projects': {
+        if (second === undefined) return write ? 'project:create' : 'project:read';
+        if (third === 'assets') return write ? 'asset:write' : 'project:read';
+        if (third === 'truth-versions') return write ? 'truth:write' : 'project:read';
+        if (third === 'specs') return write ? 'spec:write' : 'project:read';
+        if (third === 'joint-exports') return write ? 'export:create' : 'export:read';
+        return write ? 'project:write' : 'project:read';
+      }
+      default: return null;
+    }
+  }
+
+  // ---------- R01：账户、会话与登录 ----------
+
+  async function handleAuth(req, res, rest, method, send) {
+    const action = rest[1] ?? '';
+    if (rest.length !== 2) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    if (action === 'config') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return send(200, {
+        demo_mode: demoMode,
+        registration: true,
+        email_recovery: emailRecoveryConfigured,
+        session_ttl_seconds: Math.floor(sessionTtlMs / 1000),
+        password_min_length: 10,
+      });
+    }
+    if (action === 'register') {
+      requireMethod(method, ['POST']);
+      assertSameOrigin(req);
+      return registerRoute(req, res, send);
+    }
+    if (action === 'login') {
+      requireMethod(method, ['POST']);
+      assertSameOrigin(req);
+      return loginRoute(req, res, send);
+    }
+    if (action === 'logout') {
+      requireMethod(method, ['POST']);
+      assertSameOrigin(req);
+      return logoutRoute(req, res, send);
+    }
+    if (action === 'session') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return sessionRoute(req, send);
+    }
+    if (action === 'tenants') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return tenantsRoute(req, send);
+    }
+    if (action === 'switch-tenant') {
+      requireMethod(method, ['POST']);
+      assertSameOrigin(req);
+      return switchTenantRoute(req, res, send);
+    }
+    if (action === 'password-reset') {
+      requireMethod(method, ['POST']);
+      assertSameOrigin(req);
+      if (!emailRecoveryConfigured) {
+        throw new ApiError(503, 'EMAIL_SERVICE_NOT_CONFIGURED',
+          '账户恢复依赖邮件服务，当前部署未配置，暂不可用；请联系管理员或使用本地账户重置流程');
+      }
+      throw new ApiError(501, 'EMAIL_RECOVERY_NOT_IMPLEMENTED', '邮件恢复通道已启用配置但尚未接通发送服务');
+    }
+    throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+  }
+
+  async function currentSession(req) {
+    const token = parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? null;
+    if (!token) return { token: null, session: null };
+    const session = await store.read(data => findSession(data, token, new Date(clock())));
+    return { token, session };
+  }
+
+  function assertSessionCsrf(req, session) {
+    const token = req.headers['x-csrf-token'];
+    if (typeof token !== 'string' || token.length === 0) {
+      throw new ApiError(403, 'CSRF_REQUIRED', '缺少 CSRF 令牌，请刷新页面后重试');
+    }
+    const provided = Buffer.from(token);
+    const expected = Buffer.from(session.csrf_token ?? '');
+    if (provided.length !== expected.length || !timingSafeEqual(provided, expected)) {
+      throw new ApiError(403, 'CSRF_INVALID', 'CSRF 令牌无效，请刷新页面后重试');
+    }
+  }
+
+  async function sessionPayload(session) {
+    return store.read(data => {
+      const account = data.accounts?.[session.account_id] ?? null;
+      const tenant = data.tenants?.[session.tenant_id] ?? null;
+      const member = Object.values(data.members ?? {}).find(item =>
+        item.tenant_id === session.tenant_id && item.actor_id === session.account_id) ?? null;
+      const role = member && ['owner', 'editor', 'reviewer', 'viewer'].includes(member.role) ? member.role : null;
+      return {
+        ...sessionView({
+          account, tenant, role,
+          permissions: role ? describePermissions(role).permissions : [],
+          demoMode,
+        }),
+        csrf_token: session.csrf_token,
+      };
+    });
+  }
+
+  async function registerRoute(req, res, send) {
+    const checked = validateRegistration(await readJson(req));
+    if (!checked.ok) throw new ApiError(422, checked.code, checked.message);
+    const ip = clientIp(req);
+    const created = await store.mutate(data => {
+      const duplicate = Object.values(data.accounts ?? {}).some(item =>
+        item.email_normalized === checked.payload.email);
+      if (duplicate) throw new ApiError(409, 'EMAIL_EXISTS', '该邮箱已注册，请直接登录');
+      pruneAuthState(data, new Date(clock()));
+      const account = makeAccountRecord({
+        email: checked.payload.email,
+        password: checked.payload.password,
+        displayName: checked.payload.displayName,
+        at: clock(),
+      });
+      const tenant = makeTenantRecord({ name: checked.payload.tenantName, accountId: account.id, at: clock() });
+      data.accounts[account.id] = account;
+      data.tenants[tenant.id] = tenant;
+      const member = makeOwnerMember({ tenantId: tenant.id, accountId: account.id, at: clock() });
+      data.members[member.id] = member;
+      // 新账户不发放演示额度；体验额度与套餐权益由 R03/R07 按规则发放
+      const session = createSession(data, {
+        accountId: account.id, tenantId: tenant.id, ttlMs: sessionTtlMs,
+        at: clock(), ip, userAgent: req.headers['user-agent'],
+      });
+      return { account, tenant, role: 'owner', token: session.token, session: session.session };
+    });
+    res.setHeader('Set-Cookie', sessionCookie(created.token, {
+      maxAgeSeconds: Math.floor(sessionTtlMs / 1000), secure: secureCookies,
+    }));
+    return send(201, {
+      account: { id: created.account.id, email: created.account.email, display_name: created.account.display_name },
+      tenant: { id: created.tenant.id, name: created.tenant.name },
+      role: created.role,
+      csrf_token: created.session.csrf_token,
+      demo_mode: demoMode,
+    });
+  }
+
+  async function loginRoute(req, res, send) {
+    const body = await readJson(req);
+    const email = normalizeEmail(body.email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      throw new ApiError(422, 'EMAIL_INVALID', '邮箱格式无效');
+    }
+    const ip = clientIp(req);
+    const key = throttleKey(ip, email);
+    await store.read(data => {
+      assertLoginAllowed(throttleStatus(data, key, new Date(clock())));
+      return true;
+    });
+    const account = await store.read(data =>
+      Object.values(data.accounts ?? {}).find(item => item.email_normalized === email) ?? null);
+    const valid = Boolean(account) && account.status === 'active' && verifyPassword(body.password, account);
+    if (!valid) {
+      await store.mutate(data => {
+        recordAuthFailure(data, key, new Date(clock()));
+        pruneAuthState(data, new Date(clock()));
+      });
+      throw new ApiError(401, 'INVALID_CREDENTIALS', '邮箱或密码不正确');
+    }
+    const membership = await store.read(data => Object.values(data.members ?? {})
+      .filter(item => item.actor_id === account.id)
+      .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))[0] ?? null);
+    if (!membership) throw new ApiError(403, 'NO_TENANT', '该账户尚未加入任何工作区');
+    const created = await store.mutate(data => {
+      clearAuthFailures(data, key);
+      const current = data.accounts[account.id];
+      current.last_login_at = new Date(clock()).toISOString();
+      current.updated_at = current.last_login_at;
+      const tenant = data.tenants?.[membership.tenant_id] ?? null;
+      if (!tenant || tenant.status !== 'active') {
+        throw new ApiError(403, 'TENANT_DISABLED', '所属工作区不可用');
+      }
+      const session = createSession(data, {
+        accountId: account.id, tenantId: tenant.id, ttlMs: sessionTtlMs,
+        at: clock(), ip, userAgent: req.headers['user-agent'],
+      });
+      return { token: session.token, session: session.session };
+    });
+    res.setHeader('Set-Cookie', sessionCookie(created.token, {
+      maxAgeSeconds: Math.floor(sessionTtlMs / 1000), secure: secureCookies,
+    }));
+    const payload = await sessionPayload(created.session);
+    return send(200, payload);
+  }
+
+  async function logoutRoute(req, res, send) {
+    const { session } = await currentSession(req);
+    if (session) {
+      assertSessionCsrf(req, session);
+      await store.mutate(data => revokeSession(data, session.id, new Date(clock())));
+    }
+    res.setHeader('Set-Cookie', clearedSessionCookie({ secure: secureCookies }));
+    return send(200, { ok: true });
+  }
+
+  async function sessionRoute(req, send) {
+    const { session } = await currentSession(req);
+    if (session) return send(200, await sessionPayload(session));
+    return send(200, {
+      authenticated: false,
+      demo_mode: demoMode,
+      email_recovery: emailRecoveryConfigured,
+      demo_identity: demoMode ? { tenant_id: defaultTenant, actor_id: defaultActor } : null,
+      account: null,
+      tenant: null,
+      role: null,
+      permissions: [],
+    });
+  }
+
+  async function tenantsRoute(req, send) {
+    const { session } = await currentSession(req);
+    if (!session) throw new ApiError(401, 'UNAUTHENTICATED', '请先登录');
+    const rows = await store.read(data => Object.values(data.members ?? {})
+      .filter(item => item.actor_id === session.account_id)
+      .map(item => ({
+        tenant_id: item.tenant_id,
+        role: item.role,
+        name: data.tenants?.[item.tenant_id]?.name ?? item.tenant_id,
+        active: item.tenant_id === session.tenant_id,
+      })));
+    return send(200, { tenants: rows });
+  }
+
+  async function switchTenantRoute(req, res, send) {
+    const { session } = await currentSession(req);
+    if (!session) throw new ApiError(401, 'UNAUTHENTICATED', '请先登录');
+    assertSessionCsrf(req, session);
+    const body = await readJson(req);
+    const tenantId = String(body.tenant_id ?? '').trim();
+    if (!tenantId) throw new ApiError(422, 'TENANT_REQUIRED', '需要提供 tenant_id');
+    const updated = await store.mutate(data => {
+      const member = Object.values(data.members ?? {}).find(item =>
+        item.tenant_id === tenantId && item.actor_id === session.account_id) ?? null;
+      if (!member) throw new ApiError(403, 'TENANT_FORBIDDEN', '当前账户无权访问该工作区');
+      const tenant = data.tenants?.[tenantId] ?? null;
+      if (!tenant || tenant.status !== 'active') throw new ApiError(403, 'TENANT_DISABLED', '该工作区不可用');
+      const record = data.sessions[session.id];
+      if (!record || record.revoked_at) throw new ApiError(401, 'SESSION_INVALID', '登录状态已失效');
+      record.tenant_id = tenantId;
+      return { ...record };
+    });
+    return send(200, await sessionPayload(updated));
   }
 
   async function createProject(ctx, req, send) {
@@ -1832,6 +2215,10 @@ export function createApi({
       members: tenantMembers(data, ctx.tenantId),
       actorId: ctx.actorId,
     }));
+    // 空成员表的 bootstrap 只允许演示模式；真实会话必须存在成员记录
+    if (resolved.bootstrap && ctx.mode === 'session') {
+      throw new ApiError(403, 'FORBIDDEN', '该账户不是当前工作区成员');
+    }
     if (!can(resolved.role, action)) {
       throw new ApiError(403, 'FORBIDDEN', `当前角色${resolved.role ? `（${resolved.role}）` : ''}没有 ${action} 权限`, {
         action, role: resolved.role ?? null,

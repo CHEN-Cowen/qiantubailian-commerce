@@ -478,7 +478,7 @@ test('M12 端到端：采用回流→实验口径→支付阻断→可观测性�
   const headers = as();
 
   const tenant = await request(port, '/api/tenant', { headers });
-  assert.equal(tenant.json.module, 'M12');
+  assert.match(tenant.json.module, /^(M|R)\d{2}$/);
 
   // 1) 跑通一条真实任务链，复核到可发布
   const projectRes = await request(port, '/api/projects', {
