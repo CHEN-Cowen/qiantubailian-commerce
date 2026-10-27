@@ -11,6 +11,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { deflateSync, inflateSync } from 'node:zlib';
+import { readImageSize } from './images.mjs';
 
 export const M06_VERSION = 'm06.1';
 export const MASK_VERSION = 'm06.mask.1';
@@ -201,13 +202,75 @@ function median(values) {
   return sorted[Math.floor(sorted.length / 2)] ?? 0;
 }
 
+const pngSizeOf = bytes => readImageSize(bytes, 'image/png');
+
+/** 归一化商品矩形：只接受 0..1 的比例，拒绝越界与过小区域（避免"整张图都算商品"）。 */
+export function normalizeSubjectBox(box) {
+  if (!box || typeof box !== 'object') return null;
+  const values = ['x', 'y', 'width', 'height'].map(key => Number(box[key]));
+  if (values.some(value => !Number.isFinite(value))) return null;
+  const [x, y, width, height] = values;
+  if (x < 0 || y < 0 || width <= 0 || height <= 0) return null;
+  if (x + width > 1.001 || y + height > 1.001) return null;
+  if (width < 0.02 || height < 0.02) return null;
+  return {
+    x: Math.round(x * 10000) / 10000,
+    y: Math.round(y * 10000) / 10000,
+    width: Math.round(width * 10000) / 10000,
+    height: Math.round(height * 10000) / 10000,
+  };
+}
+
 /**
- * 从主体素材推导掩码。输入只支持 PNG：零依赖解码无法安全处理 JPEG/WebP 像素，
- * 与其猜测不如明确返回不可用，让上层拒绝而不是静默丢弃主体保护。
+ * 从主体素材推导掩码。
+ * - PNG：零依赖解码后按背景色差/透明通道推导；
+ * - JPEG/WebP：零依赖解码无法安全还原像素，但卖家最常见的正是 JPEG。此时允许用
+ *   卖家确认的商品矩形（归一化坐标）生成**区域掩码**，交给支持掩码的 Provider 保护主体；
+ *   不生成去背图，因此不会假装能本地合成。
+ * 未给矩形且无法解码时明确返回不可用，让上层拒绝，而不是静默丢弃主体保护。
  */
-export function createSubjectMask({ bytes, mime } = {}) {
+export function createSubjectMask({ bytes, mime, box = null } = {}) {
+  const normalized = normalizeSubjectBox(box);
+  if (normalized) {
+    const size = mime === 'image/png' ? pngSizeOf(bytes) : readImageSize(bytes, mime);
+    if (size) {
+      const scale = Math.min(1, SUBJECT_MASK_MAX_SIDE / Math.max(size.width, size.height));
+      const width = Math.max(1, Math.round(size.width * scale));
+      const height = Math.max(1, Math.round(size.height * scale));
+      const left = Math.floor(normalized.x * width);
+      const top = Math.floor(normalized.y * height);
+      const right = Math.min(width, Math.ceil((normalized.x + normalized.width) * width));
+      const bottom = Math.min(height, Math.ceil((normalized.y + normalized.height) * height));
+      const maskBytes = encodeMaskPng(width, height, index => {
+        const x = index % width;
+        const y = Math.floor(index / width);
+        return x >= left && x < right && y >= top && y < bottom;
+      });
+      const coverage = ((right - left) * (bottom - top)) / (width * height);
+      return {
+        available: true,
+        width,
+        height,
+        coverage,
+        edge_pixels: 2 * ((right - left) + (bottom - top)),
+        box: normalized,
+        maskBytes,
+        cutoutBytes: null,
+        sha256: sha256(maskBytes),
+        cutout_sha256: null,
+        has_cutout: false,
+        method: 'manual_box',
+        message: '使用卖家确认的商品矩形生成区域掩码；本地无法生成去背图，需 Provider 支持掩码',
+      };
+    }
+    return { available: false, reason: 'MASK_SOURCE_UNDECODABLE', message: '主体素材文件头不完整，无法按矩形生成掩码' };
+  }
   if (mime && mime !== 'image/png') {
-    return { available: false, reason: 'MASK_SOURCE_UNSUPPORTED_FORMAT', message: `主体素材为 ${mime}，当前只能从 PNG 像素推导掩码` };
+    return {
+      available: false,
+      reason: 'MASK_SOURCE_UNSUPPORTED_FORMAT',
+      message: `主体素材为 ${mime}，请先确认商品区域（矩形掩码）或改用 PNG 以自动推导掩码`,
+    };
   }
   const decoded = decodePng(bytes);
   if (!decoded) {
@@ -298,6 +361,7 @@ export function createSubjectMask({ bytes, mime } = {}) {
     cutoutBytes,
     sha256: sha256(maskBytes),
     cutout_sha256: sha256(cutoutBytes),
+    has_cutout: true,
     method: transparentBorder ? 'alpha_channel' : 'border_color_keying',
   };
 }
@@ -471,8 +535,16 @@ export function checkSubjectProtection({ capabilities, protection, required = tr
   if (capabilities?.supports_mask === true) {
     return { ok: true, mode: 'mask' };
   }
-  if (capabilities?.supports_post_composite === true) {
+  if (capabilities?.supports_post_composite === true && protection?.has_cutout !== false) {
     return { ok: true, mode: 'composite' };
+  }
+  if (capabilities?.supports_post_composite === true && protection?.has_cutout === false) {
+    return {
+      ok: false,
+      code: 'UNSUPPORTED_CAPABILITY',
+      message: '当前主体素材只生成了区域掩码、没有去背图，无法做本地主体合成；请更换支持掩码的 Provider 或改用 PNG 素材',
+      details: { method: protection?.method ?? null },
+    };
   }
   if (simulated) {
     return { ok: true, mode: 'simulated_reference_only', warning: '模拟 Provider 不支持掩码或本地合成，仅按参考图模拟，产物不具真实主体保护' };

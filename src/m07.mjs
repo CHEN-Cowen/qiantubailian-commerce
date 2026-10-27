@@ -13,6 +13,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { ApiError } from './errors.mjs';
 import { MASK_VERSION, decodePng } from './m06.mjs';
+import { checkCriticalText } from './ocr.mjs';
 import { readImageSize, sniffImageType } from './images.mjs';
 
 export const QA_VERSION = 'm07.qa.1';
@@ -271,7 +272,7 @@ const factsEvidence = truth => (truth?.facts ?? []).map(fact => ({
  */
 export function evaluateGenerationQuality({
   run, deliverable, attempt, spec, truth, channel = null,
-  output = {}, subject = {}, assets = [], now = new Date(),
+  output = {}, subject = {}, assets = [], now = new Date(), ocr = null,
 } = {}) {
   const at = iso(now);
   const bytes = output.bytes ?? null;
@@ -546,7 +547,7 @@ export function evaluateGenerationQuality({
     }));
   }
 
-  // 9. 包装关键文字：没有 OCR 就只能待复核
+  // 9. 包装关键文字：OCR 已配置时机器比对，未配置时保持 unknown
   const criticalTexts = truth?.critical_text ?? [];
   if (criticalTexts.length === 0) {
     checks.push(check({
@@ -554,15 +555,30 @@ export function evaluateGenerationQuality({
       evidence: { critical_text_count: 0 },
     }));
   } else {
+    const textCheck = checkCriticalText({ criticalTexts, ocr });
     checks.push(check({
-      code: 'OCR_CRITICAL_TEXT', label: '包装关键文字', status: 'unknown', severity: 'high',
-      required: true, adjudicable: true,
+      code: 'OCR_CRITICAL_TEXT',
+      label: '包装关键文字',
+      // 文字不符是硬失败：包装文字与事实不一致，不能被审美评分覆盖
+      status: textCheck.status === 'pass' ? 'pass' : textCheck.status === 'fail' ? 'fail' : 'unknown',
+      severity: 'high',
+      hardGate: textCheck.status === 'fail',
+      required: true,
+      adjudicable: textCheck.status !== 'pass',
       evidence: {
         critical_text: criticalTexts.map(item => ({ text: item.text, region: item.region ?? null })),
-        ocr_engine: 'not_configured',
-        note: '当前未接入 OCR 服务，无法机器验证文字；不可读不等于通过',
+        ocr_engine: textCheck.engine ?? 'not_configured',
+        matched: textCheck.matched,
+        mismatched: textCheck.mismatched,
+        note: textCheck.status === 'unknown'
+          ? '未接入或本次未能完成 OCR，无法机器验证文字；不可读不等于通过'
+          : textCheck.status === 'fail'
+            ? '图中未检出已确认的包装关键文字，属于硬失败'
+            : '已在图中检出全部已确认的包装关键文字',
       },
-      suggestedAction: '人工逐字核对包装文字，或接入 OCR 服务后重检',
+      suggestedAction: textCheck.status === 'pass'
+        ? '如需更高精度可人工复核'
+        : '人工逐字核对包装文字，或接入/修复 OCR 服务后重检',
     }));
   }
 

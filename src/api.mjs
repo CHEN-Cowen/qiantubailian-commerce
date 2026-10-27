@@ -9,6 +9,8 @@ import {
   sessionView, throttleKey, throttleStatus, touchSession, validateRegistration, verifyPassword,
 } from './auth.mjs';
 import { IMAGE_TYPES, inspectImage } from './images.mjs';
+import { createSubjectMask, normalizeSubjectBox } from './m06.mjs';
+import { createOcrFromEnv, extractionCandidates } from './ocr.mjs';
 import {
   ASSET_ROLES, LIMITS, activeAssets, computeReadiness, sha256,
   truthContentHash, validateFilename, validateProjectInput, validateRole, validateTruthInput,
@@ -72,6 +74,8 @@ export function createApi({
   unknownReconcileMs = null,
   // M06：Provider 可注入（测试或宿主自建 Adapter）；不注入时按环境变量选择，默认 mock
   provider: injectedProvider = null,
+  // R04：OCR 可注入；不注入时按环境变量判断是否已配置
+  ocr: injectedOcr = null,
   providerOptions = {},
   // M12：支付 Provider 默认未配置；只有宿主显式注入真实能力时才允许真实收款
   paymentProvider = null,
@@ -102,6 +106,8 @@ export function createApi({
   const jobs = createJobs({
     store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, revisionMaxRounds,
     providerMaxConcurrency, tenantMaxConcurrency, unknownReconcileMs,
+    // R04：注入 OCR 时才会对成品做真实文字核对，否则文字项保持 unknown
+    ocr: injectedOcr ?? createOcrFromEnv(process.env),
   });
   // M12：进程内指标只保留聚合计数，不记录请求体、素材或提示词
   const metrics = { total: 0, by_status: {}, errors: 0, by_error: {} };
@@ -129,9 +135,9 @@ export function createApi({
   return publish;
 
   async function publish(req, res, route, send) {
-    const tracked = (status, body, type) => {
+    const tracked = (status, body, type, extraHeaders) => {
       recordMetric(status, body);
-      return send(status, body, type);
+      return send(status, body, type, extraHeaders);
     };
     try {
       await dispatch(req, res, route, tracked);
@@ -462,6 +468,18 @@ export function createApi({
     if (rest.length === 5 && section === 'assets' && rest[4] === 'content') {
       requireMethod(method, ['GET', 'HEAD']);
       return sendAssetContent(ctx, projectId, third, send);
+    }
+    if (rest.length === 5 && section === 'assets' && rest[4] === 'mask-preview') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return sendSubjectMaskPreview(ctx, projectId, third, query, send);
+    }
+    if (rest.length === 5 && section === 'assets' && rest[4] === 'subject-box') {
+      requireMethod(method, ['PUT', 'PATCH']);
+      return updateAssetSubjectBox(ctx, req, projectId, third, send);
+    }
+    if (rest.length === 5 && section === 'assets' && rest[4] === 'fact-extraction') {
+      requireMethod(method, ['POST']);
+      return extractAssetFacts(ctx, req, projectId, third, send);
     }
     if (rest.length === 3 && section === 'detail-pages') {
       if (method === 'POST') return createDetailPage(ctx, req, projectId, send);
@@ -1056,6 +1074,116 @@ export function createApi({
     const blob = await store.readBlob(asset.sha256, asset.ext);
     if (!blob) throw new ApiError(410, 'CONTENT_MISSING', '素材文件已不可用，请重新上传');
     send(200, blob, asset.mime);
+  }
+
+  /** R04：主体掩码预览。PNG 自动推导；JPEG/WebP 需要卖家确认的矩形，未给矩形时明确说明。 */
+  async function sendSubjectMaskPreview(ctx, projectId, assetId, query, send) {
+    const { asset, bytes } = await store.read(async data => {
+      const project = findProject(data, ctx, projectId);
+      const item = data.assets[assetId];
+      if (!item || item.project_id !== project.id || item.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '素材不存在');
+      }
+      if (item.role !== 'subject') {
+        throw new ApiError(422, 'NOT_SUBJECT_ASSET', '只有主体素材可以生成掩码预览');
+      }
+      return { asset: item, bytes: await store.readBlob(item.sha256, item.ext) };
+    });
+    if (!bytes) throw new ApiError(410, 'CONTENT_MISSING', '素材文件已不可用，请重新上传');
+    const box = query?.get('x') !== null && query?.get('x') !== undefined
+      ? {
+        x: Number(query.get('x')), y: Number(query.get('y')),
+        width: Number(query.get('width')), height: Number(query.get('height')),
+      }
+      : asset.subject_box ?? null;
+    const mask = createSubjectMask({ bytes, mime: asset.mime, box });
+    if (!mask.available) {
+      throw new ApiError(422, mask.reason ?? 'MASK_UNAVAILABLE', mask.message ?? '无法生成主体掩码', {
+        method: mask.method ?? null,
+        accepted_formats: ['image/png', 'image/jpeg', 'image/webp（需确认商品矩形）'],
+      });
+    }
+    send(200, mask.maskBytes, 'image/png', {
+      'X-Mask-Method': mask.method,
+      'X-Mask-Coverage': String(mask.coverage),
+      'X-Mask-Has-Cutout': mask.has_cutout === false ? 'false' : 'true',
+    });
+  }
+
+  /** R04：卖家调整商品矩形。只存归一化坐标，不修改原始素材像素。 */
+  async function updateAssetSubjectBox(ctx, req, projectId, assetId, send) {
+    const body = await readJson(req);
+    const box = normalizeSubjectBox(body?.subject_box ?? body);
+    if (!box) {
+      throw new ApiError(422, 'INVALID_SUBJECT_BOX', '商品矩形需为 0—1 的归一化坐标，且宽高不小于画布 2%');
+    }
+    const updated = await store.mutate(data => {
+      const project = findProject(data, ctx, projectId);
+      const asset = data.assets[assetId];
+      if (!asset || asset.project_id !== project.id || asset.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '素材不存在');
+      }
+      if (asset.role !== 'subject') throw new ApiError(422, 'NOT_SUBJECT_ASSET', '只有主体素材可以设置商品矩形');
+      if (asset.role_status !== 'active') throw new ApiError(409, 'ASSET_INACTIVE', '该素材已被替代，不能继续调整');
+      asset.subject_box = box;
+      asset.subject_box_updated_at = now();
+      asset.subject_box_updated_by = ctx.actorId;
+      project.updated_at = now();
+      return serializeAsset(asset, project.id);
+    });
+    send(200, { asset: updated });
+  }
+
+  /**
+   * R04：从素材提取候选事实。结果只是"候选"，一律 confirmed=false 交给用户逐项确认；
+   * 未配置 OCR 时返回 configured=false 且不给任何候选，绝不用样例数据冒充识别。
+   */
+  async function extractAssetFacts(ctx, req, projectId, assetId, send) {
+    await readJson(req).catch(() => ({}));
+    const { asset, bytes } = await store.read(async data => {
+      const project = findProject(data, ctx, projectId);
+      const item = data.assets[assetId];
+      if (!item || item.project_id !== project.id || item.tenant_id !== ctx.tenantId) {
+        throw new ApiError(404, 'NOT_FOUND', '素材不存在');
+      }
+      if (item.role === 'style') {
+        throw new ApiError(422, 'STYLE_NOT_FACT_SOURCE', '风格图不作为商品事实来源');
+      }
+      if (item.role_status !== 'active') throw new ApiError(409, 'ASSET_INACTIVE', '该素材已被替换');
+      return { asset: item, bytes: await store.readBlob(item.sha256, item.ext) };
+    });
+    if (!bytes) throw new ApiError(410, 'CONTENT_MISSING', '素材文件已不可用，请重新上传');
+    const ocr = injectedOcr ?? createOcrFromEnv(process.env);
+    if (!ocr.configured) {
+      send(200, {
+        configured: false,
+        mode: ocr.mode,
+        note: ocr.note,
+        candidates: [],
+        asset_id: asset.id,
+        acceptance: 'not_available',
+      });
+      return;
+    }
+    const result = await ocr.recognize({
+      bytes, mime: asset.mime,
+    });
+    const candidates = result.status === 'ok'
+      ? extractionCandidates({ lines: result.lines, assetId: asset.id })
+      : [];
+    send(200, {
+      configured: true,
+      mode: ocr.mode,
+      acceptance: ocr.acceptance,
+      note: ocr.acceptance === 'contract_only'
+        ? 'OCR 已配置但识别准确率尚未用授权样本验收；候选值需逐项确认'
+        : ocr.note,
+      status: result.status,
+      reason: result.reason ?? null,
+      engine: result.engine ?? null,
+      asset_id: asset.id,
+      candidates,
+    });
   }
 
   async function createTruthVersion(ctx, req, projectId, send) {
@@ -3551,6 +3679,8 @@ function serializeAsset(asset, projectId) {
     height: asset.height,
     warnings: asset.warnings,
     source: asset.source,
+    // R04：卖家确认的商品矩形（归一化坐标），仅用于生成主体掩码，不改动原始像素
+    subject_box: asset.subject_box ?? null,
     created_at: asset.created_at,
     created_by: asset.created_by,
     superseded_by: asset.superseded_by,

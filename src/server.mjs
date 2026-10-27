@@ -6,7 +6,7 @@ import { LOOPBACK_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
 
-export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.14.0', module: 'R03' });
+export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.15.0', module: 'R04' });
 export const STATIC_FILES = Object.freeze([
   'index.html', 'app.js', 'api.js', 'auth.js', 'real-data.js', 'm04.js', 'm05.js', 'style.css', 'm03.css', 'm04.css', 'm05.css', 'viewport.css', 'icon.svg', 'architecture.svg',
   'data/demo.json', 'assets/demo/image-01.jpg', 'assets/demo/image-02.jpg', 'assets/demo/image-03.jpg',
@@ -67,6 +67,7 @@ export function createApp({
   allowScenarioInjection = false,
   revisionMaxRounds = 3,
   provider = null,
+  ocr = null,
   providerOptions = {},
   paymentProvider = null,
   demoMode = process.env.NODE_ENV !== 'production',
@@ -83,7 +84,7 @@ export function createApp({
     store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock,
     initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection, revisionMaxRounds,
     providerMaxConcurrency, tenantMaxConcurrency, unknownReconcileMs,
-    provider, providerOptions, paymentProvider,
+    provider, ocr, providerOptions, paymentProvider,
     demoMode, sessionTtlMs, secureCookies, emailRecoveryConfigured,
   });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
@@ -94,9 +95,11 @@ export function createApp({
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    const send = (status, body, type = 'application/json; charset=utf-8') => {
+    const send = (status, body, type = 'application/json; charset=utf-8', extraHeaders = null) => {
       const bytes = Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
-      res.writeHead(status, { 'Content-Type': type, 'Content-Length': bytes.length });
+      res.writeHead(status, {
+        'Content-Type': type, 'Content-Length': bytes.length, ...(extraHeaders ?? {}),
+      });
       res.end(req.method === 'HEAD' ? undefined : bytes);
     };
     const handle = async () => {

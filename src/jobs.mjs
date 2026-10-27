@@ -35,6 +35,9 @@ import {
 import {
   buildJointManifest, checkDetailPageValidity, evaluateVideoFrames, planPlatformDelivery, planVideo,
 } from './m10.mjs';
+import {
+  buildOverlaySvg, compileExecutionPlan, compileRevisionInstruction, executionForDeliverable,
+} from './execution.mjs';
 
 export const RUN_SCHEMA_VERSION = 1;
 export const EVENT_SCHEMA_VERSION = 1;
@@ -83,6 +86,8 @@ function pushEvent(data, run, { stage, status, payload = {}, attemptId = null, i
 export function createJobs({
   store,
   provider,
+  // R04：OCR 适配器由宿主注入；未注入即"未配置"，文字检查保持 unknown
+  ocr: ocrAdapter = null,
   clock = () => new Date(),
   initialCredits = 0,
   attemptTimeoutMs = 30_000,
@@ -160,10 +165,10 @@ export function createJobs({
         mask_ref: capabilities.simulated === true ? 'mask:simulated:SUBJECT_BLOB_MISSING' : null,
       };
     }
-    const mask = createSubjectMask({ bytes: subjectBytes, mime: subject.mime });
+    const mask = createSubjectMask({ bytes: subjectBytes, mime: subject.mime, box: subject.subject_box ?? null });
     const plan = buildReferencePlan({
       subjectAsset: subject, packagingAsset: packaging, styleAssets: styles,
-      cutoutSha256: mask.available ? mask.cutout_sha256 : null, maxReferences,
+      cutoutSha256: mask.available && mask.cutout_sha256 ? mask.cutout_sha256 : null, maxReferences,
     });
     if (!mask.available) {
       return {
@@ -178,7 +183,9 @@ export function createJobs({
     }
 
     const maskFile = await store.putBlob(mask.maskBytes, mask.sha256, 'png');
-    const cutoutFile = await store.putBlob(mask.cutoutBytes, mask.cutout_sha256, 'png');
+    const cutoutFile = mask.cutoutBytes
+      ? await store.putBlob(mask.cutoutBytes, mask.cutout_sha256, 'png')
+      : null;
 
     // 参考图按职责顺序转成 data URI；只有 sent_to_provider 的才编码，去背图永远不发送
     const referenceImages = [];
@@ -255,6 +262,21 @@ export function createJobs({
 
     // data URI 只在内存里保留给本轮提交使用，不进持久化
     referenceCache.set(run.id, subjectContext.reference_images ?? []);
+    // R04：把冻结快照编译成执行计划。配置若没进入请求，生成结果就无法解释，
+    // 因此计划与请求哈希都绑定这份编译结果，而不是复制一句静态提示词。
+    const compileInputs = await store.read(data => ({
+      truth: Object.values(data.truth_versions ?? {}).find(item =>
+        item.tenant_id === ctx.tenantId && item.project_id === project.id
+        && item.version === spec.product_truth?.version) ?? null,
+      brandKitVersion: spec.brand_kit
+        ? Object.values(data.brand_kit_versions ?? {}).find(item =>
+          item.tenant_id === ctx.tenantId && item.brand_kit_id === spec.brand_kit.id
+          && item.version === spec.brand_kit.version) ?? null
+        : null,
+    }));
+    const executionPlan = compileExecutionPlan({
+      project, spec, truth: compileInputs.truth, brandKitVersion: compileInputs.brandKitVersion,
+    });
     const created = await store.mutate(data => {
       const duplicated = Object.values(data.runs ?? {})
         .find(item => item.tenant_id === ctx.tenantId && item.idempotency_key === idempotencyKey);
@@ -329,6 +351,13 @@ export function createJobs({
         },
         provider_validation: validation,
         scenario,
+        // R04：执行计划随任务冻结，导出文字层、复核与重放都以它为准
+        execution: {
+          version: executionPlan.version,
+          content_hash: executionPlan.content_hash,
+          text_policy: executionPlan.text_policy,
+          plan: executionPlan,
+        },
         deliverables: quote.lines.flatMap(line => {
           const detail = specDeliverables.get(line.deliverable_id) ?? null;
           // R02：交付数量必须展开成可单独追踪的图片项，报价、生成、检查、导出核对同一张数。
@@ -352,9 +381,19 @@ export function createJobs({
               height: detail?.height ?? 1024,
               ratio: detail?.ratio ?? null,
               formats: Array.isArray(detail?.formats) ? [...detail.formats] : ['png'],
-              prompt: units === 1
-                ? `生成「${line.label}」；商品主体必须与参考图完全一致，不得改变形状、文字、Logo 与颜色。`
-                : `生成「${line.label}」的第 ${unit}/${units} 张；商品主体必须与参考图完全一致，不得改变形状、文字、Logo 与颜色，并与同组其他图片保持一致的风格。`,
+              // R04：提示词来自编译结果（事实、品牌、构图、平台、文字层），不是静态模板
+              prompt: (() => {
+                const compiled = executionForDeliverable(executionPlan, { deliverableId: line.deliverable_id });
+                const base = compiled?.prompt ?? `生成「${line.label}」；商品主体必须与参考图完全一致，不得改变形状、文字、Logo 与颜色。`;
+                return units === 1
+                  ? base
+                  : `${base}\n【同组一致】这是第 ${unit}/${units} 张，必须与同组其他图片保持一致的风格、光线与构图语言。`;
+              })(),
+              execution_ref: {
+                version: executionPlan.version,
+                content_hash: executionPlan.content_hash,
+                template_deliverable_id: line.deliverable_id,
+              },
               status: 'pending',
               attempts_used: 0,
               succeeded_attempt_id: null,
@@ -949,6 +988,16 @@ export function createJobs({
       ? await store.readBlob(run.subject_context.mask_sha256, 'png') : null;
     const cutoutBytes = run.subject_context?.cutout_sha256
       ? await store.readBlob(run.subject_context.cutout_sha256, 'png') : null;
+    // R04：OCR 已配置时对成品做真实文字核对；未配置则为 unknown，不伪造识别结果。
+    // OCR 失败不能阻断交付流程本身，只能把该项标记为 unknown 等待人工复核。
+    let ocr = null;
+    if ((truth?.critical_text ?? []).length > 0 && ocrAdapter) {
+      try {
+        ocr = await ocrAdapter.recognize({ bytes: outputBytes, mime: ext === 'jpg' ? 'image/jpeg' : `image/${ext}` });
+      } catch (error) {
+        ocr = { status: 'error', reason: error?.message ?? 'OCR_CALL_FAILED', lines: [] };
+      }
+    }
     let report;
     try {
       report = evaluateGenerationQuality({
@@ -962,6 +1011,7 @@ export function createJobs({
         },
         subject: { maskBytes, cutoutBytes, composite },
         assets: activeAssetsOf(data, run),
+        ocr,
         now: at,
       });
     } catch (error) {
@@ -1088,6 +1138,8 @@ export function createJobs({
           run_id: run.id, deliverable_id: target.deliverable_id, iteration,
           spec_content_hash: run.spec_ref.content_hash,
           width: target.width, height: target.height,
+          // R04：执行计划哈希进入请求哈希，配置变化必须产生不同请求
+          execution_hash: run.execution?.content_hash ?? null,
         }),
         idempotency_key: `sub:${run.id}:${target.deliverable_id}:${iteration}`,
         deliverable_id: target.deliverable_id,
@@ -1096,6 +1148,18 @@ export function createJobs({
         target_height: target.height,
         formats: [...target.formats],
         prompt: target.prompt,
+        // R04：结构化执行指令与文字层一起下发，Provider 可按能力使用或拒绝
+        execution: (() => {
+          const compiled = executionForDeliverable(run.execution?.plan, { deliverableId: target.deliverable_id });
+          return compiled
+            ? {
+              version: run.execution.version,
+              content_hash: run.execution.content_hash,
+              instruction: compiled,
+              text_policy: run.execution.text_policy,
+            }
+            : null;
+        })(),
         references: sentReferenceCount,
         reference_plan: run.subject_context?.references ?? [],
         reference_images: referenceImages,
@@ -1305,12 +1369,18 @@ export function createJobs({
       const capabilities = provider.capabilities();
       const sentReferenceCount = run.subject_context?.references
         ?.filter(item => item.sent_to_provider !== false).length ?? 0;
+      // R04：修订指令具体到错误码与必须保留项；Provider 拿到的是可执行的修订要求，不是"再试一次"
+      const revisionInstruction = compileRevisionInstruction({
+        actions: plan.actions, preserveChecks: plan.preserve_checks, round: revision.round + 1,
+      });
       const request = {
         request_hash: sha({
           run_id: run.id, deliverable_id: target.deliverable_id, iteration,
           spec_content_hash: run.spec_ref.content_hash,
           width: target.width, height: target.height,
+          execution_hash: run.execution?.content_hash ?? null,
           revision_round: revision.round, revision_action: plan.actions[0].code,
+          revision_instruction_hash: revisionInstruction.hash,
         }),
         idempotency_key: `sub:${run.id}:${target.deliverable_id}:${iteration}`,
         deliverable_id: target.deliverable_id,
@@ -1336,6 +1406,7 @@ export function createJobs({
           preserve_checks: plan.preserve_checks,
           based_on_report_id: report.id,
           based_on_version_id: version.id,
+          instruction: revisionInstruction,
         },
       };
       const validation = provider.validate(request);
@@ -2004,6 +2075,11 @@ export function createJobs({
 
       const at = clock();
       const manifest = buildManifest({ run, spec, plan, provider: provider.capabilities(), now: at });
+      // R04：文字与 Logo 用可编辑排版层交付；生成图不负责绘制精确文字
+      manifest.text_policy = run.execution?.text_policy ?? null;
+      manifest.execution = run.execution
+        ? { version: run.execution.version, content_hash: run.execution.content_hash }
+        : null;
       const summary = buildQaSummary({ run, plan, now: at });
       const entries = [];
       for (const { version, deliverable } of plan.included) {
@@ -2012,6 +2088,22 @@ export function createJobs({
           throw new ApiError(409, 'EXPORT_FILE_MISSING', `交付物 ${deliverable.deliverable_id} 的文件已不可读取`);
         }
         entries.push({ name: `images/${deliverable.deliverable_id}.${version.format ?? 'png'}`, bytes });
+        const compiled = executionForDeliverable(run.execution?.plan, { deliverableId: deliverable.deliverable_id });
+        const layers = compiled?.text_layers ?? [];
+        const manifestEntry = manifest.assets.find(item => item.deliverable_id === deliverable.deliverable_id);
+        if (manifestEntry) {
+          manifestEntry.text_layers = layers;
+          manifestEntry.missing_text = compiled?.missing_text ?? [];
+        }
+        if (layers.length > 0) {
+          const mime = version.format === 'jpg' ? 'image/jpeg' : `image/${version.format ?? 'png'}`;
+          const svg = buildOverlaySvg({
+            width: version.width, height: version.height, mime, bytes,
+            layers, title: deliverable.label ?? deliverable.deliverable_id,
+          });
+          entries.push({ name: `overlays/${deliverable.deliverable_id}.svg`, bytes: Buffer.from(svg) });
+          if (manifestEntry) manifestEntry.overlay_file = `overlays/${deliverable.deliverable_id}.svg`;
+        }
       }
       entries.push({ name: 'manifest.json', bytes: Buffer.from(JSON.stringify(manifest, null, 2)) });
       entries.push({ name: 'qa-summary.json', bytes: Buffer.from(JSON.stringify(summary, null, 2)) });
