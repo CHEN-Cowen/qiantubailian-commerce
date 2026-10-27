@@ -64,10 +64,66 @@ async function refresh() {
     state.projects = payload.projects;
     renderProjects();
     renderUploadOptions();
+    renderHomeRealProjects();
   } catch (error) {
     state.projects = [];
     if (list) list.innerHTML = `<p class="real-empty real-error">${escapeHtml(errorText(error))}</p>`;
   }
+}
+
+// R06：首页"继续制作"区块的真实项目列表；当有项目时隐藏 demo
+function renderHomeRealProjects() {
+  const holder = $('#home-real-projects');
+  const demo = $('#home-demo-projects');
+  if (!holder) return;
+  const projects = state.projects ?? [];
+  if (projects.length === 0) {
+    holder.innerHTML = '<p class="real-empty">还没有真实项目。点击「新建商品项目」开始你的第一个商品。</p>';
+    if (demo) demo.hidden = false; // 展示 demo 作为示例
+    return;
+  }
+  if (demo) demo.hidden = true;
+  // 取最多 3 个最近更新的项目
+  const recent = [...projects]
+    .sort((a, b) => String(b.updated_at ?? b.created_at).localeCompare(String(a.updated_at ?? a.created_at)))
+    .slice(0, 3);
+  holder.innerHTML = `<div class="project-list">${recent.map(project => {
+    const readiness = project.readiness ?? { can_start_production: false };
+    const ready = readiness.can_start_production;
+    const statusText = ready ? '可开始生产' : `阻断 ${readiness.blocker_count ?? 1} 项`;
+    const statusClass = ready ? 'status-pill green' : 'status-pill amber';
+    return `<article class="project-card" data-project-id="${escapeHtml(project.id)}">
+      <div class="project-cover real-cover"><div class="cover-product">${escapeHtml(project.name.slice(0, 2))}</div></div>
+      <div class="project-info">
+        <div class="project-line">
+          <h3>${escapeHtml(project.name)}</h3>
+          <span class="${statusClass}">${escapeHtml(statusText)}</span>
+        </div>
+        <p>${escapeHtml(project.category)}${project.platform ? ` · ${escapeHtml(project.platform)}` : ''} · 生效素材 ${project.active_asset_count ?? 0} · 事实 v${project.truth_head_version ?? 0}</p>
+        <div class="project-foot">
+          <button class="text-button" data-action="truth">商品事实</button>
+          <button class="text-button" data-action="spec">生产配置</button>
+          <button class="text-button" data-action="workbench">打开工作台 →</button>
+        </div>
+      </div>
+    </article>`;
+  }).join('')}</div>`;
+  // home-real-projects 里的 data-action=workbench/truth/spec 复用 onRealListClick 已经监听的 data-action 机制——
+  // 但项目卡片上没带 data-project-id，补一下
+  holder.querySelectorAll('[data-project-id]').forEach(card => {
+    card.addEventListener('click', event => {
+      const trigger = event.target.closest('[data-action]');
+      if (!trigger) {
+        // 点击整张卡片 → 打开工作台
+        window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: card.dataset.projectId } }));
+        return;
+      }
+      const action = trigger.dataset.action;
+      if (action === 'workbench') window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: card.dataset.projectId } }));
+      if (action === 'spec') window.dispatchEvent(new CustomEvent('qb:open-spec', { detail: { projectId: card.dataset.projectId } }));
+      if (action === 'truth') void openTruthDialog(card.dataset.projectId);
+    });
+  });
 }
 
 function renderProjects() {

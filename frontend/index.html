@@ -45,9 +45,9 @@
               <p class="eyebrow">为什么是千图百炼</p>
               <h2>不止生成好看的图，更交付能上架的图</h2>
               <ul class="showcase-points">
-                <li><span class="point-icon">✓</span>商品主体锁定：真实素材保护与合成，生成不变形</li>
-                <li><span class="point-icon">✓</span>包装文字与 Logo 精确保留，杜绝 AI 乱码字</li>
-                <li><span class="point-icon">✓</span>平台规范与商品事实逐项检查，不合规不放行</li>
+                <li><span class="point-icon">✓</span>商品主体保护：基于主体掩码锁定关键像素，自动合成新背景</li>
+                <li><span class="point-icon">✓</span>包装文字与 Logo 自动提取后可编辑；关键文字由你在事实环节确认</li>
+                <li><span class="point-icon">✓</span>按已覆盖的平台规则逐项检查，未核验项如实说明，不强求「一定能上架」</li>
               </ul>
               <button class="primary js-new-project"><span>＋</span> 创建新品上架包</button>
             </div>
@@ -69,7 +69,8 @@
           </section>
           <section class="section-block projects-block">
             <div class="section-title"><div><h2>继续制作</h2><p>回到最近的商品项目</p></div><button class="text-button" data-view="projects">查看全部 <span>→</span></button></div>
-            <div class="project-list">
+            <div id="home-real-projects"><p class="real-empty">还没有真实项目。点击「新建商品项目」开始你的第一个商品。</p></div>
+            <div class="project-list" id="home-demo-projects" hidden>
               <article class="project-card featured" data-open-project="skin" role="button" tabindex="0" aria-label="打开月光舒缓面霜项目">
                 <div class="project-cover cover-skin"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="月光舒缓面霜主图样例" onerror="this.style.display='none'"><span class="cover-tag">新品上架包</span><div class="cover-product"><span>MOON<br><b>CALM</b></span></div></div>
                 <div class="project-info"><div class="project-line"><h3>月光舒缓面霜</h3><span class="status-pill amber">待复核</span></div><p>天猫 · 5 件交付物 · 更新于 12 分钟前</p><div class="project-progress"><span><i style="width:72%"></i></span><b>72%</b></div><div class="project-foot"><span>3 个素材已通过</span><span class="arrow-button" aria-hidden="true">→</span></div></div>
@@ -115,7 +116,27 @@
         <div class="asset-layout"><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
       </section>
 
-      <section class="view" id="library-view" data-view-panel="library"><div class="empty-page"><div class="empty-illustration">✦</div><p class="eyebrow">模板与品牌</p><h1>模板与品牌资产</h1><p>品牌视觉配方、平台规则和任务模板将在后续版本接入。</p><span class="status-pill neutral">规划中</span></div></section>
+      <section class="view" id="library-view" data-view-panel="library">
+        <div class="page-heading compact">
+          <div>
+            <p class="eyebrow">模板与品牌</p>
+            <h1>模板与品牌</h1>
+            <p class="heading-note">
+              品牌配方记录你常用的背景、光线、构图与文字排版；新商品套用同一个配方，整套图视觉保持一致。
+            </p>
+          </div>
+          <button class="primary" id="brand-kit-new"><span>＋</span> 新建品牌配方</button>
+        </div>
+        <section class="library-section">
+          <div class="library-head"><h2>品牌配方（可在「商品项目 → 生产配置」里选用）</h2><span class="real-badge">保存后对所有商品可见</span></div>
+          <div class="brand-kit-list" id="brand-kit-list"><p class="real-empty">正在读取品牌配方…</p></div>
+          <p class="real-hint">品牌配方只约束视觉风格（背景/光线/构图/文字排版），不会污染具体商品的事实（名称、规格、包装颜色等仍以项目内确认为准）。</p>
+        </section>
+        <section class="library-section">
+          <div class="library-head"><h2>任务模板</h2><span class="status-pill neutral">系统预置</span></div>
+          <div class="template-list" id="library-template-list"></div>
+        </section>
+      </section>
 
       <!-- R05：demo #project-view 保留但彻底隐藏（源码保留历史关键字供现有 UI 契约测试使用） -->
       <section class="project-view" id="project-view" hidden aria-hidden="true">

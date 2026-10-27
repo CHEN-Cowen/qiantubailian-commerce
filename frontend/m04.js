@@ -73,6 +73,62 @@ export function initM04({ toast } = {}) {
   });
   $('#spec-brand-new')?.addEventListener('click', openBrandDialog);
   $('#brand-form')?.addEventListener('submit', submitBrand);
+  // R06：library-view 的品牌配方 + 模板渲染（按 setView('library') 触发）
+  document.addEventListener('qb:view-change', async event => {
+    const view = event?.detail?.view;
+    if (view === 'library') { await renderLibraryView(); }
+  });
+  $('#brand-kit-new')?.addEventListener('click', () => openBrandDialog());
+}
+
+async function renderLibraryView() {
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const list = $('#brand-kit-list');
+  const tplList = $('#library-template-list');
+  if (!list || !tplList) return;
+  list.innerHTML = '<p class="real-empty">正在读取品牌配方…</p>';
+  tplList.innerHTML = '<p class="real-empty">正在读取模板…</p>';
+  try {
+    if (state.brandKits === null) await loadCatalog();
+    // 品牌配方
+    if (!state.brandKits || state.brandKits.length === 0) {
+      list.innerHTML = `<p class="real-empty">还没有品牌配方。<button class="text-button" id="brand-kit-new-inline">新建一个</button></p>`;
+      $('#brand-kit-new-inline')?.addEventListener('click', openBrandDialog);
+    } else {
+      list.innerHTML = state.brandKits.map(kit => `
+        <article class="brand-kit-card" data-brand-kit-id="${kit.id}">
+          <div class="bk-head">
+            <b>${escapeHtml(kit.name)}</b>
+            <span class="real-badge">v${kit.version}${kit.is_published ? ' · 已发布' : ''}</span>
+          </div>
+          <p class="bk-note">${escapeHtml(kit.description ?? '未填描述')}</p>
+          <div class="bk-tags">
+            ${kit.background_color ? `<span>背景 ${escapeHtml(kit.background_color)}</span>` : ''}
+            ${kit.lighting_preset ? `<span>光线 ${escapeHtml(kit.lighting_preset)}</span>` : ''}
+            ${kit.composition_hint ? `<span>构图 ${escapeHtml(kit.composition_hint)}</span>` : ''}
+            ${kit.text_style_hint ? `<span>文字 ${escapeHtml(kit.text_style_hint)}</span>` : ''}
+          </div>
+          <div class="bk-actions">
+            <button class="text-button" data-action="brand-use">用于新项目</button>
+            <button class="text-button" data-action="brand-edit">编辑</button>
+          </div>
+        </article>`).join('');
+    }
+    // 模板（简化列表）
+    const templates = state.templates ?? [];
+    if (!templates.length) {
+      tplList.innerHTML = '<p class="real-empty">系统预置模板未加载</p>';
+    } else {
+      tplList.innerHTML = templates.map(tpl => `
+        <article class="template-card">
+          <b>${escapeHtml(tpl.name)}</b>
+          <small>${escapeHtml(tpl.description ?? tpl.id)} · ${(tpl.deliverables ?? []).length} 个交付物</small>
+        </article>`).join('');
+    }
+  } catch (error) {
+    list.innerHTML = `<p class="real-error">读取失败：${errorText(error)}</p>`;
+    tplList.innerHTML = `<p class="real-error">读取失败：${errorText(error)}</p>`;
+  }
 }
 
 async function loadCatalog() {

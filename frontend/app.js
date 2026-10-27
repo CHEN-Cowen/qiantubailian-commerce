@@ -24,6 +24,8 @@ function setView(view) {
   $('#project-view').classList.remove('active');
   if (location.hash !== '#' + view) location.hash = view;
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  // R06：派发 view-change 事件，让模块（m04/workbench 等）收到视图切换通知
+  window.dispatchEvent(new CustomEvent('qb:view-change', { detail: { view } }));
 }
 
 function openProject(project = 'skin') {
