@@ -18,7 +18,7 @@ import { randomBytes } from 'node:crypto';
 import { ApiError } from './errors.mjs';
 
 export const LEDGER_TYPES = Object.freeze([
-  'grant', 'reserve', 'capture', 'release', 'refund', 'expire',
+  'grant', 'reserve', 'capture', 'release', 'refund', 'expire', 'revoke',
 ]);
 
 const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
@@ -368,6 +368,16 @@ export function appendEntry(data, {
     delta.available = amount;
   }
 
+  if (type === 'revoke') {
+    // 订单退款回收：从"可用额度"中扣除用户买了但没用的部分，不影响已使用（consumed）额度。
+    // 已使用额度对应的商品已交付，无法回收；可退额度由调用方按订单批次可用量计算。
+    if (account.available < amount) {
+      throw new ApiError(409, 'REVOKE_INSUFFICIENT',
+        `可用额度 ${account.available}，无法回收 ${amount}`, { available: account.available, requested: amount });
+    }
+    delta.available = -amount;
+  }
+
   if (type === 'expire') {
     if (account.available < amount) {
       throw new Error('可用额度不足，无法过期回收');
@@ -534,4 +544,17 @@ export function grantExperienceCredits(data, {
 
 export function isLedgerType(value) {
   return LEDGER_TYPES.includes(value);
+}
+
+/**
+ * R09 订单退款：按 source_order_id 找该订单发放的批次，计算可回收（可用）额度。
+ * 已使用（consumed）和已预留（reserved）的部分不能回收——已交付商品和在途任务对应的额度
+ * 不属于"可退"范围。
+ * @returns {number} 该订单批次可用额度总和
+ */
+export function refundableCreditsForOrder(data, tenantId, orderId) {
+  ensureTables(data);
+  return Object.values(data.credit_lots ?? {})
+    .filter(lot => lot.tenant_id === tenantId && lot.source_order_id === orderId)
+    .reduce((sum, lot) => sum + lotAvailable(lot), 0);
 }

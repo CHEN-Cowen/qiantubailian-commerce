@@ -52,7 +52,7 @@ function listAllPlans() {
   const commercial = _listCommercePlans();
   return commercial;
 }
-import { appendEntry, balanceOf, grantExperienceCredits, ledgerEntries, sweepExpiredLots } from './credits.mjs';
+import { appendEntry, balanceOf, grantExperienceCredits, ledgerEntries, refundableCreditsForOrder, sweepExpiredLots } from './credits.mjs';
 import { RETRYABLE_CODES } from './provider.mjs';
 import { createProviderFromEnv } from './providers/index.mjs';
 import { createJobs, ACTIVE_STATES, TERMINAL_STATES } from './jobs.mjs';
@@ -3389,6 +3389,7 @@ export function createApi({
           uniqueOperationKey: `billing-order:${item.id}`,
           memo: `免单套餐开通额度（${item.plan_snapshot.name}）`,
           actor: ctx.actorId, initialCredits, at: clock(),
+          lot: { order_id: item.id },
         });
         item.status = 'settled_real';
         item.settled_at = new Date(clock()).toISOString();
@@ -3429,6 +3430,7 @@ export function createApi({
             uniqueOperationKey: `billing-order:${item.id}`,
             memo: `免单套餐开通额度（${item.plan_snapshot.name}）`,
             actor: ctx.actorId, initialCredits, at: clock(),
+            lot: { order_id: item.id },
           });
           item.status = 'settled_real';
           item.settled_at = new Date(clock()).toISOString();
@@ -3486,6 +3488,7 @@ export function createApi({
         uniqueOperationKey: `billing-order:${order.id}`,
         memo: '演示套餐开通额度（内部演示，不代表真实权益）',
         actor: ctx.actorId, initialCredits, at: clock(),
+        lot: { order_id: order.id },
       });
       order.status = 'settled_demo';
       order.settled_at = new Date(clock()).toISOString();
@@ -3507,24 +3510,132 @@ export function createApi({
 
   async function refundBillingOrderRoute(ctx, orderId, req, send) {
     await requireAction(ctx, 'billing:manage');
-    await readJson(req).catch(() => ({}));
+    const body = await readJson(req).catch(() => ({}));
+    // 先读订单：演示订单直接拦截，不暴露系统退款能力状态
+    const orderExists = await store.read(data => {
+      const o = data.billing_orders?.[orderId] ?? null;
+      if (!o || o.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
+      return o;
+    });
+    if (orderExists.real_money !== true) {
+      throw new ApiError(409, 'ORDER_NOT_REAL_MONEY', '演示订单不涉及真实收款，不能发起真实退款');
+    }
     const capability = evaluatePaymentCapability({ provider: paymentProvider });
     if (!capability.can_refund) {
       throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_REFUND_UNSUPPORTED',
         capability.blockers[0]?.message ?? '当前不具备退款条件', { payment: capability });
     }
-    const order = await store.read(data => {
-      const item = data.billing_orders?.[orderId] ?? null;
-      if (!item || item.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
-      return item;
+    const provider = paymentProvider;
+    if (!provider?.refund) {
+      throw new ApiError(501, 'PAYMENT_REFUND_UNIMPLEMENTED', '支付 Provider 未实现退款');
+    }
+    // 先读订单 + 计算可退额度（在 mutate 里原子执行，避免并发竞态）
+    const result = await store.mutate(async data => {
+      const order = data.billing_orders?.[orderId] ?? null;
+      if (!order || order.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
+      if (order.real_money !== true) {
+        throw new ApiError(409, 'ORDER_NOT_REAL_MONEY', '演示订单不涉及真实收款，不能发起真实退款');
+      }
+      // 已退款订单优先拦截（status 可能为 refunded，不经过 settled_real 检查）
+      if (order.refund_status === 'success' || order.status === 'refunded') {
+        throw new ApiError(409, 'ORDER_ALREADY_REFUNDED', '订单已退款，不能重复退款');
+      }
+      if (order.status !== 'settled_real') {
+        throw new ApiError(409, 'ORDER_NOT_SETTLED', `订单尚未到账（当前 ${order.status}），不能退款`);
+      }
+      // 可退额度 = 该订单发放批次的可用量（已用/已预留不可退）
+      const refundableCredits = refundableCreditsForOrder(data, ctx.tenantId, orderId);
+      if (refundableCredits <= 0) {
+        throw new ApiError(409, 'NO_REFUNDABLE_CREDITS', '该订单额度已全部使用，无可退额度');
+      }
+      // 退款金额按"可退额度 / 订单总额度 * 订单金额"比例计算，不能超过订单金额
+      const refundAmountCents = Math.min(
+        order.price_cents,
+        Math.round(order.price_cents * (refundableCredits / order.credits)),
+      );
+      if (refundAmountCents <= 0) {
+        throw new ApiError(409, 'REFUND_AMOUNT_ZERO', '可退金额为 0，无需退款');
+      }
+      // 退款单号：同一订单固定，重试复用（幂等）
+      const outRefundNo = order.refund_out_refund_no ?? `RF_${order.id.slice(-16)}`;
+      // 调 Provider 退款（在 mutate 内：失败时不扣账本，状态可重试）
+      let providerResult;
+      try {
+        providerResult = await provider.refund({
+          out_trade_no: order.out_trade_no,
+          out_refund_no: outRefundNo,
+          refund_amount_cents: refundAmountCents,
+          total_amount_cents: order.price_cents,
+          reason: body?.reason ?? '用户申请退款',
+        });
+      } catch (err) {
+        // 记录失败状态，不扣账本；同一 out_refund_no 可重试。
+        // 注意：这里不能 throw，否则 store.mutate 不会持久化失败状态。
+        // 通过返回 { failed: true } 在 mutate 外抛 ApiError。
+        order.refund_status = 'failed';
+        order.refund_out_refund_no = outRefundNo;
+        order.refund_error = err.message;
+        order.refund_attempts = (order.refund_attempts ?? 0) + 1;
+        order.refund_last_attempt_at = new Date(clock()).toISOString();
+        const failEvent = {
+          id: newId('pay'), tenant_id: ctx.tenantId, order_id: order.id,
+          type: 'real_order_refund_failed', amount_cents: refundAmountCents,
+          currency: order.currency, actor_id: ctx.actorId,
+          created_at: order.refund_last_attempt_at,
+          refund_no: outRefundNo, error: err.message,
+        };
+        data.payment_events[failEvent.id] = failEvent;
+        return {
+          failed: true,
+          error: err.message,
+          refundable_credits: refundableCredits,
+          refund_amount_cents: refundAmountCents,
+          refund_no: outRefundNo,
+        };
+      }
+      // 退款成功：回收额度（revoke）+ 更新订单状态
+      const revokeResult = appendEntry(data, {
+        type: 'revoke', amount: refundableCredits, tenantId: ctx.tenantId,
+        uniqueOperationKey: `billing-refund:${order.id}`,
+        memo: `订单退款回收 ${refundableCredits} 张可用额度（${order.plan_snapshot.name}）`,
+        actor: ctx.actorId, initialCredits, at: clock(),
+      });
+      order.status = 'refunded';
+      order.refund_status = 'success';
+      order.refund_out_refund_no = outRefundNo;
+      order.refund_amount_cents = refundAmountCents;
+      order.refund_credits = refundableCredits;
+      order.refunded_at = new Date(clock()).toISOString();
+      order.refunded_by = ctx.actorId;
+      order.refund_transaction_id = providerResult?.refund_id ?? null;
+      const refundEvent = {
+        id: newId('pay'), tenant_id: ctx.tenantId, order_id: order.id,
+        type: 'real_order_refunded', amount_cents: refundAmountCents,
+        currency: order.currency, actor_id: ctx.actorId,
+        created_at: order.refunded_at, refund_no: outRefundNo,
+        refund_credits: refundableCredits, transaction_id: providerResult?.refund_id ?? null,
+      };
+      data.payment_events[refundEvent.id] = refundEvent;
+      return {
+        success: true,
+        order,
+        refunded_credits: refundableCredits,
+        refund_amount_cents: refundAmountCents,
+        balance: revokeResult.balance,
+      };
     });
-    if (order.real_money !== true) {
-      throw new ApiError(409, 'ORDER_NOT_REAL_MONEY', '演示订单不涉及真实收款，不能发起真实退款');
+    // provider 退款失败：状态已持久化（refund_status=failed，可重试），此处抛 502
+    if (result.failed) {
+      throw new ApiError(502, 'PAYMENT_REFUND_FAILED', `微信退款失败：${result.error}`, {
+        refundable_credits: result.refundable_credits,
+        refund_amount_cents: result.refund_amount_cents,
+        refund_no: result.refund_no,
+      });
     }
-    if (order.status !== 'settled_real') {
-      throw new ApiError(409, 'ORDER_NOT_SETTLED', `订单尚未到账（当前 ${order.status}），不能退款`);
-    }
-    throw new ApiError(409, 'REFUND_UNIMPLEMENTED', '真实退款通道尚未接入（R09 实现），订单权益已冻结');
+    send(200, {
+      ...result,
+      notice: '退款已完成：微信退款到账，系统回收未使用额度；已使用额度对应商品已交付，不可回收',
+    });
   }
 
   // ---------- R08 新路由 ----------
@@ -3574,6 +3685,7 @@ export function createApi({
             uniqueOperationKey: `billing-order:${order.id}`,
             memo: `微信支付套餐开通额度（${order.plan_snapshot.name}）`,
             actor: 'wechat_callback', initialCredits, at: clock(),
+            lot: { order_id: order.id },
           });
           order.status = 'settled_real';
           order.settled_at = new Date(clock()).toISOString();
@@ -3672,6 +3784,7 @@ export function createApi({
           uniqueOperationKey: `billing-order:${o.id}`,
           memo: `查单触发微信支付额度发放（${o.plan_snapshot.name}）`,
           actor: 'query_order', initialCredits, at: clock(),
+          lot: { order_id: o.id },
         });
         o.status = 'settled_real';
         o.settled_at = new Date(clock()).toISOString();

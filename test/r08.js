@@ -340,7 +340,7 @@ test('R08 createNativeOrder：out_trade_no 格式校验', () => {
   assert.doesNotThrow(() => provider.createNativeOrder({ out_trade_no: 'TB_TEST_123', amount_cents: 100 }));
 });
 
-test('R08 退款：mock provider realMoney=true 下走到 REFUND_UNIMPLEMENTED（R09 实现）', async () => {
+test('R08 退款：mock provider realMoney=true 下退款成功回收未使用额度（R09 实现）', async () => {
   await setupShared();
   const port = shared.port;
   const created = await request(port, '/api/billing/orders', {
@@ -354,12 +354,14 @@ test('R08 退款：mock provider realMoney=true 下走到 REFUND_UNIMPLEMENTED�
   await request(port, '/api/billing/wechat/notify', {
     method: 'POST', body: JSON.stringify(notifyBody),
   });
-  // 尝试退款：mock realMoney provider can_refund=true，但真实退款通道未接
+  // 退款：mock provider refund 会成功，回收该订单批次的可用额度
   const refund = await request(port, `/api/billing/orders/${order.id}/refund`, {
     method: 'POST', headers: headers(),
   });
-  assert.equal(refund.status, 409);
-  assert.equal(refund.json.error, 'REFUND_UNIMPLEMENTED');
+  assert.equal(refund.status, 200, JSON.stringify(refund.json));
+  assert.equal(refund.json.order.status, 'refunded');
+  assert.equal(refund.json.order.refund_status, 'success');
+  assert.ok(refund.json.refunded_credits > 0);
 });
 
 test('R08 共享 server 清理', async () => {

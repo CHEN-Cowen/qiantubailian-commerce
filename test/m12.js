@@ -688,7 +688,7 @@ test('M12 端到端：演示订单只发内部演示额度，重复结算与退�
 
   const refund = await request(port, `/api/billing/orders/${orderId}/refund`, { method: 'POST', headers });
   assert.equal(refund.status, 409);
-  assert.equal(refund.json.details.payment.can_refund, false);
+  assert.equal(refund.json.error, 'ORDER_NOT_REAL_MONEY');
 
   // 成员权限：viewer 可以看套餐，不能下单或结算
   const added = await request(port, '/api/members', {
