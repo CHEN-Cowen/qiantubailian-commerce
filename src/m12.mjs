@@ -312,8 +312,11 @@ export function planById(planId) {
 }
 
 /**
- * 支付能力闸口。没有 Provider、只有模拟 Provider、或 Provider 不支持退款时，
- * 分别给出不同的阻断原因；不把"演示下单"当成真实收款。
+ * 支付能力闸口。根据 Provider 的 capabilities 决定能做什么：
+ *   - 未配置 → can_checkout=false（阻断）
+ *   - mock provider → can_checkout=true（演示）, can_settle=true（手动）
+ *   - 真实 wechat provider → can_checkout=true（Native 下单已实现）, can_settle=true（回调自动结算）
+ *                          can_refund=false（R09 实现）
  */
 export function evaluatePaymentCapability({ provider = null } = {}) {
   const capabilities = typeof provider?.capabilities === 'function' ? provider.capabilities() : null;
@@ -326,27 +329,44 @@ export function evaluatePaymentCapability({ provider = null } = {}) {
       can_checkout: false,
       can_settle: false,
       can_refund: false,
+      supports_native_qr: false,
+      supports_query: false,
+      supports_close: false,
       blockers,
     };
   }
   const realMoney = capabilities.real_money === true;
   const simulated = capabilities.simulated === true;
   const supportsRefunds = capabilities.supports_refunds === true;
-  if (!realMoney) {
-    blockers.push(issue('PAYMENT_REAL_MONEY_UNSUPPORTED', '当前支付 Provider 不支持真实货币结算'));
-  }
-  if (!supportsRefunds) {
-    blockers.push(issue('PAYMENT_REFUND_UNSUPPORTED', '当前支付 Provider 不支持退款'));
-  }
-  if (realMoney) {
+  const supportsNativeQr = capabilities.supports_native_qr === true;
+  const supportsQuery = capabilities.supports_query === true;
+  const supportsClose = capabilities.supports_close === true;
+
+  if (realMoney && !supportsNativeQr) {
+    // 旧版兼容性：当 real_money=true 但没有 supports_native_qr 时，沿用旧 blocker 代码
+    // PAYMENT_CHARGE_UNIMPLEMENTED 表示"真实扣款通道未接入"
     blockers.push(issue('PAYMENT_CHARGE_UNIMPLEMENTED', '真实扣款通道尚未接入，不能发起真实收款'));
   }
+  if (simulated && realMoney) {
+    // 矛盾：同时声明模拟和真实，拦截
+    blockers.push(issue('PAYMENT_PROVIDER_CONFLICT', 'Provider 不能同时声明 simulated 和 real_money'));
+  }
+  // 模拟 Provider 不支持真实货币：作为 blockers 如实标注
+  if (simulated && !realMoney) {
+    blockers.push(issue('PAYMENT_REAL_MONEY_UNSUPPORTED', '当前支付 Provider 为模拟模式，不支持真实货币结算'));
+  }
+
   return {
     mode: realMoney ? 'live' : simulated ? 'demo' : 'unknown',
     real_money: realMoney,
-    can_checkout: !realMoney && simulated,
-    can_settle: !realMoney && simulated,
+    simulated,
+    can_checkout: simulated || (realMoney && supportsNativeQr),
+    can_settle: simulated || realMoney,  // 真实支付通过回调结算
     can_refund: realMoney && supportsRefunds,
+    supports_native_qr: supportsNativeQr,
+    supports_query: supportsQuery,
+    supports_close: supportsClose,
+    acceptance: capabilities.acceptance ?? 'unknown',
     blockers,
   };
 }

@@ -382,10 +382,27 @@ export function createApi({
       });
     }
     if (resource === 'billing') {
+      // R08：微信支付回调——不走认证（微信不带凭证），签名验证是第一闸口
+      if (rest.length === 3 && rest[1] === 'wechat' && rest[2] === 'notify') {
+        requireMethod(method, ['POST']);
+        return wechatNotifyRoute(ctx, req, send);
+      }
       if (rest.length === 2 && rest[1] === 'orders') {
         if (method === 'POST') return createBillingOrderRoute(ctx, req, send);
         requireMethod(method, ['GET', 'HEAD', 'POST']);
         return listBillingOrdersRoute(ctx, send);
+      }
+      if (rest.length === 4 && rest[1] === 'orders' && rest[3] === 'pay') {
+        requireMethod(method, ['POST']);
+        return payBillingOrderRoute(ctx, rest[2], send);
+      }
+      if (rest.length === 4 && rest[1] === 'orders' && rest[3] === 'query') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return queryBillingOrderRoute(ctx, rest[2], send);
+      }
+      if (rest.length === 4 && rest[1] === 'orders' && rest[3] === 'close') {
+        requireMethod(method, ['POST']);
+        return closeBillingOrderRoute(ctx, rest[2], send);
       }
       if (rest.length === 4 && rest[1] === 'orders' && rest[3] === 'settle') {
         requireMethod(method, ['POST']);
@@ -3329,13 +3346,22 @@ export function createApi({
     await requireAction(ctx, 'billing:manage');
     const body = await readJson(req);
     const capability = evaluatePaymentCapability({ provider: paymentProvider });
-    if (!capability.can_checkout) {
+    if (!capability.can_checkout && !capability.real_money) {
       throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_UNAVAILABLE',
         capability.blockers[0]?.message ?? '当前不具备下单条件', { payment: capability });
     }
     const plan = resolvePlanById(String(body.plan_id ?? ''));
     if (!plan) throw new ApiError(422, 'PLAN_UNKNOWN', '套餐不存在');
-    const order = await store.mutate(data => {
+    // 演示套餐（price_cents=0）永远不涉及真实支付
+    const isDemoOnly = plan.price_cents === 0;
+    const provider = paymentProvider;
+    const providerCaps = provider?.capabilities?.() ?? null;
+    const useRealPayment = capability.real_money === true && providerCaps?.supports_native_qr === true && !isDemoOnly;
+
+    const order = await store.mutate(async data => {
+      const outTradeNo = useRealPayment
+        ? `TB${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase()
+        : null;
       const item = {
         id: newId('ord'),
         tenant_id: ctx.tenantId,
@@ -3343,26 +3369,83 @@ export function createApi({
         plan_snapshot: planSnapshot(plan),
         credits: plan.credits,
         seats: plan.seats ?? 1,
+        price_cents: plan.price_cents,
+        currency: plan.currency ?? 'CNY',
+        out_trade_no: outTradeNo,
         status: 'pending_demo_settlement',
-        real_money: false,
-        simulated: true,
-        settlement: 'internal_demo_credits',
-        notice: plan.terms ?? plan.note ?? '演示订单：不扣真实货币、不开具发票、不代表可计费权益',
+        real_money: useRealPayment,
+        simulated: !useRealPayment,
+        settlement: isDemoOnly || !useRealPayment ? 'internal_demo_credits' : 'wechat_native',
+        pay_provider: useRealPayment ? 'wechat_native' : (isDemoOnly ? 'demo_free' : 'mock'),
+        notice: plan.terms ?? plan.note ?? '套餐开通额度',
         created_by: ctx.actorId,
         created_at: new Date(clock()).toISOString(),
       };
+
+      if (isDemoOnly) {
+        // 免单套餐：直接发放额度，不经过支付
+        const entry = appendEntry(data, {
+          type: 'grant', amount: item.credits, tenantId: ctx.tenantId,
+          uniqueOperationKey: `billing-order:${item.id}`,
+          memo: `免单套餐开通额度（${item.plan_snapshot.name}）`,
+          actor: ctx.actorId, initialCredits, at: clock(),
+        });
+        item.status = 'settled_real';
+        item.settled_at = new Date(clock()).toISOString();
+        item.settled_by = ctx.actorId;
+        // 免单套餐有真实发放，但金额为 0
+        item.real_money = true;
+        item.simulated = false;
+        const grantEvent = {
+          id: newId('pay'), tenant_id: ctx.tenantId, order_id: item.id,
+          type: 'real_order_settled', amount_cents: 0, currency: item.currency,
+          actor_id: ctx.actorId, created_at: item.settled_at,
+          transaction_id: `free_${item.id}`,
+        };
+        data.payment_events[grantEvent.id] = grantEvent;
+      } else if (useRealPayment) {
+        // 真实支付：调 Provider Native 下单
+        let nativeResult;
+        try {
+          nativeResult = await provider.createNativeOrder({
+            out_trade_no: outTradeNo,
+            description: `千图百炼 ${item.plan_snapshot.name} ${item.credits}张额度`,
+            amount_cents: item.price_cents,
+            attach: JSON.stringify({ order_id: item.id, tenant_id: ctx.tenantId }),
+          });
+        } catch (err) {
+          throw new ApiError(502, 'PAYMENT_PROVIDER_ERROR', `微信下单失败：${err.message}`);
+        }
+        item.status = nativeResult.zero_amount ? 'settled_real' : 'pending_wechat_checkout';
+        item.code_url = nativeResult.code_url;
+        item.prepay_id = nativeResult.prepay_id ?? null;
+        item.pay_qr = nativeResult.qr_code_url ?? null;
+        item.wechat_trade_state = nativeResult.trade_state;
+        item.trade_state_desc = nativeResult.trade_state_desc ?? null;
+        if (nativeResult.zero_amount) {
+          // 免单内部零金额：发放额度
+          const entry = appendEntry(data, {
+            type: 'grant', amount: item.credits, tenantId: ctx.tenantId,
+            uniqueOperationKey: `billing-order:${item.id}`,
+            memo: `免单套餐开通额度（${item.plan_snapshot.name}）`,
+            actor: ctx.actorId, initialCredits, at: clock(),
+          });
+          item.status = 'settled_real';
+          item.settled_at = new Date(clock()).toISOString();
+          item.settled_by = ctx.actorId;
+        }
+      }
+      // mock 支付：保持 pending_demo_settlement，后续手动 settle
+
       data.billing_orders[item.id] = item;
-      const event = {
+      const createEvent = {
         id: newId('pay'),
-        tenant_id: ctx.tenantId,
-        order_id: item.id,
-        type: 'demo_order_created',
-        amount_cents: 0,
-        currency: plan.currency,
-        actor_id: ctx.actorId,
-        created_at: item.created_at,
+        tenant_id: ctx.tenantId, order_id: item.id,
+        type: item.simulated ? 'demo_order_created' : 'real_order_created',
+        amount_cents: item.price_cents, currency: item.currency,
+        actor_id: ctx.actorId, created_at: item.created_at,
       };
-      data.payment_events[event.id] = event;
+      data.payment_events[createEvent.id] = createEvent;
       return item;
     });
     send(201, { order, payment: capability });
@@ -3384,15 +3467,19 @@ export function createApi({
   async function settleBillingOrderRoute(ctx, orderId, send) {
     await requireAction(ctx, 'billing:manage');
     const capability = evaluatePaymentCapability({ provider: paymentProvider });
-    if (!capability.can_settle) {
-      throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_SETTLE_UNSUPPORTED',
-        capability.blockers[0]?.message ?? '当前不具备结算条件', { payment: capability });
-    }
     const result = await store.mutate(data => {
       const order = data.billing_orders?.[orderId] ?? null;
       if (!order || order.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
-      if (order.status !== 'pending_demo_settlement') {
+      // 真实支付订单：只允许回调结算（状态机保护），手动 settle 拦截
+      if (order.real_money === true && order.pay_provider === 'wechat_native') {
+        throw new ApiError(409, 'ORDER_SETTLE_VIA_CALLBACK', '微信支付订单只能通过回调自动结算，不允许手动结算');
+      }
+      // 已结算订单：无论 demo 还是 real，手动再调都返回 409
+      if (order.status === 'settled_demo' || order.status === 'settled_real') {
         throw new ApiError(409, 'ORDER_STATE_INVALID', `订单当前状态为 ${order.status}，不能重复结算`);
+      }
+      if (order.status !== 'pending_demo_settlement') {
+        throw new ApiError(409, 'ORDER_STATE_INVALID', `订单当前状态为 ${order.status}，不能结算`);
       }
       const entry = appendEntry(data, {
         type: 'grant', amount: order.credits, tenantId: ctx.tenantId,
@@ -3409,11 +3496,12 @@ export function createApi({
         actor_id: ctx.actorId, created_at: order.settled_at,
       };
       data.payment_events[event.id] = event;
-      return { order, balance: entry.balance, applied: entry.applied };
+      return { order, balance: entry.balance, applied: entry.applied, idempotent: false };
     });
     send(200, {
       ...result,
-      notice: '演示额度已到账；未发生真实收款，不能作为生产计费依据',
+      notice: result.order.real_money ? '额度已通过回调发放'
+        : '演示额度已到账；未发生真实收款，不能作为生产计费依据',
     });
   }
 
@@ -3433,7 +3521,202 @@ export function createApi({
     if (order.real_money !== true) {
       throw new ApiError(409, 'ORDER_NOT_REAL_MONEY', '演示订单不涉及真实收款，不能发起真实退款');
     }
-    throw new ApiError(409, 'REFUND_UNIMPLEMENTED', '真实支付通道尚未接入，未执行退款');
+    if (order.status !== 'settled_real') {
+      throw new ApiError(409, 'ORDER_NOT_SETTLED', `订单尚未到账（当前 ${order.status}），不能退款`);
+    }
+    throw new ApiError(409, 'REFUND_UNIMPLEMENTED', '真实退款通道尚未接入（R09 实现），订单权益已冻结');
+  }
+
+  // ---------- R08 新路由 ----------
+
+  /**
+   * 微信支付回调。公开入口（不走认证，微信不带凭证），签名验证是第一闸口。
+   * 处理逻辑：验签 → 解密 → 根据 out_trade_no 找订单 → 幂等结算 → 返回成功响应。
+   */
+  async function wechatNotifyRoute(ctx, req, send) {
+    // 先读原始 body 用于验签
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const bodyBuf = Buffer.concat(chunks);
+    const bodyStr = bodyBuf.toString('utf8');
+
+    const provider = paymentProvider;
+    if (!provider?.verifyNotify) {
+      send(200, { code: 'FAIL', message: '支付 Provider 未配置' });
+      return;
+    }
+    // 验签 + 解密（真实 provider 走 APIv3 签名；mock provider 直接解析 body）
+    const verifyResult = provider.verifyNotify({ headers: req.headers, body: bodyStr });
+    if (!verifyResult?.ok) {
+      send(200, { code: 'FAIL', message: verifyResult?.reason ?? '签名验证失败' });
+      return;
+    }
+    const notify = { event_type: verifyResult.event_type, data: verifyResult.data };
+    if (!notify?.data?.out_trade_no) {
+      send(200, { code: 'FAIL', message: '回调体缺少 out_trade_no' });
+      return;
+    }
+
+    // 幂等结算
+    try {
+      await store.mutate(data => {
+        const orders = Object.values(data.billing_orders ?? {});
+        const order = orders.find(o => o.out_trade_no === notify.data.out_trade_no);
+        if (!order) {
+          // 找不到订单，不返回错误（微信会重试，但 out_trade_no 不存在说明业务侧还没建完）
+          return;
+        }
+        if (notify.data.trade_state === 'SUCCESS') {
+          // 幂等：已结算直接跳过
+          if (order.status === 'settled_real') return;
+          const entry = appendEntry(data, {
+            type: 'grant', amount: order.credits, tenantId: order.tenant_id,
+            uniqueOperationKey: `billing-order:${order.id}`,
+            memo: `微信支付套餐开通额度（${order.plan_snapshot.name}）`,
+            actor: 'wechat_callback', initialCredits, at: clock(),
+          });
+          order.status = 'settled_real';
+          order.settled_at = new Date(clock()).toISOString();
+          order.settled_by = 'wechat_callback';
+          order.wechat_trade_state = 'SUCCESS';
+          order.transaction_id = notify.data.transaction_id ?? order.transaction_id;
+          const event = {
+            id: newId('pay'), tenant_id: order.tenant_id, order_id: order.id,
+            type: 'real_order_settled', amount_cents: order.price_cents,
+            currency: order.currency, actor_id: 'wechat_callback',
+            created_at: order.settled_at, transaction_id: order.transaction_id,
+          };
+          data.payment_events[event.id] = event;
+        } else if (['CLOSED', 'REVOKED', 'PAYERROR'].includes(notify.data.trade_state)) {
+          if (order.status === 'pending_wechat_checkout') {
+            order.status = 'wechat_' + notify.data.trade_state.toLowerCase();
+            order.wechat_trade_state = notify.data.trade_state;
+            order.settled_at = new Date(clock()).toISOString();
+          }
+        }
+      });
+      send(200, { code: 'SUCCESS', message: '成功' });
+    } catch (err) {
+      // 结算异常：返回 FAIL 让微信重试；幂等保证不会重复发放
+      send(200, { code: 'FAIL', message: `结算异常：${err.message}` });
+    }
+  }
+
+  /** Native 下单（已创建订单后的二次下单）。 */
+  async function payBillingOrderRoute(ctx, orderId, send) {
+    await requireAction(ctx, 'billing:manage');
+    const order = await store.read(data => {
+      const item = data.billing_orders?.[orderId] ?? null;
+      if (!item || item.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
+      return item;
+    });
+    if (order.real_money !== true || order.pay_provider !== 'wechat_native') {
+      throw new ApiError(409, 'ORDER_NOT_WECHAT', '该订单不涉及微信支付 Native 下单');
+    }
+    if (order.status !== 'pending_wechat_checkout') {
+      throw new ApiError(409, 'ORDER_STATE_INVALID', `订单当前状态为 ${order.status}`);
+    }
+    const provider = paymentProvider;
+    if (!provider?.createNativeOrder) throw new ApiError(501, 'PAYMENT_UNIMPLEMENTED', '支付 Provider 未配置');
+    let result;
+    try {
+      result = await provider.createNativeOrder({
+        out_trade_no: order.out_trade_no,
+        description: `千图百炼 ${order.plan_snapshot.name} ${order.credits}张额度`,
+        amount_cents: order.price_cents,
+        attach: JSON.stringify({ order_id: order.id, tenant_id: ctx.tenantId }),
+      });
+    } catch (err) {
+      throw new ApiError(502, 'PAYMENT_PROVIDER_ERROR', `下单失败：${err.message}`);
+    }
+    await store.mutate(data => {
+      const o = data.billing_orders?.[order.id];
+      if (!o) return;
+      o.code_url = result.code_url ?? o.code_url;
+      o.prepay_id = result.prepay_id ?? o.prepay_id;
+      o.pay_qr = result.qr_code_url ?? o.pay_qr;
+      o.wechat_trade_state = result.trade_state;
+      o.updated_at = new Date(clock()).toISOString();
+    });
+    send(200, { order: { ...order, code_url: result.code_url }, provider: provider.id });
+  }
+
+  /** 查单。 */
+  async function queryBillingOrderRoute(ctx, orderId, send) {
+    await requireAction(ctx, 'billing:read');
+    const order = await store.read(data => {
+      const item = data.billing_orders?.[orderId] ?? null;
+      if (!item || item.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
+      return item;
+    });
+    if (!order.out_trade_no) {
+      send(200, { order, provider_state: null });
+      return;
+    }
+    const provider = paymentProvider;
+    if (!provider?.queryOrder) {
+      send(200, { order, provider_state: { note: '支付 Provider 未配置，仅返回本地状态' } });
+      return;
+    }
+    let providerResult;
+    try { providerResult = await provider.queryOrder({ out_trade_no: order.out_trade_no }); }
+    catch (err) { providerResult = { error: err.message }; }
+    // 同步本地状态（provider 查单返回 SUCCESS 但本地还没 settled 的情况）
+    let updatedOrder = order;
+    if (providerResult?.trade_state === 'SUCCESS' && order.status === 'pending_wechat_checkout') {
+      updatedOrder = await store.mutate(data => {
+        const o = data.billing_orders?.[order.id];
+        if (!o || o.status !== 'pending_wechat_checkout') return o;
+        const entry = appendEntry(data, {
+          type: 'grant', amount: o.credits, tenantId: o.tenant_id,
+          uniqueOperationKey: `billing-order:${o.id}`,
+          memo: `查单触发微信支付额度发放（${o.plan_snapshot.name}）`,
+          actor: 'query_order', initialCredits, at: clock(),
+        });
+        o.status = 'settled_real';
+        o.settled_at = new Date(clock()).toISOString();
+        o.settled_by = 'query_order';
+        o.wechat_trade_state = 'SUCCESS';
+        const event = {
+          id: newId('pay'), tenant_id: o.tenant_id, order_id: o.id,
+          type: 'real_order_settled', amount_cents: o.price_cents, currency: o.currency,
+          actor_id: 'query_order', created_at: o.settled_at,
+          transaction_id: providerResult.transaction_id ?? null,
+        };
+        data.payment_events[event.id] = event;
+        return o;
+      });
+    }
+    send(200, { order: updatedOrder, provider_state: providerResult });
+  }
+
+  /** 关单。 */
+  async function closeBillingOrderRoute(ctx, orderId, send) {
+    await requireAction(ctx, 'billing:manage');
+    const order = await store.read(data => {
+      const item = data.billing_orders?.[orderId] ?? null;
+      if (!item || item.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
+      return item;
+    });
+    if (!order.out_trade_no) {
+      throw new ApiError(409, 'ORDER_NO_OUT_TRADE_NO', '订单无商户号，不能通过微信关单');
+    }
+    const provider = paymentProvider;
+    if (!provider?.closeOrder) throw new ApiError(501, 'PAYMENT_UNIMPLEMENTED', '支付 Provider 未配置');
+    let providerResult;
+    try { providerResult = await provider.closeOrder({ out_trade_no: order.out_trade_no }); }
+    catch (err) { throw new ApiError(502, 'PAYMENT_PROVIDER_ERROR', `关单失败：${err.message}`); }
+    const updatedOrder = await store.mutate(data => {
+      const o = data.billing_orders?.[order.id];
+      if (!o) return null;
+      if (o.status === 'pending_wechat_checkout') {
+        o.status = 'wechat_closed';
+        o.wechat_trade_state = 'CLOSED';
+        o.settled_at = new Date(clock()).toISOString();
+      }
+      return o;
+    });
+    send(200, { order: updatedOrder ?? order, provider_state: providerResult });
   }
 
   async function metricsRoute(ctx, send) {
