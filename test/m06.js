@@ -347,7 +347,7 @@ test('M06 Seedream Adapter：能力如实声明，主体保护校验拒绝无掩
   assert.equal(provider.validate({ ...request, target_width: 9000, mask_ref: null, requires_subject_protection: false }).code, 'UNSUPPORTED_CAPABILITY');
 
   const capable = createSeedreamProvider({
-    apiKey: 'test-key', fetchImpl: fakeFetch({ imageBytes: subjectPng() }), supportsMask: true,
+    apiKey: 'test-key', fetchImpl: fakeFetch({ imageBytes: subjectPng() }), supportsPostComposite: true,
   });
   assert.equal(capable.validate(request).ok, true);
 });
@@ -464,10 +464,10 @@ test('M06 端到端（真实 Adapter）：未声明能力时创建阶段 422 拒
   assert.equal(capabilities.json.capabilities.acceptance, 'not_verified');
 });
 
-test('M06 端到端（真实 Adapter）：声明掩码能力后走真实契约，记录明确标未验收', async t => {
+test('M06 端到端（真实 Adapter）：通过本地主体合成走真实契约，记录明确标未验收', async t => {
   const imageBytes = subjectPng(96, 96);
   const provider = createSeedreamProvider({
-    apiKey: 'test-key', model: 'Doubao-Seedream-4.0', supportsMask: true,
+    apiKey: 'test-key', model: 'Doubao-Seedream-4.0', supportsPostComposite: true,
     fetchImpl: fakeFetch({ imageBytes, requestId: 'req_e2e_7' }),
   });
   const { port } = await start(t, { provider });

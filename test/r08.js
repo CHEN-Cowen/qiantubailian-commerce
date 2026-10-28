@@ -77,7 +77,7 @@ test('R08 evaluatePaymentCapability：真实 wechat provider → can_checkout=tr
 
 test('R08 createPaymentProviderFromEnv：wechat_native 缺配置即抛，不回落到 mock', () => {
   assert.throws(() => createPaymentProviderFromEnv({ QTB_PAYMENT_PROVIDER: 'wechat_native' }),
-    /缺少必需配置/);
+    /缺少必需配置|QTB_ENABLE_REAL_PAYMENTS/);
 });
 
 test('R08 createPaymentProviderFromEnv：mock 无配置也能构造', () => {
@@ -144,7 +144,7 @@ test('R08 免单套餐（plan_first_trial）：直接发放额度，不走支付
   const order = created.json.order;
   assert.equal(order.status, 'settled_real');  // 免单直接到账
   assert.equal(order.price_cents, 0);
-  assert.equal(order.real_money, true);
+  assert.equal(order.real_money, false);
   assert.equal(order.simulated, false);
   assert.ok(order.settled_at);
   // 额度已发放
@@ -298,15 +298,15 @@ test('R08 回调幂等：同一 out_trade_no 重复通知不重复发额度', as
   assert.equal(query.json.order.status, 'settled_real');
 });
 
-test('R08 回调：找不到订单（业务侧还没建完）返回 SUCCESS（让微信重试但不中断链路）', async () => {
+test('R08 回调：找不到订单返回 404，避免吞掉通知', async () => {
   await setupShared();
   const port = shared.port;
   const notifyBody = shared.provider._mockNotify({ out_trade_no: 'TB_NOT_EXIST_123456' });
   const notify = await request(port, '/api/billing/wechat/notify', {
     method: 'POST', body: JSON.stringify(notifyBody),
   });
-  assert.equal(notify.status, 200);
-  assert.equal(notify.json.code, 'SUCCESS');  // 找不到订单也不返回 FAIL
+  assert.equal(notify.status, 404);
+  assert.equal(notify.json.error, 'ORDER_NOT_FOUND');
 });
 
 test('R08 回调：关闭/撤销状态 → 订单状态跟随', async () => {

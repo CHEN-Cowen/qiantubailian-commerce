@@ -79,6 +79,7 @@ export function validateBrandKitInput(body) {
     },
     logo: {
       present: logo.present,
+      ...(logo.asset_id ? { asset_id: shortText(logo.asset_id, 'logo.asset_id', { max: 80 }) } : {}),
       description: logo.description ? shortText(logo.description, 'logo.description', { max: 120 }) : null,
     },
     fonts: normalizedFonts,
@@ -351,13 +352,20 @@ export function deliverableHash(deliverables) {
 }
 
 /** 组装一次 spec 的内容（不落库）。调用方负责 base_version 与租户校验。 */
-export function assembleSpec({ project, truth, template, brandKit, channel, resolutions, at = new Date() }) {
+export function assembleSpec({ project, truth, template, brandKit, channel, resolutions, textLayout = null, at = new Date() }) {
   const conflicts = detectConflicts({ template, brandKit, channel, truth, at });
   const { deliverables, applied, pending, unresolvable, brandExceptions } = applyResolutions({
     template, brandKit, channel, conflicts, resolutions,
   });
 
   const warnings = [];
+  if (textLayout !== null) {
+    const { x, y, width, size_ratio } = textLayout;
+    if (![x, y, width, size_ratio].every(Number.isFinite) || x < 0 || y < 0 || x > 0.95 || y > 0.95 || width < 0.05 || x + width > 1 || size_ratio < 0.01 || size_ratio > 0.2) {
+      throw new ApiError(422, 'INVALID_TEXT_LAYOUT', '排版位置和宽度需在画布内，字号比例需为 1%～20%');
+    }
+    for (const item of deliverables) item.text_layout = { x, y, width, size_ratio };
+  }
   const coverage = channel?.coverage ?? COVERAGE.missing;
   for (const reason of channel?.reasons ?? []) warnings.push({ code: `CHANNEL_${coverage.toUpperCase()}`, message: reason });
   for (const font of brandKit?.fonts ?? []) {

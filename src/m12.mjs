@@ -435,7 +435,9 @@ export function buildObservabilitySnapshot({
     }
   }
   const adoptedRuns = completedRuns.filter(r => exportedRunIds.has(r.id)).length;
-  const adoptionRate = completedRuns.length > 0 ? adoptedRuns / completedRuns.length : null;
+  const exportRate = completedRuns.length > 0 ? adoptedRuns / completedRuns.length : null;
+  const decided = feedback.filter(f => ['adopted', 'rejected'].includes(f.decision));
+  const adoptionRate = decided.length ? decided.filter(f => f.decision === 'adopted').length / decided.length : null;
 
   // 失败率与未知率
   const failureRate = totalFinished > 0 ? failedRuns.length / totalFinished : null;
@@ -483,8 +485,11 @@ export function buildObservabilitySnapshot({
       adoption_rate: adoptionRate !== null ? Math.round(adoptionRate * 1000) / 1000 : null,
       failure_rate: failureRate !== null ? Math.round(failureRate * 1000) / 1000 : null,
       unknown_rate: unknownRate !== null ? Math.round(unknownRate * 1000) / 1000 : null,
-      revision_net_improvement: revisionNetImprovement !== null ? Math.round(revisionNetImprovement * 1000) / 1000 : null,
-      cost_per_image: costPerImage,
+      revision_net_improvement: null, // 缺少修订前后同口径质量评分，不以完成率冒充改善
+      cost_per_image: null, // 尚无统一币种、可核验的供应商结算账单
+      credits_per_image: costPerImage,
+      export_rate: exportRate,
+      revision_completion_rate: revisionNetImprovement,
       payment_conversion: paymentConversion !== null ? Math.round(paymentConversion * 1000) / 1000 : null,
     },
     credits: balance ? { available: balance.available, reserved: balance.reserved ?? null } : null,

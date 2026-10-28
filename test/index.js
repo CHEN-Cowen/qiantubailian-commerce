@@ -239,9 +239,11 @@ test('导入服务模块不自动启动，loadEnvFile 保留外部环境值', as
   const file = path.join(dir, '.env');
   await writeFile(file, 'M01_EXISTING=from_file\nM01_NEW=loaded\n');
   const moduleURL = new URL('../src/server.mjs', import.meta.url).href;
+  // 全量套件并行运行时，子进程导入（含 sharp 原生绑定）可能超过 3 秒；
+  // 这里放宽到 15 秒只覆盖导入耗时，仍然保持"未自动启动就必须退出"的断言。
   const result = spawnSync(process.execPath, ['--input-type=module', '-e',
     'await import(process.argv[1]); process.loadEnvFile(process.argv[2]); if (process.env.M01_EXISTING !== "external" || process.env.M01_NEW !== "loaded") process.exitCode = 1;',
-    moduleURL, file], { env: { ...process.env, M01_EXISTING: 'external' }, timeout: 3_000 });
+    moduleURL, file], { env: { ...process.env, M01_EXISTING: 'external' }, timeout: 15_000 });
   assert.equal(result.error, undefined);
   assert.equal(result.status, 0, result.stderr.toString());
 });

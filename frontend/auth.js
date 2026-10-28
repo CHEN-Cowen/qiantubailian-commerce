@@ -114,6 +114,8 @@ function buildGate({ demoHint = '' } = {}) {
 }
 
 function accountChip(session) {
+  const note = document.getElementById('data-note-button');
+  if (note) { note.textContent = '我的工作区'; note.title = '项目、额度和交付统计来自当前工作区；示例图片会单独标明'; }
   const avatar = document.querySelector('.top-actions .avatar');
   if (!avatar) return;
   avatar.textContent = (session.account?.display_name ?? '我').slice(0, 1);

@@ -369,7 +369,7 @@ test('R04 文字层：导出的 SVG 可编辑，文字与位置来自执行计�
     width: 400, height: 400, mime: 'image/png', bytes,
     layers: [
       { id: 'layer_1', source: 'fact', fact_key: '容量', text: '10ml', x: 0.1, y: 0.2, width: 0.4, size_ratio: 0.08, weight: 700, color: '#5A6B4A', align: 'left', font_family: '方正兰亭黑' },
-      { id: 'layer_2', source: 'brand_logo', logo: true, text: '', x: 0.1, y: 0.9, size_ratio: 0.05, color: '#2A2420', align: 'left' },
+      { id: 'layer_2', source: 'brand_logo', logo: true, data_uri: `data:image/png;base64,${bytes.toString('base64')}`, text: '', x: 0.1, y: 0.9, size_ratio: 0.05, color: '#2A2420', align: 'left' },
     ],
     title: '主图',
   });

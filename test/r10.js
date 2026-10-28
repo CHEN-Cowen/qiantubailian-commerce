@@ -364,7 +364,7 @@ test('R10 批量预算闸口：真实额度（订单发放）下的拦截与放�
       out_trade_no: order.json.order.out_trade_no,
       transaction_id: `MOCK_${order.json.order.out_trade_no}`,
       trade_state: 'SUCCESS',
-      amount: { total: 1900, currency: 'CNY' },
+      amount: { total: order.json.order.price_cents, currency: 'CNY' },
     },
   };
   const notify = await request(port, '/api/billing/wechat/notify', {

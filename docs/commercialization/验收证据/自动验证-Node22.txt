@@ -1,0 +1,1400 @@
+Runtime v22.22.2
+TAP version 13
+# Subtest: 修复：正式形状的微信 AES-GCM 通知使用独立 nonce/AAD 与原始密钥
+ok 1 - 修复：正式形状的微信 AES-GCM 通知使用独立 nonce/AAD 与原始密钥
+  ---
+  duration_ms: 14.8631
+  type: 'test'
+  ...
+# Subtest: 修复：体验只发一次，真实通知不需要会话且校验金额，付费批次带购买快照和到期
+ok 2 - 修复：体验只发一次，真实通知不需要会话且校验金额，付费批次带购买快照和到期
+  ---
+  duration_ms: 1930.2084
+  type: 'test'
+  ...
+# Subtest: 修复：退款处理中冻结原订单权益，重启后查询最终结果只回收一次
+ok 3 - 修复：退款处理中冻结原订单权益，重启后查询最终结果只回收一次
+  ---
+  duration_ms: 1492.7719
+  type: 'test'
+  ...
+# Subtest: 修复：真实 Native HTTP 请求已签名，并验证微信响应签名
+ok 4 - 修复：真实 Native HTTP 请求已签名，并验证微信响应签名
+  ---
+  duration_ms: 621.5341
+  type: 'test'
+  ...
+# Subtest: 修复：真实账户三张体验可启动必需套图；不合格模拟结果释放全部额度
+ok 5 - 修复：真实账户三张体验可启动必需套图；不合格模拟结果释放全部额度
+  ---
+  duration_ms: 6400.237
+  type: 'test'
+  ...
+# Subtest: 修复：最终 PNG 包含真实 Logo 像素；JPEG 可解码进入栅格合成
+ok 6 - 修复：最终 PNG 包含真实 Logo 像素；JPEG 可解码进入栅格合成
+  ---
+  duration_ms: 174.0822
+  type: 'test'
+  ...
+# Subtest: 修复：退款跨过套餐到期日，原批次仍能准确回收
+ok 7 - 修复：退款跨过套餐到期日，原批次仍能准确回收
+  ---
+  duration_ms: 1424.1409
+  type: 'test'
+  ...
+# Subtest: 修复：退款异常需要商户处理，不提前解冻；关单遇到已支付应查单入账
+ok 8 - 修复：退款异常需要商户处理，不提前解冻；关单遇到已支付应查单入账
+  ---
+  duration_ms: 1058.1262
+  type: 'test'
+  ...
+# Subtest: 修复：通过复核的真实账户成品仅扣一次；重复导出不额外收费
+ok 9 - 修复：通过复核的真实账户成品仅扣一次；重复导出不额外收费
+  ---
+  duration_ms: 18369.008
+  type: 'test'
+  ...
+# Subtest: 配置默认值、合法边界及非法输入
+ok 10 - 配置默认值、合法边界及非法输入
+  ---
+  duration_ms: 33.3375
+  type: 'test'
+  ...
+# Subtest: 静态白名单、HEAD、响应安全头与健康状态
+ok 11 - 静态白名单、HEAD、响应安全头与健康状态
+  ---
+  duration_ms: 3753.5186
+  type: 'test'
+  ...
+# Subtest: API 路由语义：未知接口 404、已实现路由按方法判定、静态路由非 GET/HEAD 为 405
+ok 12 - API 路由语义：未知接口 404、已实现路由按方法判定、静态路由非 GET/HEAD 为 405
+  ---
+  duration_ms: 403.2228
+  type: 'test'
+  ...
+# Subtest: 严格解码与路径安全：拒绝穿越、双编码、反斜线及非白名单
+ok 13 - 严格解码与路径安全：拒绝穿越、双编码、反斜线及非白名单
+  ---
+  duration_ms: 248.8179
+  type: 'test'
+  ...
+# Subtest: 缺失或非普通静态资源导致 404 与 readiness 503，但存活检查正常
+ok 14 - 缺失或非普通静态资源导致 404 与 readiness 503，但存活检查正常
+  ---
+  duration_ms: 1149.7063
+  type: 'test'
+  ...
+# Subtest: 符号链接文件、目录和根目录均不能越界
+ok 15 - 符号链接文件、目录和根目录均不能越界 # SKIP 系统无文件符号链接权限
+  ---
+  duration_ms: 78.4401
+  type: 'test'
+  ...
+# Subtest: 健康检查拒绝外部地址、重定向、错误内容及超时
+ok 16 - 健康检查拒绝外部地址、重定向、错误内容及超时
+  ---
+  duration_ms: 134.5287
+  type: 'test'
+  ...
+# Subtest: 优雅关闭空闲与正在处理的连接，close 可重复调用
+ok 17 - 优雅关闭空闲与正在处理的连接，close 可重复调用
+  ---
+  duration_ms: 160.6712
+  type: 'test'
+  ...
+# Subtest: 导入服务模块不自动启动，loadEnvFile 保留外部环境值
+ok 18 - 导入服务模块不自动启动，loadEnvFile 保留外部环境值
+  ---
+  duration_ms: 2029.6665
+  type: 'test'
+  ...
+# Subtest: 真实启动失败脱敏：非法环境与端口冲突
+ok 19 - 真实启动失败脱敏：非法环境与端口冲突
+  ---
+  duration_ms: 7655.0674
+  type: 'test'
+  ...
+# Subtest: 真实子进程启动、IPC 就绪、HTTP 健康检查与 SIGTERM 正常退出
+ok 20 - 真实子进程启动、IPC 就绪、HTTP 健康检查与 SIGTERM 正常退出
+  ---
+  duration_ms: 1901.7791
+  type: 'test'
+  ...
+# Subtest: M03 图片识别：真实类型、尺寸与损坏文件拒绝
+ok 21 - M03 图片识别：真实类型、尺寸与损坏文件拒绝
+  ---
+  duration_ms: 18.2421
+  type: 'test'
+  ...
+# Subtest: M03 项目创建：必填校验、同租户 SKU 重复不覆盖、不同租户可复用 SKU
+ok 22 - M03 项目创建：必填校验、同租户 SKU 重复不覆盖、不同租户可复用 SKU
+  ---
+  duration_ms: 901.8662
+  type: 'test'
+  ...
+# Subtest: M03 跨租户拒绝：未知租户 403，跨租户读写按不存在处理
+ok 23 - M03 跨租户拒绝：未知租户 403，跨租户读写按不存在处理
+  ---
+  duration_ms: 311.7844
+  type: 'test'
+  ...
+# Subtest: M03 素材上传：类型、扩展名、体积、职责与数量上限校验
+ok 24 - M03 素材上传：类型、扩展名、体积、职责与数量上限校验
+  ---
+  duration_ms: 1173.7564
+  type: 'test'
+  ...
+# Subtest: M03 低清素材可保存但提示补图，并进入 readiness 警告
+ok 25 - M03 低清素材可保存但提示补图，并进入 readiness 警告
+  ---
+  duration_ms: 197.7174
+  type: 'test'
+  ...
+# Subtest: M03 参考职责冲突：默认拒绝并给出候选，显式 replace 才替换旧素材
+ok 26 - M03 参考职责冲突：默认拒绝并给出候选，显式 replace 才替换旧素材
+  ---
+  duration_ms: 470.9155
+  type: 'test'
+  ...
+# Subtest: M03 生产闸口：缺图、无关键项、关键项未确认均拦截，确认后放行
+ok 27 - M03 生产闸口：缺图、无关键项、关键项未确认均拦截，确认后放行
+  ---
+  duration_ms: 430.9672
+  type: 'test'
+  ...
+# Subtest: M03 事实规则：风格图不作为事实来源、来源必须属于本项目、坐标需标注单位
+ok 28 - M03 事实规则：风格图不作为事实来源、来源必须属于本项目、坐标需标注单位
+  ---
+  duration_ms: 413.2332
+  type: 'test'
+  ...
+# Subtest: M03 事实版本：乐观锁拒绝旧基线，新版本不覆盖旧版本
+ok 29 - M03 事实版本：乐观锁拒绝旧基线，新版本不覆盖旧版本
+  ---
+  duration_ms: 274.0991
+  type: 'test'
+  ...
+# Subtest: M03 素材被替换后，引用旧素材的事实版本阻止生产
+ok 30 - M03 素材被替换后，引用旧素材的事实版本阻止生产
+  ---
+  duration_ms: 254.5166
+  type: 'test'
+  ...
+# Subtest: M03 路由语义：未知接口 404、错误方法 405 带 Allow（M05 后 /api/runs 与 /api/quotes 已实现）
+ok 31 - M03 路由语义：未知接口 404、错误方法 405 带 Allow（M05 后 /api/runs 与 /api/quotes 已实现）
+  ---
+  duration_ms: 359.5571
+  type: 'test'
+  ...
+# Subtest: M03 持久化：重开服务后项目、素材与事实版本仍可读且哈希一致
+ok 32 - M03 持久化：重开服务后项目、素材与事实版本仍可读且哈希一致
+  ---
+  duration_ms: 439.2958
+  type: 'test'
+  ...
+# Subtest: M03 前端接线：真实数据脚本引用的元素存在、白名单同步、占位文案已替换
+ok 33 - M03 前端接线：真实数据脚本引用的元素存在、白名单同步、占位文案已替换
+  ---
+  duration_ms: 79.6402
+  type: 'test'
+  ...
+# Subtest: M03 readiness 纯函数与接口结论一致
+ok 34 - M03 readiness 纯函数与接口结论一致
+  ---
+  duration_ms: 9.1612
+  type: 'test'
+  ...
+# Subtest: M04 模板目录：交付清单含比例/尺寸/格式/必需标记，且带允许变化、输入要求、QA 与预算
+ok 35 - M04 模板目录：交付清单含比例/尺寸/格式/必需标记，且带允许变化、输入要求、QA 与预算
+  ---
+  duration_ms: 628.835
+  type: 'test'
+  ...
+# Subtest: M04 平台规则：状态按生效/复核日期计算，缺失与过期都只表示覆盖不足
+ok 36 - M04 平台规则：状态按生效/复核日期计算，缺失与过期都只表示覆盖不足
+  ---
+  duration_ms: 201.2733
+  type: 'test'
+  ...
+# Subtest: M04 品牌套件：字段校验、重名拒绝、跨租户不可见
+ok 37 - M04 品牌套件：字段校验、重名拒绝、跨租户不可见
+  ---
+  duration_ms: 253.5737
+  type: 'test'
+  ...
+# Subtest: M04 品牌套件版本：乐观锁、旧版本内容不被改写
+ok 38 - M04 品牌套件版本：乐观锁、旧版本内容不被改写
+  ---
+  duration_ms: 369.9128
+  type: 'test'
+  ...
+# Subtest: M04 预览：平台硬约束与模板/品牌冲突逐条可见且带处理方式
+ok 39 - M04 预览：平台硬约束与模板/品牌冲突逐条可见且带处理方式
+  ---
+  duration_ms: 631.0517
+  type: 'test'
+  ...
+# Subtest: M04 冻结：未处理冲突返回 409 并列出可选处理，不静默取一条
+ok 40 - M04 冻结：未处理冲突返回 409 并列出可选处理，不静默取一条
+  ---
+  duration_ms: 307.6
+  type: 'test'
+  ...
+# Subtest: M04 冻结成功：交付清单按处理方式调整，快照记录模板/套件/规则版本与哈希
+ok 41 - M04 冻结成功：交付清单按处理方式调整，快照记录模板/套件/规则版本与哈希
+  ---
+  duration_ms: 255.5361
+  type: 'test'
+  ...
+# Subtest: M04 规则覆盖：过期与未收录都标记 unknown，且不影响冻结但不得声称平台通过
+ok 42 - M04 规则覆盖：过期与未收录都标记 unknown，且不影响冻结但不得声称平台通过
+  ---
+  duration_ms: 596.6747
+  type: 'test'
+  ...
+# Subtest: M04 无法满足：关键文字超出平台上限时拒绝冻结并指出必须改事实
+ok 43 - M04 无法满足：关键文字超出平台上限时拒绝冻结并指出必须改事实
+  ---
+  duration_ms: 235.9351
+  type: 'test'
+  ...
+# Subtest: M04 无依据内容：未附证据的卖点/成分只给补证据提示，不自动补全文案
+ok 44 - M04 无依据内容：未附证据的卖点/成分只给补证据提示，不自动补全文案
+  ---
+  duration_ms: 368.1827
+  type: 'test'
+  ...
+# Subtest: M04 快照不覆盖：换品牌套件版本后旧 spec 内容与哈希不变，只被判为 stale
+ok 45 - M04 快照不覆盖：换品牌套件版本后旧 spec 内容与哈希不变，只被判为 stale
+  ---
+  duration_ms: 428.1722
+  type: 'test'
+  ...
+# Subtest: M04 清单变更：换模板导致交付清单变化时标记需重新报价并列出差异
+ok 46 - M04 清单变更：换模板导致交付清单变化时标记需重新报价并列出差异
+  ---
+  duration_ms: 611.4364
+  type: 'test'
+  ...
+# Subtest: M04 冻结前置条件：乐观锁冲突与不可生产状态都拒绝，不产生快照
+ok 47 - M04 冻结前置条件：乐观锁冲突与不可生产状态都拒绝，不产生快照
+  ---
+  duration_ms: 688.5894
+  type: 'test'
+  ...
+# Subtest: M04 跨租户：他人项目的快照与套件一律按不存在处理
+ok 48 - M04 跨租户：他人项目的快照与套件一律按不存在处理
+  ---
+  duration_ms: 1038.2924
+  type: 'test'
+  ...
+# Subtest: M04 存储：旧版 data.json 只有三张表也能加载并写入新表
+ok 49 - M04 存储：旧版 data.json 只有三张表也能加载并写入新表
+  ---
+  duration_ms: 571.8369
+  type: 'test'
+  ...
+# Subtest: M04 前端契约：静态白名单包含新文件，页面有生产配置入口
+ok 50 - M04 前端契约：静态白名单包含新文件，页面有生产配置入口
+  ---
+  duration_ms: 61.4404
+  type: 'test'
+  ...
+# Subtest: M05 报价：按清单结构计价、带价格版本与有效期，且声明为演示额度
+ok 51 - M05 报价：按清单结构计价、带价格版本与有效期，且声明为演示额度
+  ---
+  duration_ms: 1045.6696
+  type: 'test'
+  ...
+# Subtest: M05 报价过期：必须重新取价，不允许用旧报价执行
+ok 52 - M05 报价过期：必须重新取价，不允许用旧报价执行
+  ---
+  duration_ms: 1202.7223
+  type: 'test'
+  ...
+# Subtest: M05 报价与快照不一致：冻结新版本后旧报价不得执行
+ok 53 - M05 报价与快照不一致：冻结新版本后旧报价不得执行
+  ---
+  duration_ms: 1653.893
+  type: 'test'
+  ...
+# Subtest: M05 并发提交：余额只够一次任务时只成功一个，且不调用供应商
+ok 54 - M05 并发提交：余额只够一次任务时只成功一个，且不调用供应商
+  ---
+  duration_ms: 889.2114
+  type: 'test'
+  ...
+# Subtest: M05 幂等：同一键重复提交返回同一任务且不重复预留
+ok 55 - M05 幂等：同一键重复提交返回同一任务且不重复预留
+  ---
+  duration_ms: 2085.3632
+  type: 'test'
+  ...
+# Subtest: M05 缺失幂等键：直接拒绝，避免重复提交产生重复费用
+ok 56 - M05 缺失幂等键：直接拒绝，避免重复提交产生重复费用
+  ---
+  duration_ms: 441.2425
+  type: 'test'
+  ...
+# Subtest: M05 账本：只增、余额不为负、同一操作键不重复扣费
+ok 57 - M05 账本：只增、余额不为负、同一操作键不重复扣费
+  ---
+  duration_ms: 7.5174
+  type: 'test'
+  ...
+# Subtest: M05 成功任务：全部交付成功、只结算成功尝试、余量释放、产出可测
+ok 58 - M05 成功任务：全部交付成功、只结算成功尝试、余量释放、产出可测
+  ---
+  duration_ms: 2471.4869
+  type: 'test'
+  ...
+# Subtest: M05 产出文件真实可用：落盘产物能通过服务端图片头解析
+ok 59 - M05 产出文件真实可用：落盘产物能通过服务端图片头解析
+  ---
+  duration_ms: 2636.1587
+  type: 'test'
+  ...
+# Subtest: M05 不可恢复失败：任务失败、捕获为 0、全部释放
+ok 60 - M05 不可恢复失败：任务失败、捕获为 0、全部释放
+  ---
+  duration_ms: 1133.1451
+  type: 'test'
+  ...
+# Subtest: M05 限流重试：轮数上限触达后 limit_reached，不自动改资金也不收费
+ok 61 - M05 限流重试：轮数上限触达后 limit_reached，不自动改资金也不收费
+  ---
+  duration_ms: 1099.4091
+  type: 'test'
+  ...
+# Subtest: M05 超时：本地超时只转未知，不盲重提，核对后才释放额度
+ok 62 - M05 超时：本地超时只转未知，不盲重提，核对后才释放额度
+  ---
+  duration_ms: 1424.31
+  type: 'test'
+  ...
+# Subtest: M05 unknown 轮询：不重复提交、不额外收费，最终仍成功
+ok 63 - M05 unknown 轮询：不重复提交、不额外收费，最终仍成功
+  ---
+  duration_ms: 1607.0464
+  type: 'test'
+  ...
+# Subtest: M05 取消：重复取消幂等，迟到结果不复活也不扣费
+ok 64 - M05 取消：重复取消幂等，迟到结果不复活也不扣费
+  ---
+  duration_ms: 897.3828
+  type: 'test'
+  ...
+# Subtest: M05 预算不足：进入 awaiting_confirmation 且不自动扩大预算
+ok 65 - M05 预算不足：进入 awaiting_confirmation 且不自动扩大预算
+  ---
+  duration_ms: 2117.4118
+  type: 'test'
+  ...
+# Subtest: M05 拒绝追加预算：任务按取消处理，未发生部分释放
+ok 66 - M05 拒绝追加预算：任务按取消处理，未发生部分释放
+  ---
+  duration_ms: 1087.8745
+  type: 'test'
+  ...
+# Subtest: M05 SSE：事件流可按 Last-Event-ID 续传且不重放旧事件
+ok 67 - M05 SSE：事件流可按 Last-Event-ID 续传且不重放旧事件
+  ---
+  duration_ms: 1853.5393
+  type: 'test'
+  ...
+# Subtest: M05 SSE 契约：事件名统一为 message，终态标记不携带 id
+ok 68 - M05 SSE 契约：事件名统一为 message，终态标记不携带 id
+  ---
+  duration_ms: 1695.0015
+  type: 'test'
+  ...
+# Subtest: M05 重启恢复：已提交的任务按幂等键重挂，继续完成后不重复结算
+ok 69 - M05 重启恢复：已提交的任务按幂等键重挂，继续完成后不重复结算
+  ---
+  duration_ms: 15033.1922
+  type: 'test'
+  ...
+# Subtest: M05 跨租户：他人任务的读取与取消一律按不存在处理
+ok 70 - M05 跨租户：他人任务的读取与取消一律按不存在处理
+  ---
+  duration_ms: 1136.4016
+  type: 'test'
+  ...
+# Subtest: M05 生产前置未满足：不允许绕过闸口直接开跑
+ok 71 - M05 生产前置未满足：不允许绕过闸口直接开跑
+  ---
+  duration_ms: 228.3397
+  type: 'test'
+  ...
+# Subtest: M05 前端契约：静态白名单与任务面板元素齐备
+ok 72 - M05 前端契约：静态白名单与任务面板元素齐备
+  ---
+  duration_ms: 8.7276
+  type: 'test'
+  ...
+# Subtest: M06 PNG：自产 PNG 可解码，掩码与去背图可还原，主体占比合理
+ok 73 - M06 PNG：自产 PNG 可解码，掩码与去背图可还原，主体占比合理
+  ---
+  duration_ms: 237.0111
+  type: 'test'
+  ...
+# Subtest: M06 掩码不可用：非 PNG、损坏 PNG、纯色退化都必须明确返回原因
+ok 74 - M06 掩码不可用：非 PNG、损坏 PNG、纯色退化都必须明确返回原因
+  ---
+  duration_ms: 28.715
+  type: 'test'
+  ...
+# Subtest: M06 本地合成：只替换掩码内像素，掩码外保持生成图原样
+ok 75 - M06 本地合成：只替换掩码内像素，掩码外保持生成图原样
+  ---
+  duration_ms: 73.8598
+  type: 'test'
+  ...
+# Subtest: M06 本地合成拒绝非 PNG 输出，不猜测像素
+ok 76 - M06 本地合成拒绝非 PNG 输出，不猜测像素
+  ---
+  duration_ms: 9.1419
+  type: 'test'
+  ...
+# Subtest: M06 参考图职责：顺序固定、主体与包装优先、超出容量明确记录 dropped
+ok 77 - M06 参考图职责：顺序固定、主体与包装优先、超出容量明确记录 dropped
+  ---
+  duration_ms: 3.206
+  type: 'test'
+  ...
+# Subtest: M06 主体保护闸口：真实 Provider 无能力必须拒绝，模拟可降级但必须带警告
+ok 78 - M06 主体保护闸口：真实 Provider 无能力必须拒绝，模拟可降级但必须带警告
+  ---
+  duration_ms: 94.9357
+  type: 'test'
+  ...
+# Subtest: M06 Seedream Adapter：缺密钥构造即失败，绝不回落到模拟
+ok 79 - M06 Seedream Adapter：缺密钥构造即失败，绝不回落到模拟
+  ---
+  duration_ms: 6.2571
+  type: 'test'
+  ...
+# Subtest: M06 Seedream Adapter：能力如实声明，主体保护校验拒绝无掩码请求
+ok 80 - M06 Seedream Adapter：能力如实声明，主体保护校验拒绝无掩码请求
+  ---
+  duration_ms: 20.7324
+  type: 'test'
+  ...
+# Subtest: M06 Seedream Adapter：真实调用解析模型、用量、时延、请求 id 与输出哈希
+ok 81 - M06 Seedream Adapter：真实调用解析模型、用量、时延、请求 id 与输出哈希
+  ---
+  duration_ms: 18.9243
+  type: 'test'
+  ...
+# Subtest: M06 Seedream Adapter：内容策略拒绝映射为 CONTENT_REJECTED 且不可重试
+ok 82 - M06 Seedream Adapter：内容策略拒绝映射为 CONTENT_REJECTED 且不可重试
+  ---
+  duration_ms: 9.5419
+  type: 'test'
+  ...
+# Subtest: M06 端到端（模拟）：掩码生成、参考职责、能力查询与生成记录齐全
+ok 83 - M06 端到端（模拟）：掩码生成、参考职责、能力查询与生成记录齐全
+  ---
+  duration_ms: 4575.2523
+  type: 'test'
+  ...
+# Subtest: M06 端到端（真实 Adapter）：未声明能力时创建阶段 422 拒绝，不入队也不收费
+ok 84 - M06 端到端（真实 Adapter）：未声明能力时创建阶段 422 拒绝，不入队也不收费
+  ---
+  duration_ms: 1452.1649
+  type: 'test'
+  ...
+# Subtest: M06 端到端（真实 Adapter）：通过本地主体合成走真实契约，记录明确标未验收
+ok 85 - M06 端到端（真实 Adapter）：通过本地主体合成走真实契约，记录明确标未验收
+  ---
+  duration_ms: 2456.9834
+  type: 'test'
+  ...
+# Subtest: M07 判定：硬失败一律 blocked，美学分再高也不能覆盖
+ok 86 - M07 判定：硬失败一律 blocked，美学分再高也不能覆盖
+  ---
+  duration_ms: 10.6825
+  type: 'test'
+  ...
+# Subtest: M07 判定：必要项未知为 needs_review，不必填项未知不影响
+ok 87 - M07 判定：必要项未知为 needs_review，不必填项未知不影响
+  ---
+  duration_ms: 1.0016
+  type: 'test'
+  ...
+# Subtest: M07 检查：格式不符是硬失败；纯色图与"原图冒充生成图"也硬失败
+ok 88 - M07 检查：格式不符是硬失败；纯色图与"原图冒充生成图"也硬失败
+  ---
+  duration_ms: 111.3812
+  type: 'test'
+  ...
+# Subtest: M07 检查：无 OCR、无视觉模型、平台规则未核验都只算未知，不写成通过
+ok 89 - M07 检查：无 OCR、无视觉模型、平台规则未核验都只算未知，不写成通过
+  ---
+  duration_ms: 12.958
+  type: 'test'
+  ...
+# Subtest: M07 检查：平台规则过期或覆盖不足时不可由人工裁决放行
+ok 90 - M07 检查：平台规则过期或覆盖不足时不可由人工裁决放行
+  ---
+  duration_ms: 16.5451
+  type: 'test'
+  ...
+# Subtest: M07 复核：只覆盖 unknown 且可裁决项，机器结论不被改写
+ok 91 - M07 复核：只覆盖 unknown 且可裁决项，机器结论不被改写
+  ---
+  duration_ms: 8.6059
+  type: 'test'
+  ...
+# Subtest: M07 复核：硬失败、非可裁决项、缺理由、缺证据、重复与未知项全部拒绝
+ok 92 - M07 复核：硬失败、非可裁决项、缺理由、缺证据、重复与未知项全部拒绝
+  ---
+  duration_ms: 11.956
+  type: 'test'
+  ...
+# Subtest: M07 复核：检查器异常只能待复核，不能被确认放行
+ok 93 - M07 复核：检查器异常只能待复核，不能被确认放行
+  ---
+  duration_ms: 2.6768
+  type: 'test'
+  ...
+# Subtest: M07 像素：本地合成后掩码内像素逐一相等，篡改一个像素即失败
+ok 94 - M07 像素：本地合成后掩码内像素逐一相等，篡改一个像素即失败
+  ---
+  duration_ms: 236.0379
+  type: 'test'
+  ...
+# Subtest: M07 有效性：事实、快照、品牌、规则或文件任一变化都判为 stale
+ok 95 - M07 有效性：事实、快照、品牌、规则或文件任一变化都判为 stale
+  ---
+  duration_ms: 12.3524
+  type: 'test'
+  ...
+# Subtest: M07 汇总：任一交付物 blocked 就不是可发布，缺报告不能算通过
+ok 96 - M07 汇总：任一交付物 blocked 就不是可发布，缺报告不能算通过
+  ---
+  duration_ms: 2.4252
+  type: 'test'
+  ...
+# Subtest: M07 端到端（模拟）：生成后自动出报告、租户隔离、复核受限且失效后拒收
+ok 97 - M07 端到端（模拟）：生成后自动出报告、租户隔离、复核受限且失效后拒收
+  ---
+  duration_ms: 3696.829
+  type: 'test'
+  ...
+# Subtest: M08 修订计划：只挑可修复硬失败，一次一个关键项，并保留通过项
+ok 98 - M08 修订计划：只挑可修复硬失败，一次一个关键项，并保留通过项
+  ---
+  duration_ms: 11.6747
+  type: 'test'
+  ...
+# Subtest: M08 修订对比：解决目标项且无退化才算改善
+ok 99 - M08 修订对比：解决目标项且无退化才算改善
+  ---
+  duration_ms: 2.3858
+  type: 'test'
+  ...
+# Subtest: M08 导出资格：完整包要求全部可发布且有效，部分包只带可发布项
+ok 100 - M08 导出资格：完整包要求全部可发布且有效，部分包只带可发布项
+  ---
+  duration_ms: 5.0313
+  type: 'test'
+  ...
+# Subtest: M08 ZIP：零依赖打包可被标准解压读取，清单与摘要都在包内
+ok 101 - M08 ZIP：零依赖打包可被标准解压读取，清单与摘要都在包内
+  ---
+  duration_ms: 12.2947
+  type: 'test'
+  ...
+# Subtest: M08 端到端（模拟）：首轮硬失败自动修订，复核后可导出完整包，事实变化后拒绝导出
+ok 102 - M08 端到端（模拟）：首轮硬失败自动修订，复核后可导出完整包，事实变化后拒绝导出
+  ---
+  duration_ms: 7977.1457
+  type: 'test'
+  ...
+# Subtest: M08 停止条件：预算触顶即停，不扩预算，也不把失败包装成通过
+ok 103 - M08 停止条件：预算触顶即停，不扩预算，也不把失败包装成通过
+  ---
+  duration_ms: 1667.1998
+  type: 'test'
+  ...
+# Subtest: M09 数据集摘要：未授权样本不计入，不足 100 SKU 与留出集不足必须阻断
+ok 104 - M09 数据集摘要：未授权样本不计入，不足 100 SKU 与留出集不足必须阻断
+  ---
+  duration_ms: 10.9262
+  type: 'test'
+  ...
+# Subtest: M09 冠军—挑战者：任一项回退即拒绝，全部不劣且至少一项更优才允许晋级
+ok 105 - M09 冠军—挑战者：任一项回退即拒绝，全部不劣且至少一项更优才允许晋级
+  ---
+  duration_ms: 2.4673
+  type: 'test'
+  ...
+# Subtest: M09 评测结论：授权素材不足时不得声称评测完成，未知样本不算正确
+ok 106 - M09 评测结论：授权素材不足时不得声称评测完成，未知样本不算正确
+  ---
+  duration_ms: 12.4977
+  type: 'test'
+  ...
+# Subtest: M09 灰度计划：上限 5%，候选未胜出或缺 Adapter 时比例为 0
+ok 107 - M09 灰度计划：上限 5%，候选未胜出或缺 Adapter 时比例为 0
+  ---
+  duration_ms: 1.5858
+  type: 'test'
+  ...
+# Subtest: M09 灰度健康：样本不足、未知率与真实性触线都要求回滚
+ok 108 - M09 灰度健康：样本不足、未知率与真实性触线都要求回滚
+  ---
+  duration_ms: 3.3284
+  type: 'test'
+  ...
+# Subtest: M09 端到端：授权导入 → 评测 → 候选路由与灰度阻断 → 数据集变更使报告失效 → 租户隔离
+ok 109 - M09 端到端：授权导入 → 评测 → 候选路由与灰度阻断 → 数据集变更使报告失效 → 租户隔离
+  ---
+  duration_ms: 985.8056
+  type: 'test'
+  ...
+# Subtest: M10 详情来源：缺失/非法类型/事实不存在/值不一致/素材失效都必须拒绝
+ok 110 - M10 详情来源：缺失/非法类型/事实不存在/值不一致/素材失效都必须拒绝
+  ---
+  duration_ms: 12.3277
+  type: 'test'
+  ...
+# Subtest: M10 详情页：六模块齐全且来源完整才可发布；缺模块、缺来源、值不一致、文案版本缺失都阻断
+ok 111 - M10 详情页：六模块齐全且来源完整才可发布；缺模块、缺来源、值不一致、文案版本缺失都阻断
+  ---
+  duration_ms: 41.0393
+  type: 'test'
+  ...
+# Subtest: M10 详情页：重检只重解析签名变化的参数，但关键约束全量检查；上下文变化即 stale
+ok 112 - M10 详情页：重检只重解析签名变化的参数，但关键约束全量检查；上下文变化即 stale
+  ---
+  duration_ms: 6.6637
+  type: 'test'
+  ...
+# Subtest: M10 视频计划：无首帧/首帧待复核/超 3 秒/幅度过大/音源不可追溯/Provider 无视频能力都阻断
+ok 113 - M10 视频计划：无首帧/首帧待复核/超 3 秒/幅度过大/音源不可追溯/Provider 无视频能力都阻断
+  ---
+  duration_ms: 9.1432
+  type: 'test'
+  ...
+# Subtest: M10 视频计划：首帧可发布 + 3 秒低幅度 + 音轨授权 + 分镜齐全 且 Provider 支持视频才 ready
+ok 114 - M10 视频计划：首帧可发布 + 3 秒低幅度 + 音轨授权 + 分镜齐全 且 Provider 支持视频才 ready
+  ---
+  duration_ms: 1.8292
+  type: 'test'
+  ...
+# Subtest: M10 帧检查：中间帧硬失败必然阻断；缺检测按待复核；缺帧不能算通过
+ok 115 - M10 帧检查：中间帧硬失败必然阻断；缺检测按待复核；缺帧不能算通过
+  ---
+  duration_ms: 4.2645
+  type: 'test'
+  ...
+# Subtest: M10 平台交付：未收录平台不承诺任何形式；HTML 永不承诺直传
+ok 116 - M10 平台交付：未收录平台不承诺任何形式；HTML 永不承诺直传
+  ---
+  duration_ms: 1.0768
+  type: 'test'
+  ...
+# Subtest: M10 联合清单：视频缺失必须显式列出，不静默省略；HTML 直传不承诺
+ok 117 - M10 联合清单：视频缺失必须显式列出，不静默省略；HTML 直传不承诺
+  ---
+  duration_ms: 2.925
+  type: 'test'
+  ...
+# Subtest: M10 端到端：详情页来源/事实/失效阻断 → 视频计划与帧检查 → 联合导出 → 租户隔离
+ok 118 - M10 端到端：详情页来源/事实/失效阻断 → 视频计划与帧检查 → 联合导出 → 租户隔离
+  ---
+  duration_ms: 2135.948
+  type: 'test'
+  ...
+# Subtest: M11 导入映射：未知字段、列不在表头、列重复、缺必填映射都必须报错
+ok 119 - M11 导入映射：未知字段、列不在表头、列重复、缺必填映射都必须报错
+  ---
+  duration_ms: 10.0132
+  type: 'test'
+  ...
+# Subtest: M11 逐行预览：非法行与重复 SKU 只影响自身，不静默丢弃整批
+ok 120 - M11 逐行预览：非法行与重复 SKU 只影响自身，不静默丢弃整批
+  ---
+  duration_ms: 4.5334
+  type: 'test'
+  ...
+# Subtest: M11 批量计划：无可用条目、超预算、未确认预算都不允许开始
+ok 121 - M11 批量计划：无可用条目、超预算、未确认预算都不允许开始
+  ---
+  duration_ms: 3.852
+  type: 'test'
+  ...
+# Subtest: M11 批量导出：失败与阻断逐项列出；完整包不允许带缺口
+ok 122 - M11 批量导出：失败与阻断逐项列出；完整包不允许带缺口
+  ---
+  duration_ms: 2.4272
+  type: 'test'
+  ...
+# Subtest: M11 成员：零成员租户引导为 owner；角色矩阵与最后 owner 保护
+ok 123 - M11 成员：零成员租户引导为 owner；角色矩阵与最后 owner 保护
+  ---
+  duration_ms: 2.8561
+  type: 'test'
+  ...
+# Subtest: M11 配方：私有仅创建者可见；共享需审批；新审批让旧引用 stale
+ok 124 - M11 配方：私有仅创建者可见；共享需审批；新审批让旧引用 stale
+  ---
+  duration_ms: 11.9918
+  type: 'test'
+  ...
+# Subtest: M11 目录控制台：按阻断原因聚合而不是只给总数
+ok 125 - M11 目录控制台：按阻断原因聚合而不是只给总数
+  ---
+  duration_ms: 1.7257
+  type: 'test'
+  ...
+# Subtest: M11 端到端：导入→预览阻断→权限→批量执行失败隔离→部分导出→配方审批失效→租户隔离
+ok 126 - M11 端到端：导入→预览阻断→权限→批量执行失败隔离→部分导出→配方审批失效→租户隔离
+  ---
+  duration_ms: 6610.1957
+  type: 'test'
+  ...
+# Subtest: M12 采用/驳回：决策合法、驳回必须带理由、备注有上限、arm 必须挂在实验上
+ok 127 - M12 采用/驳回：决策合法、驳回必须带理由、备注有上限、arm 必须挂在实验上
+  ---
+  duration_ms: 9.0133
+  type: 'test'
+  ...
+# Subtest: M12 采用资格：必须当前选用、可发布且未失效；驳回允许落在失败任务上
+ok 128 - M12 采用资格：必须当前选用、可发布且未失效；驳回允许落在失败任务上
+  ---
+  duration_ms: 3.4357
+  type: 'test'
+  ...
+# Subtest: M12 反馈统计：同一版本以最新一条为准，历史保留但不重复计数
+ok 129 - M12 反馈统计：同一版本以最新一条为准，历史保留但不重复计数
+  ---
+  duration_ms: 73.8628
+  type: 'test'
+  ...
+# Subtest: M12 效果导入：未授权与无来源拒绝；非法行逐行报错，正确行仍可用
+ok 130 - M12 效果导入：未授权与无来源拒绝；非法行逐行报错，正确行仍可用
+  ---
+  duration_ms: 4.6027
+  type: 'test'
+  ...
+# Subtest: M12 实验口径：样本不足只标不足，样本足够也只说观测差异、不做显著性
+ok 131 - M12 实验口径：样本不足只标不足，样本足够也只说观测差异、不做显著性
+  ---
+  duration_ms: 3.758
+  type: 'test'
+  ...
+# Subtest: M12 商业化：套餐不可计费；无支付 Provider 阻断；模拟 Provider 只能演示；真实 Provider 缺退款能力也要报
+ok 132 - M12 商业化：套餐不可计费；无支付 Provider 阻断；模拟 Provider 只能演示；真实 Provider 缺退款能力也要报
+  ---
+  duration_ms: 1.9664
+  type: 'test'
+  ...
+# Subtest: M12 备份：按租户裁剪、清单校验、篡改与缺文件都能发现，恢复不覆盖其他租户
+ok 133 - M12 备份：按租户裁剪、清单校验、篡改与缺文件都能发现，恢复不覆盖其他租户
+  ---
+  duration_ms: 13.4057
+  type: 'test'
+  ...
+# Subtest: M12 可观测性快照：只统计本租户、在途按真实状态算、计数不含内容
+ok 134 - M12 可观测性快照：只统计本租户、在途按真实状态算、计数不含内容
+  ---
+  duration_ms: 3.8997
+  type: 'test'
+  ...
+# Subtest: M12 端到端：采用回流→实验口径→支付阻断→可观测性→备份恢复→租户隔离
+ok 135 - M12 端到端：采用回流→实验口径→支付阻断→可观测性→备份恢复→租户隔离
+  ---
+  duration_ms: 5097.8129
+  type: 'test'
+  ...
+# Subtest: M12 端到端：演示订单只发内部演示额度，重复结算与退款都被阻断
+ok 136 - M12 端到端：演示订单只发内部演示额度，重复结算与退款都被阻断
+  ---
+  duration_ms: 241.939
+  type: 'test'
+  ...
+# [api] 未预期错误 /api/auth/password-reset EMAIL_SERVICE_NOT_CONFIGURED ApiError: 账户恢复依赖邮件服务，当前部署未配置，暂不可用；请联系管理员或使用本地账户重置流程
+#     at handleAuth (file:///E:/%E6%B8%B8%E6%88%8F/%E5%8D%83%E5%9B%BE%E7%99%BE%E7%82%BC/qiantubailian-commerce/src/api.mjs:777:15)
+#     at dispatch (file:///E:/%E6%B8%B8%E6%88%8F/%E5%8D%83%E5%9B%BE%E7%99%BE%E7%82%BC/qiantubailian-commerce/src/api.mjs:227:36)
+#     at publish (file:///E:/%E6%B8%B8%E6%88%8F/%E5%8D%83%E5%9B%BE%E7%99%BE%E7%82%BC/qiantubailian-commerce/src/api.mjs:206:13)
+#     at handle (file:///E:/%E6%B8%B8%E6%88%8F/%E5%8D%83%E5%9B%BE%E7%99%BE%E7%82%BC/qiantubailian-commerce/src/server.mjs:110:15)
+#     at Server.<anonymous> (file:///E:/%E6%B8%B8%E6%88%8F/%E5%8D%83%E5%9B%BE%E7%99%BE%E7%82%BC/qiantubailian-commerce/src/server.mjs:131:5)
+#     at Server.emit (node:events:519:28)
+#     at parserOnIncoming (node:_http_server:1186:12)
+#     at HTTPParser.parserOnHeadersComplete (node:_http_common:125:17)
+# Subtest: R01 生产模式默认拒绝未认证访问，且演示头不能自授权
+ok 137 - R01 生产模式默认拒绝未认证访问，且演示头不能自授权
+  ---
+  duration_ms: 382.8038
+  type: 'test'
+  ...
+# Subtest: R01 注册、登录、会话与 CSRF 闸口
+ok 138 - R01 注册、登录、会话与 CSRF 闸口
+  ---
+  duration_ms: 519.317
+  type: 'test'
+  ...
+# Subtest: R01 跨账户隔离、viewer 边界与最后 owner 保护
+ok 139 - R01 跨账户隔离、viewer 边界与最后 owner 保护
+  ---
+  duration_ms: 1445.6372
+  type: 'test'
+  ...
+# Subtest: R01 登录限流、退出登录与跨站写请求拒绝
+ok 140 - R01 登录限流、退出登录与跨站写请求拒绝
+  ---
+  duration_ms: 2700.878
+  type: 'test'
+  ...
+# Subtest: R01 演示模式只在非生产可用，配置层强制隔离
+ok 141 - R01 演示模式只在非生产可用，配置层强制隔离
+  ---
+  duration_ms: 111.8406
+  type: 'test'
+  ...
+# Subtest: R02 交付数量展开：封面 1 张 + 内页 2 张确有 3 个可追踪产物
+ok 142 - R02 交付数量展开：封面 1 张 + 内页 2 张确有 3 个可追踪产物
+  ---
+  duration_ms: 2264.5406
+  type: 'test'
+  ...
+# Subtest: R02 未知结果长期存在：不重复提交、预算继续冻结、转人工核对
+ok 143 - R02 未知结果长期存在：不重复提交、预算继续冻结、转人工核对
+  ---
+  duration_ms: 1608.0519
+  type: 'test'
+  ...
+# Subtest: R02 未知但已产出：按已发生阶段结算并记录供应商成本，交付仍不完整
+ok 144 - R02 未知但已产出：按已发生阶段结算并记录供应商成本，交付仍不完整
+  ---
+  duration_ms: 1244.7764
+  type: 'test'
+  ...
+# Subtest: R02 取消后迟到结果不复活，未知调用同样可取消
+ok 145 - R02 取消后迟到结果不复活，未知调用同样可取消
+  ---
+  duration_ms: 1227.6424
+  type: 'test'
+  ...
+# Subtest: R02 供应商级并发上限：单任务上限不等于全局上限
+ok 146 - R02 供应商级并发上限：单任务上限不等于全局上限
+  ---
+  duration_ms: 5660.4636
+  type: 'test'
+  ...
+# Subtest: R03 批次：先扣最早到期，到期只回收可用部分，释放后再回收且不出现负余额
+ok 147 - R03 批次：先扣最早到期，到期只回收可用部分，释放后再回收且不出现负余额
+  ---
+  duration_ms: 35.9544
+  type: 'test'
+  ...
+# Subtest: R03 体验额度：绑定第一个商品后不能再给第二个商品；退款不重复、不超过已结算
+ok 148 - R03 体验额度：绑定第一个商品后不能再给第二个商品；退款不重复、不超过已结算
+  ---
+  duration_ms: 9.4115
+  type: 'test'
+  ...
+# Subtest: R03 套餐：体验 3 张/1 商品；付费包价格、有效期与不结转规则明确；订单发放幂等
+ok 149 - R03 套餐：体验 3 张/1 商品；付费包价格、有效期与不结转规则明确；订单发放幂等
+  ---
+  duration_ms: 2.8506
+  type: 'test'
+  ...
+# Subtest: R03 持久化：重启前后余额与批次一致；旧数据补遗留批次后可正常结算
+ok 150 - R03 持久化：重启前后余额与批次一致；旧数据补遗留批次后可正常结算
+  ---
+  duration_ms: 193.2096
+  type: 'test'
+  ...
+# Subtest: R03 账户：注册只发一次体验额度；余额不足在调用供应商前被拒绝；同键重复提交不重复预留
+ok 151 - R03 账户：注册只发一次体验额度；余额不足在调用供应商前被拒绝；同键重复提交不重复预留
+  ---
+  duration_ms: 5911.2079
+  type: 'test'
+  ...
+# Subtest: R03 下载：同一已付版本重复导出与下载不再扣费
+ok 152 - R03 下载：同一已付版本重复导出与下载不再扣费
+  ---
+  duration_ms: 5979.3025
+  type: 'test'
+  ...
+# Subtest: R04 编译：事实、品牌、构图、平台与文字层都进入执行指令，未确认事实不出现
+ok 153 - R04 编译：事实、品牌、构图、平台与文字层都进入执行指令，未确认事实不出现
+  ---
+  duration_ms: 18.0462
+  type: 'test'
+  ...
+# Subtest: R04 修订指令：只修具体项，并明确保留已通过项
+ok 154 - R04 修订指令：只修具体项，并明确保留已通过项
+  ---
+  duration_ms: 2.2338
+  type: 'test'
+  ...
+# Subtest: R04 OCR：未配置时保持 unknown；配置后按阈值标证据缺口，关键文字不符即硬失败
+ok 155 - R04 OCR：未配置时保持 unknown；配置后按阈值标证据缺口，关键文字不符即硬失败
+  ---
+  duration_ms: 5993.2264
+  type: 'test'
+  ...
+# Subtest: R04 文字层：导出的 SVG 可编辑，文字与位置来自执行计划
+ok 156 - R04 文字层：导出的 SVG 可编辑，文字与位置来自执行计划
+  ---
+  duration_ms: 134.9889
+  type: 'test'
+  ...
+# Subtest: R04 端到端（模拟）：配置变化改变供应商请求，JPEG 需矩形掩码，OCR 未配置时如实说明
+ok 157 - R04 端到端（模拟）：配置变化改变供应商请求，JPEG 需矩形掩码，OCR 未配置时如实说明
+  ---
+  duration_ms: 3011.9797
+  type: 'test'
+  ...
+# Subtest: R04 请求哈希：风格或事实变化会产生不同的供应商请求
+ok 158 - R04 请求哈希：风格或事实变化会产生不同的供应商请求
+  ---
+  duration_ms: 2642.6182
+  type: 'test'
+  ...
+# Subtest: R04 OCR 已配置：候选进入事实前必须人工确认，未确认项不能直接用于生成
+ok 159 - R04 OCR 已配置：候选进入事实前必须人工确认，未确认项不能直接用于生成
+  ---
+  duration_ms: 1205.7314
+  type: 'test'
+  ...
+# Subtest: R04 掩码预览与矩形：跨租户不可访问，且不得改写原始素材
+ok 160 - R04 掩码预览与矩形：跨租户不可访问，且不得改写原始素材
+  ---
+  duration_ms: 636.9342
+  type: 'test'
+  ...
+# Subtest: R05 共享 server 启动
+ok 161 - R05 共享 server 启动
+  ---
+  duration_ms: 210.7662
+  type: 'test'
+  ...
+# Subtest: R05 listRuns 按 project_id 过滤
+ok 162 - R05 listRuns 按 project_id 过滤
+  ---
+  duration_ms: 2679.2796
+  type: 'test'
+  ...
+# Subtest: R05 报价规格字段：width/height/ratio/formats/spec 不再为空
+ok 163 - R05 报价规格字段：width/height/ratio/formats/spec 不再为空
+  ---
+  duration_ms: 1414.6771
+  type: 'test'
+  ...
+# Subtest: R05 版本切换与 active_version_id 更新
+ok 164 - R05 版本切换与 active_version_id 更新
+  ---
+  duration_ms: 5119.0928
+  type: 'test'
+  ...
+# Subtest: R05 完整包/部分包导出：scope 正确
+ok 165 - R05 完整包/部分包导出：scope 正确
+  ---
+  duration_ms: 4131.4789
+  type: 'test'
+  ...
+# Subtest: R05 UI 契约：工作台必需 DOM 节点存在
+ok 166 - R05 UI 契约：工作台必需 DOM 节点存在
+  ---
+  duration_ms: 52.9551
+  type: 'test'
+  ...
+# Subtest: R05 共享 server 清理
+ok 167 - R05 共享 server 清理
+  ---
+  duration_ms: 107.5309
+  type: 'test'
+  ...
+# Subtest: R06 首页文案：移除绝对承诺
+ok 168 - R06 首页文案：移除绝对承诺
+  ---
+  duration_ms: 57.005
+  type: 'test'
+  ...
+# Subtest: R06 导航清晰：商品项目 / 模板与品牌 / 素材与版本
+ok 169 - R06 导航清晰：商品项目 / 模板与品牌 / 素材与版本
+  ---
+  duration_ms: 9.9333
+  type: 'test'
+  ...
+# Subtest: R06 品牌配方 + 模板库页面真实渲染容器存在
+ok 170 - R06 品牌配方 + 模板库页面真实渲染容器存在
+  ---
+  duration_ms: 14.8573
+  type: 'test'
+  ...
+# Subtest: R06 首页分流：真实项目容器存在
+ok 171 - R06 首页分流：真实项目容器存在
+  ---
+  duration_ms: 6.9543
+  type: 'test'
+  ...
+# Subtest: R06 workbench 窄屏规则
+ok 172 - R06 workbench 窄屏规则
+  ---
+  duration_ms: 4.692
+  type: 'test'
+  ...
+# Subtest: R06 setView 派发 qb:view-change
+ok 173 - R06 setView 派发 qb:view-change
+  ---
+  duration_ms: 4.4986
+  type: 'test'
+  ...
+# Subtest: R07 共享 server 启动
+ok 174 - R07 共享 server 启动
+  ---
+  duration_ms: 222.4265
+  type: 'test'
+  ...
+# Subtest: R07 /api/plans 返回套餐、价格与有效期全部来自后端
+ok 175 - R07 /api/plans 返回套餐、价格与有效期全部来自后端
+  ---
+  duration_ms: 44.5013
+  type: 'test'
+  ...
+# Subtest: R07 /api/plans payment 能力闸口：未配置真实支付 can_checkout=false
+ok 176 - R07 /api/plans payment 能力闸口：未配置真实支付 can_checkout=false
+  ---
+  duration_ms: 26.0298
+  type: 'test'
+  ...
+# Subtest: R07 UI 契约：价格页必需 DOM 节点存在
+ok 177 - R07 UI 契约：价格页必需 DOM 节点存在
+  ---
+  duration_ms: 25.7755
+  type: 'test'
+  ...
+# Subtest: R07 共享 server 清理
+ok 178 - R07 共享 server 清理
+  ---
+  duration_ms: 85.7794
+  type: 'test'
+  ...
+# Subtest: R08 evaluatePaymentCapability：mock provider 默认 → can_checkout=true, can_settle=true, can_refund=false
+ok 179 - R08 evaluatePaymentCapability：mock provider 默认 → can_checkout=true, can_settle=true, can_refund=false
+  ---
+  duration_ms: 6.7607
+  type: 'test'
+  ...
+# Subtest: R08 evaluatePaymentCapability：mock provider 模拟 realMoney → can_checkout=true, can_refund=true
+ok 180 - R08 evaluatePaymentCapability：mock provider 模拟 realMoney → can_checkout=true, can_refund=true
+  ---
+  duration_ms: 0.7118
+  type: 'test'
+  ...
+# Subtest: R08 evaluatePaymentCapability：真实 wechat provider → can_checkout=true, can_settle=true
+ok 181 - R08 evaluatePaymentCapability：真实 wechat provider → can_checkout=true, can_settle=true
+  ---
+  duration_ms: 0.8489
+  type: 'test'
+  ...
+# Subtest: R08 createPaymentProviderFromEnv：wechat_native 缺配置即抛，不回落到 mock
+ok 182 - R08 createPaymentProviderFromEnv：wechat_native 缺配置即抛，不回落到 mock
+  ---
+  duration_ms: 2.6694
+  type: 'test'
+  ...
+# Subtest: R08 createPaymentProviderFromEnv：mock 无配置也能构造
+ok 183 - R08 createPaymentProviderFromEnv：mock 无配置也能构造
+  ---
+  duration_ms: 0.7898
+  type: 'test'
+  ...
+# Subtest: R08 createWechatPaymentProvider：真实密钥正确时能构造（仅检查字段存在）
+ok 184 - R08 createWechatPaymentProvider：真实密钥正确时能构造（仅检查字段存在）
+  ---
+  duration_ms: 2.7448
+  type: 'test'
+  ...
+# Subtest: R08 共享 server 启动（mock 支付 Provider）
+ok 185 - R08 共享 server 启动（mock 支付 Provider）
+  ---
+  duration_ms: 205.2509
+  type: 'test'
+  ...
+# Subtest: R08 免单套餐（plan_first_trial）：直接发放额度，不走支付
+ok 186 - R08 免单套餐（plan_first_trial）：直接发放额度，不走支付
+  ---
+  duration_ms: 82.1674
+  type: 'test'
+  ...
+# Subtest: R08 mock 真实支付下单（plan_taster_10）：pending_wechat_checkout，返回 code_url
+ok 187 - R08 mock 真实支付下单（plan_taster_10）：pending_wechat_checkout，返回 code_url
+  ---
+  duration_ms: 85.129
+  type: 'test'
+  ...
+# Subtest: R08 手动 settle 真实支付订单被拦截
+ok 188 - R08 手动 settle 真实支付订单被拦截
+  ---
+  duration_ms: 66.9201
+  type: 'test'
+  ...
+# Subtest: R08 关单：pending_wechat_checkout → wechat_closed
+ok 189 - R08 关单：pending_wechat_checkout → wechat_closed
+  ---
+  duration_ms: 86.696
+  type: 'test'
+  ...
+# Subtest: R08 查单同步：provider 变 SUCCESS → 自动 settled_real
+ok 190 - R08 查单同步：provider 变 SUCCESS → 自动 settled_real
+  ---
+  duration_ms: 140.6591
+  type: 'test'
+  ...
+# Subtest: R08 回调通知：SUCCESS → 自动 settled_real + 额度发放
+ok 191 - R08 回调通知：SUCCESS → 自动 settled_real + 额度发放
+  ---
+  duration_ms: 70.241
+  type: 'test'
+  ...
+# Subtest: R08 回调幂等：同一 out_trade_no 重复通知不重复发额度
+ok 192 - R08 回调幂等：同一 out_trade_no 重复通知不重复发额度
+  ---
+  duration_ms: 97.8191
+  type: 'test'
+  ...
+# Subtest: R08 回调：找不到订单返回 404，避免吞掉通知
+ok 193 - R08 回调：找不到订单返回 404，避免吞掉通知
+  ---
+  duration_ms: 15.3434
+  type: 'test'
+  ...
+# Subtest: R08 回调：关闭/撤销状态 → 订单状态跟随
+ok 194 - R08 回调：关闭/撤销状态 → 订单状态跟随
+  ---
+  duration_ms: 66.6232
+  type: 'test'
+  ...
+# Subtest: R08 createNativeOrder：out_trade_no 格式校验
+ok 195 - R08 createNativeOrder：out_trade_no 格式校验
+  ---
+  duration_ms: 1.61
+  type: 'test'
+  ...
+# Subtest: R08 退款：mock provider realMoney=true 下退款成功回收未使用额度（R09 实现）
+ok 196 - R08 退款：mock provider realMoney=true 下退款成功回收未使用额度（R09 实现）
+  ---
+  duration_ms: 169.0058
+  type: 'test'
+  ...
+# Subtest: R08 共享 server 清理
+ok 197 - R08 共享 server 清理
+  ---
+  duration_ms: 183.4402
+  type: 'test'
+  ...
+# Subtest: R09 revoke 账本类型：从 available 回收，不影响 consumed
+ok 198 - R09 revoke 账本类型：从 available 回收，不影响 consumed
+  ---
+  duration_ms: 20.7937
+  type: 'test'
+  ...
+# Subtest: R09 refundableCreditsForOrder：按 source_order_id 计算可用批次量
+ok 199 - R09 refundableCreditsForOrder：按 source_order_id 计算可用批次量
+  ---
+  duration_ms: 100.1272
+  type: 'test'
+  ...
+# Subtest: R09 共享 server 启动
+ok 200 - R09 共享 server 启动
+  ---
+  duration_ms: 237.8909
+  type: 'test'
+  ...
+# Subtest: R09 退款成功：settled_real 订单退款 → refunded，回收可用额度
+ok 201 - R09 退款成功：settled_real 订单退款 → refunded，回收可用额度
+  ---
+  duration_ms: 286.9449
+  type: 'test'
+  ...
+# Subtest: R09 重复退款：已退款订单再退款 → ORDER_ALREADY_REFUNDED
+ok 202 - R09 重复退款：已退款订单再退款 → ORDER_ALREADY_REFUNDED
+  ---
+  duration_ms: 138.7915
+  type: 'test'
+  ...
+# Subtest: R09 演示订单不能退 → ORDER_NOT_REAL_MONEY
+ok 203 - R09 演示订单不能退 → ORDER_NOT_REAL_MONEY
+  ---
+  duration_ms: 172.2786
+  type: 'test'
+  ...
+# Subtest: R09 未结算订单不能退 → ORDER_NOT_SETTLED
+ok 204 - R09 未结算订单不能退 → ORDER_NOT_SETTLED
+  ---
+  duration_ms: 55.4463
+  type: 'test'
+  ...
+# [api] 未预期错误 /api/billing/orders/ord_cd6b57e0a0732474/refund PAYMENT_REFUND_FAILED ApiError: 退款结果尚未确定，权益保持冻结，请刷新订单查询
+#     at refundBillingOrderRoute (file:///E:/%E6%B8%B8%E6%88%8F/%E5%8D%83%E5%9B%BE%E7%99%BE%E7%82%BC/qiantubailian-commerce/src/api.mjs:3577:13)
+#     at async publish (file:///E:/%E6%B8%B8%E6%88%8F/%E5%8D%83%E5%9B%BE%E7%99%BE%E7%82%BC/qiantubailian-commerce/src/api.mjs:206:7)
+#     at async handle (file:///E:/%E6%B8%B8%E6%88%8F/%E5%8D%83%E5%9B%BE%E7%99%BE%E7%82%BC/qiantubailian-commerce/src/server.mjs:110:9)
+# Subtest: R09 退款失败可重试：provider refund 抛错后保留 processing 和冻结，重试成功
+ok 205 - R09 退款失败可重试：provider refund 抛错后保留 processing 和冻结，重试成功
+  ---
+  duration_ms: 212.4074
+  type: 'test'
+  ...
+# Subtest: R09 退款金额按比例：可退额度 < 总额度时按比例退款
+ok 206 - R09 退款金额按比例：可退额度 < 总额度时按比例退款
+  ---
+  duration_ms: 99.6462
+  type: 'test'
+  ...
+# Subtest: R09 退款额度已全部使用 → NO_REFUNDABLE_CREDITS
+ok 207 - R09 退款额度已全部使用 → NO_REFUNDABLE_CREDITS
+  ---
+  duration_ms: 145.7881
+  type: 'test'
+  ...
+# Subtest: R09 共享 server 清理
+ok 208 - R09 共享 server 清理
+  ---
+  duration_ms: 104.8734
+  type: 'test'
+  ...
+# Subtest: R10 批量导出清单：包含平台规则来源、核验日期、尺寸与张数核对
+ok 209 - R10 批量导出清单：包含平台规则来源、核验日期、尺寸与张数核对
+  ---
+  duration_ms: 4024.8954
+  type: 'test'
+  ...
+# Subtest: R10 批量预算闸口：真实额度（订单发放）下的拦截与放行
+ok 210 - R10 批量预算闸口：真实额度（订单发放）下的拦截与放行
+  ---
+  duration_ms: 616.4925
+  type: 'test'
+  ...
+# Subtest: R10 单项失败不影响其他条目：失败隔离与额度正确性
+ok 211 - R10 单项失败不影响其他条目：失败隔离与额度正确性
+  ---
+  duration_ms: 2871.854
+  type: 'test'
+  ...
+# Subtest: R10 完整批量包：全部完成时可导出 complete
+ok 212 - R10 完整批量包：全部完成时可导出 complete
+  ---
+  duration_ms: 4446.5493
+  type: 'test'
+  ...
+# Subtest: R11 指标包含商业化口径
+ok 213 - R11 指标包含商业化口径
+  ---
+  duration_ms: 3443.7937
+  type: 'test'
+  ...
+# Subtest: R11 备份创建与恢复验证
+ok 214 - R11 备份创建与恢复验证
+  ---
+  duration_ms: 386.7368
+  type: 'test'
+  ...
+# Subtest: R11 部署手册存在且覆盖关键约束
+ok 215 - R11 部署手册存在且覆盖关键约束
+  ---
+  duration_ms: 5.8483
+  type: 'test'
+  ...
+# Subtest: R11 指标跨租户隔离
+ok 216 - R11 指标跨租户隔离
+  ---
+  duration_ms: 98.4872
+  type: 'test'
+  ...
+# Subtest: R12 完整用户旅程：创建→上传→事实→规格→报价→执行→检查→导出→下载
+ok 217 - R12 完整用户旅程：创建→上传→事实→规格→报价→执行→检查→导出→下载
+  ---
+  duration_ms: 3437.1681
+  type: 'test'
+  ...
+# Subtest: R12 配方复用：保存配方→应用到新项目→执行成功
+ok 218 - R12 配方复用：保存配方→应用到新项目→执行成功
+  ---
+  duration_ms: 3227.3237
+  type: 'test'
+  ...
+# Subtest: R12 免费体验→额度不足→付款→到账→继续
+ok 219 - R12 免费体验→额度不足→付款→到账→继续
+  ---
+  duration_ms: 1706.2708
+  type: 'test'
+  ...
+# Subtest: R12 退款：已结算订单退款→额度回收
+ok 220 - R12 退款：已结算订单退款→额度回收
+  ---
+  duration_ms: 158.4752
+  type: 'test'
+  ...
+# Subtest: R12 越权：viewer 不能执行写操作
+ok 221 - R12 越权：viewer 不能执行写操作
+  ---
+  duration_ms: 129.8725
+  type: 'test'
+  ...
+# Subtest: R12 供应商异常恢复：失败后重试成功
+ok 222 - R12 供应商异常恢复：失败后重试成功
+  ---
+  duration_ms: 533.417
+  type: 'test'
+  ...
+# Subtest: R12 商品事实阻断：关键事实未确认不能开始生产
+ok 223 - R12 商品事实阻断：关键事实未确认不能开始生产
+  ---
+  duration_ms: 135.2933
+  type: 'test'
+  ...
+# Subtest: R12 幂等：重复提交不产生重复费用
+ok 224 - R12 幂等：重复提交不产生重复费用
+  ---
+  duration_ms: 1219.3706
+  type: 'test'
+  ...
+# Subtest: R12 任务中断恢复：任务进行中可查询状态
+ok 225 - R12 任务中断恢复：任务进行中可查询状态
+  ---
+  duration_ms: 1206.8945
+  type: 'test'
+  ...
+# Subtest: M02 商业化 UI 保留明确演示边界与核心页面
+ok 226 - M02 商业化 UI 保留明确演示边界与核心页面
+  ---
+  duration_ms: 52.057
+  type: 'test'
+  ...
+# Subtest: M02 向导真实函数分支：确认拦截、失败重试、成功进入项目
+ok 227 - M02 向导真实函数分支：确认拦截、失败重试、成功进入项目
+  ---
+  duration_ms: 22.3499
+  type: 'test'
+  ...
+# Subtest: M02 项目搜索无结果与分类筛选执行真实函数
+ok 228 - M02 项目搜索无结果与分类筛选执行真实函数
+  ---
+  duration_ms: 14.3998
+  type: 'test'
+  ...
+# Subtest: 前端脚本不得引用已被删除的 DOM 节点（防止首屏 addEventListener 崩溃）
+ok 229 - 前端脚本不得引用已被删除的 DOM 节点（防止首屏 addEventListener 崩溃）
+  ---
+  duration_ms: 40.5706
+  type: 'test'
+  ...
+1..229
+# tests 229
+# suites 0
+# pass 228
+# fail 0
+# cancelled 0
+# skipped 1
+# todo 0
+# duration_ms 46453.5363
+语法检查通过：67 个文件
+真实启动、HTTP 探测与 SIGTERM 处理通过，端口 14833

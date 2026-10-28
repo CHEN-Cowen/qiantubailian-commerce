@@ -7,10 +7,11 @@
  */
 import { createWechatPaymentProvider, createMockWechatPaymentProvider, WECHAT_PAYMENT_PROVIDER_ID } from './wechat.mjs';
 
-export const PAYMENT_PROVIDER_MODES = Object.freeze(['mock', WECHAT_PAYMENT_PROVIDER_ID]);
+export const PAYMENT_PROVIDER_MODES = Object.freeze(['none', 'mock', WECHAT_PAYMENT_PROVIDER_ID]);
 
 export function createPaymentProviderFromEnv(env = process.env, options = {}) {
-  const mode = String(env.QTB_PAYMENT_PROVIDER ?? 'mock').trim().toLowerCase() || 'mock';
+  const mode = String(env.QTB_PAYMENT_PROVIDER ?? 'none').trim().toLowerCase() || 'none';
+  if (mode === 'none') return { provider: null, mode, acceptance: 'not_configured' };
   if (mode === 'mock') {
     return {
       provider: createMockWechatPaymentProvider(options),
@@ -20,6 +21,8 @@ export function createPaymentProviderFromEnv(env = process.env, options = {}) {
     };
   }
   if (mode === WECHAT_PAYMENT_PROVIDER_ID) {
+    if (env.QTB_ENABLE_REAL_PAYMENTS !== '1') throw new Error('真实收款保持关闭；完成商户与交易验收后才可设置 QTB_ENABLE_REAL_PAYMENTS=1');
+    if (!env.QTB_WX_SERIAL_NO) throw new Error('缺少 QTB_WX_SERIAL_NO');
     return {
       provider: createWechatPaymentProvider({
         mchid: env.QTB_WX_MCHID,
@@ -28,6 +31,8 @@ export function createPaymentProviderFromEnv(env = process.env, options = {}) {
         privateKeyPem: env.QTB_WX_PRIVATE_KEY,
         platformCertPem: env.QTB_WX_PLATFORM_CERT,
         notifyUrl: env.QTB_WX_NOTIFY_URL,
+        serialNo: env.QTB_WX_SERIAL_NO,
+        platformSerial: env.QTB_WX_PLATFORM_SERIAL,
         ...options,
       }),
       mode: WECHAT_PAYMENT_PROVIDER_ID,

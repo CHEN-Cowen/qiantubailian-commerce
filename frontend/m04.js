@@ -49,6 +49,9 @@ const errorText = error => {
 
 export function initM04({ toast } = {}) {
   if (typeof toast === 'function') state.toast = toast;
+  for (const id of ['spec-custom-layout', 'spec-text-x', 'spec-text-y', 'spec-text-width', 'spec-text-size']) {
+    document.getElementById(id)?.addEventListener('change', () => { if (state.project) void refreshPreview(); });
+  }
   document.addEventListener('click', event => {
     const trigger = event.target.closest('[data-action="spec"]');
     if (!trigger) return;
@@ -142,6 +145,11 @@ async function openSpec(projectId) {
     const [detail, specs] = await Promise.all([api.getProject(projectId), api.listSpecs(projectId)]);
     state.project = detail.project;
     state.specs = specs.specs;
+    const layout = state.specs.find(s => s.version === state.project.spec_head_version)?.deliverables?.find(d => d.text_layout)?.text_layout;
+    $('#spec-custom-layout').checked = Boolean(layout);
+    for (const [field, value] of Object.entries({ x: layout?.x ?? 0.08, y: layout?.y ?? 0.75, width: layout?.width ?? 0.84, size: layout?.size_ratio ?? 0.04 })) {
+      document.getElementById(`spec-text-${field}`).value = Math.round(value * 100);
+    }
     state.preview = null;
     state.resolutions = {};
     if (state.templates.length === 0 || state.brandKits === null) await loadCatalog();
@@ -181,6 +189,10 @@ function specPayload() {
     conflict_resolutions: state.resolutions,
   };
   const brandId = $('#spec-brand').value;
+    if ($('#spec-custom-layout').checked) body.text_layout = {
+      x: Number($('#spec-text-x').value) / 100, y: Number($('#spec-text-y').value) / 100,
+      width: Number($('#spec-text-width').value) / 100, size_ratio: Number($('#spec-text-size').value) / 100,
+    };
   if (brandId) body.brand_kit_id = brandId;
   return body;
 }
@@ -284,7 +296,7 @@ function renderPreview(result) {
           <tbody>${deliverableRows}</tbody>
         </table>
       </div>
-      <p class="spec-meta">参考预算 ${payload.budget.max_credits} 额度 / 最多 ${payload.budget.max_attempts} 轮 · ${escapeHtml(payload.budget.note)}</p>
+      <p class="spec-meta">默认制作必需图片 ${payload.deliverables.filter(item => item.required).reduce((sum, item) => sum + (Number(item.count) || 1), 0)} 张；正式开始前展示成品报价，失败释放，待复核保留预留。</p>
     </section>
 
     <section class="spec-section">
@@ -488,7 +500,7 @@ async function submitBrand(event) {
   const body = {
     name: String(data.get('name') ?? ''),
     palette: { primary: String(data.get('primary') ?? ''), secondary },
-    logo: { present: data.get('logo_present') === 'on', description: String(data.get('logo_description') ?? '') || null },
+    logo: { asset_id: String(data.get('logo_asset_id') ?? '').trim() || undefined, present: data.get('logo_present') === 'on', description: String(data.get('logo_description') ?? '') || null },
     fonts: data.get('font_name')
       ? [{ name: String(data.get('font_name')), license: String(data.get('font_license') ?? 'unknown') }]
       : [],

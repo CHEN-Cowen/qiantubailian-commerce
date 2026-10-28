@@ -117,7 +117,7 @@ function migrateLegacyLot(data, tenantId, account, at) {
 }
 
 /** 批次剩余可用量（不含已预留）。 */
-export const lotAvailable = lot => Math.max(0, lot.total - lot.consumed - lot.reserved - lot.expired);
+export const lotAvailable = lot => Math.max(0, lot.total - lot.consumed - lot.reserved - lot.expired - (lot.revoked ?? 0) - (lot.refund_frozen ?? 0));
 
 function activeLots(data, tenantId) {
   return Object.values(data.credit_lots ?? {})
@@ -376,6 +376,15 @@ export function appendEntry(data, {
         `可用额度 ${account.available}，无法回收 ${amount}`, { available: account.available, requested: amount });
     }
     delta.available = -amount;
+    let remaining = amount;
+    const candidates = activeLots(data, tenantId).filter(item => !lot?.order_id || item.source_order_id === lot.order_id).sort(compareLots);
+    for (const item of candidates) {
+      const take = Math.min(remaining, lotAvailable(item));
+      item.revoked = (item.revoked ?? 0) + take;
+      remaining -= take;
+      if (!remaining) break;
+    }
+    if (remaining) throw new ApiError(409, 'REVOKE_INSUFFICIENT', '订单可用批次不足');
   }
 
   if (type === 'expire') {
@@ -428,7 +437,7 @@ export function sweepExpiredLots(data, tenantId, at = new Date(), { initialCredi
     if (new Date(lot.expires_at).getTime() > new Date(at).getTime()) continue;
     if (lot.status === 'expired') continue;
     const expirable = lotAvailable(lot);
-    lot.status = lot.reserved > 0 ? 'expired_pending' : 'expired';
+    lot.status = lot.reserved + (lot.refund_frozen ?? 0) > 0 ? 'expired_pending' : 'expired';
     if (expirable <= 0) continue;
     const sequence = (lot.expire_sequence ?? 0) + 1;
     lot.expire_sequence = sequence;
@@ -484,6 +493,8 @@ export function balanceOf(data, tenantId, { initialCredits = 0 } = {}) {
       available: lotAvailable(lot),
       reserved: lot.reserved,
       consumed: lot.consumed,
+      refund_frozen: lot.refund_frozen ?? 0,
+      revoked: lot.revoked ?? 0,
       expired: lot.expired,
       expires_at: lot.expires_at,
       status: lot.status,

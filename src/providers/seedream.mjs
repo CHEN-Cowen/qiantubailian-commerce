@@ -70,7 +70,7 @@ export function createSeedreamProvider({
       image: true,
       video: false,
       max_references: MAX_REFERENCES,
-      supports_mask: supportsMask === true,
+      supports_mask: false,
       supports_post_composite: supportsPostComposite === true,
       supports_async: true,
       supports_cancel: true,

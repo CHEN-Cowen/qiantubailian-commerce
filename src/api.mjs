@@ -11,6 +11,7 @@ import {
 import { IMAGE_TYPES, inspectImage } from './images.mjs';
 import { createSubjectMask, normalizeSubjectBox } from './m06.mjs';
 import { createOcrFromEnv, extractionCandidates } from './ocr.mjs';
+import { prepareSubjectMask } from './raster.mjs';
 import {
   ASSET_ROLES, LIMITS, activeAssets, computeReadiness, sha256,
   truthContentHash, validateFilename, validateProjectInput, validateRole, validateTruthInput,
@@ -20,7 +21,7 @@ import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
 import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
-import { listCommercePlans as _listCommercePlans, commercePlanById as _commercePlanById, planSnapshot } from './plans.mjs';
+import { listCommercePlans as _listCommercePlans, commercePlanById as _commercePlanById, planSnapshot, expiryFromSnapshot } from './plans.mjs';
 import { planById as legacyPlanById } from './m12.mjs'; // 旧 M12 内部 planById 保留（演示模式）
 
 // 统一的 plan 解析：先查商业化 plans，找不到再查 M12 内部 plans（兼容既有演示测试）
@@ -155,6 +156,36 @@ export function createApi({
   };
 
   publish.jobs = jobs;
+  publish.reconcilePayments = async () => {
+    if (!paymentProvider) return;
+    const orders = await store.read(data => Object.values(data.billing_orders).filter(o => o.real_money &&
+      (o.status === 'pending_wechat_checkout' || o.refund_status === 'processing')).slice(0, 10));
+    for (const order of orders) {
+      try {
+        if (order.refund_status === 'processing' && paymentProvider.queryRefund) {
+          const result = await paymentProvider.queryRefund({ out_refund_no: order.refund_out_refund_no });
+          await store.mutate(data => finishRefund(data, data.billing_orders[order.id], result));
+        } else if (paymentProvider.queryOrder) {
+          const result = await paymentProvider.queryOrder({ out_trade_no: order.out_trade_no });
+          if (result.trade_state === 'SUCCESS') {
+            await store.mutate(data => settlePayment(data, data.billing_orders[order.id], result, 'payment_recovery'));
+          } else if (order.expires_at && Date.parse(order.expires_at) <= new Date(clock()).getTime() && paymentProvider.closeOrder) {
+            let closed = await paymentProvider.closeOrder({ out_trade_no: order.out_trade_no });
+            if (closed.trade_state === 'SUCCESS') closed = await paymentProvider.queryOrder({ out_trade_no: order.out_trade_no });
+            await store.mutate(data => {
+              const current = data.billing_orders[order.id];
+              if (closed.trade_state === 'SUCCESS') return settlePayment(data, current, closed, 'payment_recovery');
+              if (closed.closed !== false && current.status === 'pending_wechat_checkout') {
+                current.status = 'wechat_closed'; current.wechat_trade_state = 'CLOSED';
+              }
+            });
+          }
+        }
+      } catch (error) {
+        await store.mutate(data => { data.billing_orders[order.id].reconcile_error = error.message; });
+      }
+    }
+  };
   publish.provider = { ...providerInfo, capabilities: () => provider.capabilities() };
   publish.credits = { balanceOf: tenantId => store.read(data => balanceOf(data, tenantId, { initialCredits })) };
   // 暴露 drain：关闭服务时先排空写队列，再让调用方清理数据目录
@@ -194,6 +225,10 @@ export function createApi({
     if (rest.length === 0) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     // R01：认证接口在解析身份之前处理（登录/注册本身还没有会话）
     if (rest[0] === 'auth') return handleAuth(req, res, rest, method, send);
+    if (rest.join('/') === 'billing/wechat/notify') {
+      requireMethod(method, ['POST']);
+      return wechatNotifyRoute(null, req, send);
+    }
     // SSE 订阅走 EventSource，浏览器无法带自定义头，因此允许用 query 传租户
     const isEventStream = rest.length === 3 && rest[0] === 'runs' && rest[2] === 'events';
     const ctx = await resolveContext(req, { allowQueryTenant: isEventStream, query });
@@ -225,6 +260,11 @@ export function createApi({
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
     if (resource === 'runs') {
+      if (rest.length === 5 && rest[2] === 'versions' && rest[4] === 'content') {
+        requireMethod(method, ['GET', 'HEAD']);
+        const file = await jobs.readVersionContent(ctx, rest[1], rest[3]);
+        return send(200, file.bytes, file.mime, { 'X-Content-Preview': String(file.preview) });
+      }
       if (rest.length === 1 && method === 'POST') return createRun(ctx, req, send);
       if (rest.length === 1) { requireMethod(method, ['GET', 'HEAD', 'POST']); return listRunsRoute(ctx, query, send); }
       if (rest.length === 2) { requireMethod(method, ['GET', 'HEAD']); return jobs.getRun(ctx, rest[1]).then(result => send(200, result)); }
@@ -1145,7 +1185,7 @@ export function createApi({
         width: Number(query.get('width')), height: Number(query.get('height')),
       }
       : asset.subject_box ?? null;
-    const mask = createSubjectMask({ bytes, mime: asset.mime, box });
+    const mask = await prepareSubjectMask({ bytes, mime: asset.mime, box });
     if (!mask.available) {
       throw new ApiError(422, mask.reason ?? 'MASK_UNAVAILABLE', mask.message ?? '无法生成主体掩码', {
         method: mask.method ?? null,
@@ -1391,9 +1431,18 @@ export function createApi({
     throw new ApiError(404, 'NOT_FOUND', '接口不存在');
   }
 
+  function validateLogoAsset(data, ctx, payload) {
+    const id = payload.logo?.asset_id;
+    if (!id) return;
+    const asset = data.assets[id];
+    if (!asset || asset.tenant_id !== ctx.tenantId) throw new ApiError(422, 'INVALID_LOGO_ASSET', 'Logo 必须来自当前账户上传的素材');
+    if (payload.logo.asset_sha256 && payload.logo.asset_sha256 !== asset.sha256) throw new ApiError(422, 'LOGO_HASH_MISMATCH', 'Logo 素材与摘要不匹配');
+  }
+
   async function createBrandKit(ctx, req, send) {
     const payload = validateBrandKitInput(await readJson(req));
     const result = await store.mutate(data => {
+      validateLogoAsset(data, ctx, payload);
       const count = Object.values(data.brand_kits).filter(kit => kit.tenant_id === ctx.tenantId).length;
       if (count >= 20) throw new ApiError(409, 'BRAND_KIT_LIMIT', '每个租户最多 20 个品牌套件');
       const duplicated = Object.values(data.brand_kits).find(kit =>
@@ -1432,6 +1481,7 @@ export function createApi({
     const payload = validateBrandKitInput(body);
     const result = await store.mutate(data => {
       const kit = findBrandKit(data, ctx, kitId);
+      validateLogoAsset(data, ctx, payload);
       const baseVersion = body.base_version;
       if (!Number.isInteger(baseVersion) || baseVersion < 1) {
         throw new ApiError(422, 'INVALID_BASE_VERSION', 'base_version 必须为不小于 1 的整数，用于乐观锁');
@@ -1654,7 +1704,7 @@ export function createApi({
     if (resolutions !== null && typeof resolutions !== 'object') {
       throw new ApiError(422, 'INVALID_RESOLUTIONS', 'conflict_resolutions 必须为对象');
     }
-    const payload = assembleSpec({ project, truth, template, brandKit, channel, resolutions, at: clock() });
+    const payload = assembleSpec({ project, truth, template, brandKit, channel, resolutions, textLayout: body.text_layout ?? null, at: clock() });
 
     if (payload.conflicts.unresolvable.length > 0) {
       throw new ApiError(409, 'SPEC_CONFLICT_UNRESOLVABLE', '存在无法满足的平台硬约束，需要先修改商品事实或换模板', {
@@ -1749,7 +1799,7 @@ export function createApi({
     const quoted = await store.read(data => {
       const project = findProject(data, ctx, projectId);
       const spec = resolveSpecRecord(data, project.id, body.spec_version);
-      const quote = quoteFromSpec({ spec, at: clock() });
+      const quote = quoteFromSpec({ spec, at: clock(), finishedImages: ctx.mode === 'session', includeOptional: body.include_optional === true });
       return { quote: { ...quote, tenant_id: ctx.tenantId, project_id: project.id } };
     });
     const record = await store.mutate(data => {
@@ -2501,7 +2551,7 @@ export function createApi({
     let quote = null;
     if (spec) {
       try {
-        quote = quoteFromSpec({ spec, at: clock() });
+        quote = quoteFromSpec({ spec, at: clock(), finishedImages: ctx.mode === 'session' });
       } catch (error) {
         blockers.push({ code: 'QUOTE_UNAVAILABLE', message: error?.message ?? '报价不可用' });
       }
@@ -2785,7 +2835,7 @@ export function createApi({
           return { project, spec };
         });
         const quote = await store.mutate(data => {
-          const record = { ...quoteFromSpec({ spec: context.spec, at: clock() }), tenant_id: ctx.tenantId, project_id: context.project.id };
+          const record = { ...quoteFromSpec({ spec: context.spec, at: clock(), finishedImages: ctx.mode === 'session' }), tenant_id: ctx.tenantId, project_id: context.project.id };
           data.quotes[record.quote_id] = record;
           return record;
         });
@@ -3342,114 +3392,102 @@ export function createApi({
     send(200, payload);
   }
 
+  function grantOrder(data, order, actor) {
+    if (order.plan_snapshot.kind === 'experience') return grantExperienceCredits(data, { tenantId: order.tenant_id, actor, at: clock(), initialCredits });
+    const snapshot = order.plan_snapshot;
+    return appendEntry(data, { type: 'grant', amount: order.credits, tenantId: order.tenant_id,
+      uniqueOperationKey: `billing-order:${order.id}`, actor, initialCredits, at: clock(),
+      memo: `套餐到账：${snapshot.name}`,
+      lot: { order_id: order.id, kind: snapshot.kind,
+        expires_at: snapshot.validity_days ? expiryFromSnapshot(snapshot, clock()) : null, version_snapshot: snapshot } });
+  }
+
+  function validatePayment(order, result) {
+    const identity = paymentProvider?.identity;
+    if (identity && (result.mchid !== identity.mchid || result.appid !== identity.appid)) throw new ApiError(400, 'PAYMENT_IDENTITY_MISMATCH', '支付商户或 AppID 不匹配');
+    if (result.out_trade_no !== order.out_trade_no || result.amount?.total !== order.price_cents || result.amount?.currency !== order.currency || !result.transaction_id) throw new ApiError(400, 'PAYMENT_AMOUNT_MISMATCH', '支付订单、金额或币种不匹配');
+  }
+
+  function settlePayment(data, order, result, actor) {
+    validatePayment(order, result);
+    if (['settled_real', 'refunded'].includes(order.status) || order.refund_status) return order;
+    const reused = Object.values(data.billing_orders).some(o => o.id !== order.id && o.transaction_id === result.transaction_id);
+    if (reused) throw new ApiError(409, 'PAYMENT_TRANSACTION_REUSED', '支付交易已关联其他订单');
+    grantOrder(data, order, actor);
+    order.status = 'settled_real'; order.settled_at = new Date(clock()).toISOString();
+    order.settled_by = actor; order.transaction_id = result.transaction_id; order.wechat_trade_state = 'SUCCESS';
+    const id = newId('pay'); data.payment_events[id] = { id, tenant_id: order.tenant_id, order_id: order.id, type: 'real_order_settled', amount_cents: order.price_cents, created_at: order.settled_at };
+    return order;
+  }
+
+  function finishRefund(data, order, result) {
+    if (order.refund_status !== 'processing') return;
+    if (paymentProvider?.identity && (result.out_refund_no !== order.refund_out_refund_no ||
+      result.amount?.refund !== order.refund_amount_cents || result.amount?.total !== order.price_cents)) {
+      throw new ApiError(400, 'REFUND_AMOUNT_MISMATCH', '退款订单或金额不匹配');
+    }
+    const status = result.status ?? result.refund_status;
+    if (status === 'ABNORMAL') {
+      order.refund_requires_manual = true;
+      order.refund_error = '微信退款异常，需在商户平台处理；对应权益继续冻结';
+      return;
+    }
+    if (!['SUCCESS', 'CLOSED', 'ABNORMAL'].includes(status)) return;
+    // 只在最终结果确定后解除冻结；成功后同步回收原订单批次。
+    for (const allocation of order.refund_allocations ?? []) {
+      const lot = data.credit_lots[allocation.lot_id];
+      if (!lot || (lot.refund_frozen ?? 0) < allocation.amount) throw new Error('退款冻结批次不一致');
+      lot.refund_frozen -= allocation.amount;
+      data.credit_accounts[order.tenant_id].available += allocation.amount;
+    }
+    if (status === 'SUCCESS') {
+      appendEntry(data, { type: 'revoke', amount: order.refund_credits, tenantId: order.tenant_id,
+        uniqueOperationKey: `billing-refund:${order.refund_out_refund_no}`, actor: 'refund_result', initialCredits, at: order.refund_started_at ?? clock(), lot: { order_id: order.id } });
+      order.status = 'refunded'; order.refund_status = 'success'; order.refunded_at = new Date(clock()).toISOString();
+    } else { order.refund_status = 'failed'; order.refund_error = status; }
+    order.refund_allocations = []; order.refund_transaction_id = result.refund_id ?? null;
+    sweepExpiredLots(data, order.tenant_id, clock(), { initialCredits });
+  }
+
   async function createBillingOrderRoute(ctx, req, send) {
     await requireAction(ctx, 'billing:manage');
-    const body = await readJson(req);
-    const capability = evaluatePaymentCapability({ provider: paymentProvider });
-    if (!capability.can_checkout && !capability.real_money) {
-      throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_UNAVAILABLE',
-        capability.blockers[0]?.message ?? '当前不具备下单条件', { payment: capability });
-    }
-    const plan = resolvePlanById(String(body.plan_id ?? ''));
+    const body = await readJson(req), plan = resolvePlanById(String(body.plan_id ?? ''));
     if (!plan) throw new ApiError(422, 'PLAN_UNKNOWN', '套餐不存在');
-    // 演示套餐（price_cents=0）永远不涉及真实支付
-    const isDemoOnly = plan.price_cents === 0;
-    const provider = paymentProvider;
-    const providerCaps = provider?.capabilities?.() ?? null;
-    const useRealPayment = capability.real_money === true && providerCaps?.supports_native_qr === true && !isDemoOnly;
-
-    const order = await store.mutate(async data => {
-      const outTradeNo = useRealPayment
-        ? `TB${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toUpperCase()
-        : null;
-      const item = {
-        id: newId('ord'),
-        tenant_id: ctx.tenantId,
-        plan_id: plan.id,
-        plan_snapshot: planSnapshot(plan),
-        credits: plan.credits,
-        seats: plan.seats ?? 1,
-        price_cents: plan.price_cents,
-        currency: plan.currency ?? 'CNY',
-        out_trade_no: outTradeNo,
-        status: 'pending_demo_settlement',
-        real_money: useRealPayment,
-        simulated: !useRealPayment,
-        settlement: isDemoOnly || !useRealPayment ? 'internal_demo_credits' : 'wechat_native',
-        pay_provider: useRealPayment ? 'wechat_native' : (isDemoOnly ? 'demo_free' : 'mock'),
-        notice: plan.terms ?? plan.note ?? '套餐开通额度',
-        created_by: ctx.actorId,
-        created_at: new Date(clock()).toISOString(),
-      };
-
-      if (isDemoOnly) {
-        // 免单套餐：直接发放额度，不经过支付
-        const entry = appendEntry(data, {
-          type: 'grant', amount: item.credits, tenantId: ctx.tenantId,
-          uniqueOperationKey: `billing-order:${item.id}`,
-          memo: `免单套餐开通额度（${item.plan_snapshot.name}）`,
-          actor: ctx.actorId, initialCredits, at: clock(),
-          lot: { order_id: item.id },
-        });
-        item.status = 'settled_real';
-        item.settled_at = new Date(clock()).toISOString();
-        item.settled_by = ctx.actorId;
-        // 免单套餐有真实发放，但金额为 0
-        item.real_money = true;
-        item.simulated = false;
-        const grantEvent = {
-          id: newId('pay'), tenant_id: ctx.tenantId, order_id: item.id,
-          type: 'real_order_settled', amount_cents: 0, currency: item.currency,
-          actor_id: ctx.actorId, created_at: item.settled_at,
-          transaction_id: `free_${item.id}`,
-        };
-        data.payment_events[grantEvent.id] = grantEvent;
-      } else if (useRealPayment) {
-        // 真实支付：调 Provider Native 下单
-        let nativeResult;
-        try {
-          nativeResult = await provider.createNativeOrder({
-            out_trade_no: outTradeNo,
-            description: `千图百炼 ${item.plan_snapshot.name} ${item.credits}张额度`,
-            amount_cents: item.price_cents,
-            attach: JSON.stringify({ order_id: item.id, tenant_id: ctx.tenantId }),
-          });
-        } catch (err) {
-          throw new ApiError(502, 'PAYMENT_PROVIDER_ERROR', `微信下单失败：${err.message}`);
-        }
-        item.status = nativeResult.zero_amount ? 'settled_real' : 'pending_wechat_checkout';
-        item.code_url = nativeResult.code_url;
-        item.prepay_id = nativeResult.prepay_id ?? null;
-        item.pay_qr = nativeResult.qr_code_url ?? null;
-        item.wechat_trade_state = nativeResult.trade_state;
-        item.trade_state_desc = nativeResult.trade_state_desc ?? null;
-        if (nativeResult.zero_amount) {
-          // 免单内部零金额：发放额度
-          const entry = appendEntry(data, {
-            type: 'grant', amount: item.credits, tenantId: ctx.tenantId,
-            uniqueOperationKey: `billing-order:${item.id}`,
-            memo: `免单套餐开通额度（${item.plan_snapshot.name}）`,
-            actor: ctx.actorId, initialCredits, at: clock(),
-            lot: { order_id: item.id },
-          });
-          item.status = 'settled_real';
-          item.settled_at = new Date(clock()).toISOString();
-          item.settled_by = ctx.actorId;
-        }
-      }
-      // mock 支付：保持 pending_demo_settlement，后续手动 settle
-
+    const capability = evaluatePaymentCapability({ provider: paymentProvider });
+    const free = plan.kind === 'experience';
+    if (!free && !capability.can_checkout) throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_UNAVAILABLE', '支付通道尚未开放');
+    let order = await store.mutate(data => {
+      const existing = Object.values(data.billing_orders).find(o => o.tenant_id === ctx.tenantId && o.plan_id === plan.id &&
+        (free || o.status === 'pending_wechat_checkout'));
+      if (existing) return existing;
+      const live = capability.real_money && capability.supports_native_qr && !free;
+      const item = { id: newId('ord'), tenant_id: ctx.tenantId, plan_id: plan.id, plan_snapshot: planSnapshot(plan),
+        credits: plan.credits, seats: plan.seats ?? 1, price_cents: plan.price_cents, currency: plan.currency ?? 'CNY',
+        out_trade_no: live ? 'TB' + randomBytes(12).toString('hex') : null,
+        status: live ? 'pending_wechat_checkout' : 'pending_demo_settlement', real_money: live, simulated: !live,
+        settlement: live ? 'wechat_native' : 'internal_demo_credits', pay_provider: live ? 'wechat_native' : 'mock',
+        notice: plan.terms ?? plan.note, created_by: ctx.actorId, created_at: new Date(clock()).toISOString(),
+        expires_at: new Date(new Date(clock()).getTime() + 15 * 60_000).toISOString() };
       data.billing_orders[item.id] = item;
-      const createEvent = {
-        id: newId('pay'),
-        tenant_id: ctx.tenantId, order_id: item.id,
-        type: item.simulated ? 'demo_order_created' : 'real_order_created',
-        amount_cents: item.price_cents, currency: item.currency,
-        actor_id: ctx.actorId, created_at: item.created_at,
-      };
-      data.payment_events[createEvent.id] = createEvent;
+      if (free) {
+        grantOrder(data, item, ctx.actorId); item.status = 'settled_real'; item.real_money = false; item.simulated = false;
+        item.pay_provider = 'free_trial'; item.settled_at = new Date(clock()).toISOString();
+      }
+      const id = newId('pay'); data.payment_events[id] = { id, tenant_id: ctx.tenantId, order_id: item.id,
+        type: 'order_created', amount_cents: item.price_cents, created_at: item.created_at };
       return item;
     });
+    // 站内订单先落盘，外部下单不占写队列，重试沿用同一商户单号。
+    if (order.real_money && !order.code_url) {
+      let native;
+      try { native = await paymentProvider.createNativeOrder({ out_trade_no: order.out_trade_no,
+        description: '千图百炼 ' + order.plan_snapshot.name, amount_cents: order.price_cents,
+        attach: JSON.stringify({ order_id: order.id }), expires_at: order.expires_at }); }
+      catch (error) { throw new ApiError(502, 'PAYMENT_PROVIDER_ERROR', '支付下单暂不可用，请查询原订单后重试'); }
+      order = await store.mutate(data => { const o = data.billing_orders[order.id];
+        o.code_url = native.code_url; o.pay_qr = native.qr_code_url ?? null; o.prepay_id = native.prepay_id ?? null;
+        o.wechat_trade_state = native.trade_state; return o; });
+    }
     send(201, { order, payment: capability });
   }
 
@@ -3483,13 +3521,7 @@ export function createApi({
       if (order.status !== 'pending_demo_settlement') {
         throw new ApiError(409, 'ORDER_STATE_INVALID', `订单当前状态为 ${order.status}，不能结算`);
       }
-      const entry = appendEntry(data, {
-        type: 'grant', amount: order.credits, tenantId: ctx.tenantId,
-        uniqueOperationKey: `billing-order:${order.id}`,
-        memo: '演示套餐开通额度（内部演示，不代表真实权益）',
-        actor: ctx.actorId, initialCredits, at: clock(),
-        lot: { order_id: order.id },
-      });
+      const entry = grantOrder(data, order, ctx.actorId);
       order.status = 'settled_demo';
       order.settled_at = new Date(clock()).toISOString();
       order.settled_by = ctx.actorId;
@@ -3511,210 +3543,67 @@ export function createApi({
   async function refundBillingOrderRoute(ctx, orderId, req, send) {
     await requireAction(ctx, 'billing:manage');
     const body = await readJson(req).catch(() => ({}));
-    // 先读订单：演示订单直接拦截，不暴露系统退款能力状态
-    const orderExists = await store.read(data => {
-      const o = data.billing_orders?.[orderId] ?? null;
+    const order = await store.mutate(data => {
+      const o = data.billing_orders[orderId];
       if (!o || o.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
+      if (!o.real_money) throw new ApiError(409, 'ORDER_NOT_REAL_MONEY', '演示订单不能退真实资金');
+      if (o.status === 'refunded') throw new ApiError(409, 'ORDER_ALREADY_REFUNDED', '订单已退款');
+      if (o.status !== 'settled_real') throw new ApiError(409, 'ORDER_NOT_SETTLED', '订单尚未到账');
+      if (!paymentProvider?.refund || !evaluatePaymentCapability({ provider: paymentProvider }).can_refund) throw new ApiError(409, 'PAYMENT_REFUND_UNIMPLEMENTED', '退款通道未配置');
+      if (o.refund_status === 'processing') return o;
+      sweepExpiredLots(data, ctx.tenantId, clock(), { initialCredits });
+      const credits = refundableCreditsForOrder(data, ctx.tenantId, o.id);
+      if (!credits) throw new ApiError(409, 'NO_REFUNDABLE_CREDITS', '没有可退额度');
+      o.refund_credits = credits; o.refund_amount_cents = Math.min(o.price_cents, Math.floor(o.price_cents * credits / o.credits));
+      if (!o.refund_amount_cents) throw new ApiError(409, 'REFUND_AMOUNT_ZERO', '可退金额为零');
+      o.refund_out_refund_no = 'RF_' + randomBytes(12).toString('hex');
+      o.refund_status = 'processing'; o.refund_started_at = new Date(clock()).toISOString(); o.refund_allocations = [];
+      for (const lot of Object.values(data.credit_lots).filter(l => l.tenant_id === ctx.tenantId && l.source_order_id === o.id)) {
+        const amount = Math.max(0, lot.total - lot.consumed - lot.reserved - lot.expired - (lot.revoked ?? 0) - (lot.refund_frozen ?? 0));
+        if (!amount) continue;
+        lot.refund_frozen = (lot.refund_frozen ?? 0) + amount;
+        data.credit_accounts[ctx.tenantId].available -= amount;
+        o.refund_allocations.push({ lot_id: lot.id, amount });
+      }
       return o;
     });
-    if (orderExists.real_money !== true) {
-      throw new ApiError(409, 'ORDER_NOT_REAL_MONEY', '演示订单不涉及真实收款，不能发起真实退款');
-    }
-    const capability = evaluatePaymentCapability({ provider: paymentProvider });
-    if (!capability.can_refund) {
-      throw new ApiError(409, capability.blockers[0]?.code ?? 'PAYMENT_REFUND_UNSUPPORTED',
-        capability.blockers[0]?.message ?? '当前不具备退款条件', { payment: capability });
-    }
-    const provider = paymentProvider;
-    if (!provider?.refund) {
-      throw new ApiError(501, 'PAYMENT_REFUND_UNIMPLEMENTED', '支付 Provider 未实现退款');
-    }
-    // 先读订单 + 计算可退额度（在 mutate 里原子执行，避免并发竞态）
-    const result = await store.mutate(async data => {
-      const order = data.billing_orders?.[orderId] ?? null;
-      if (!order || order.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
-      if (order.real_money !== true) {
-        throw new ApiError(409, 'ORDER_NOT_REAL_MONEY', '演示订单不涉及真实收款，不能发起真实退款');
-      }
-      // 已退款订单优先拦截（status 可能为 refunded，不经过 settled_real 检查）
-      if (order.refund_status === 'success' || order.status === 'refunded') {
-        throw new ApiError(409, 'ORDER_ALREADY_REFUNDED', '订单已退款，不能重复退款');
-      }
-      if (order.status !== 'settled_real') {
-        throw new ApiError(409, 'ORDER_NOT_SETTLED', `订单尚未到账（当前 ${order.status}），不能退款`);
-      }
-      // 可退额度 = 该订单发放批次的可用量（已用/已预留不可退）
-      const refundableCredits = refundableCreditsForOrder(data, ctx.tenantId, orderId);
-      if (refundableCredits <= 0) {
-        throw new ApiError(409, 'NO_REFUNDABLE_CREDITS', '该订单额度已全部使用，无可退额度');
-      }
-      // 退款金额按"可退额度 / 订单总额度 * 订单金额"比例计算，不能超过订单金额
-      const refundAmountCents = Math.min(
-        order.price_cents,
-        Math.round(order.price_cents * (refundableCredits / order.credits)),
-      );
-      if (refundAmountCents <= 0) {
-        throw new ApiError(409, 'REFUND_AMOUNT_ZERO', '可退金额为 0，无需退款');
-      }
-      // 退款单号：同一订单固定，重试复用（幂等）
-      const outRefundNo = order.refund_out_refund_no ?? `RF_${order.id.slice(-16)}`;
-      // 调 Provider 退款（在 mutate 内：失败时不扣账本，状态可重试）
-      let providerResult;
-      try {
-        providerResult = await provider.refund({
-          out_trade_no: order.out_trade_no,
-          out_refund_no: outRefundNo,
-          refund_amount_cents: refundAmountCents,
-          total_amount_cents: order.price_cents,
-          reason: body?.reason ?? '用户申请退款',
-        });
-      } catch (err) {
-        // 记录失败状态，不扣账本；同一 out_refund_no 可重试。
-        // 注意：这里不能 throw，否则 store.mutate 不会持久化失败状态。
-        // 通过返回 { failed: true } 在 mutate 外抛 ApiError。
-        order.refund_status = 'failed';
-        order.refund_out_refund_no = outRefundNo;
-        order.refund_error = err.message;
-        order.refund_attempts = (order.refund_attempts ?? 0) + 1;
-        order.refund_last_attempt_at = new Date(clock()).toISOString();
-        const failEvent = {
-          id: newId('pay'), tenant_id: ctx.tenantId, order_id: order.id,
-          type: 'real_order_refund_failed', amount_cents: refundAmountCents,
-          currency: order.currency, actor_id: ctx.actorId,
-          created_at: order.refund_last_attempt_at,
-          refund_no: outRefundNo, error: err.message,
-        };
-        data.payment_events[failEvent.id] = failEvent;
-        return {
-          failed: true,
-          error: err.message,
-          refundable_credits: refundableCredits,
-          refund_amount_cents: refundAmountCents,
-          refund_no: outRefundNo,
-        };
-      }
-      // 退款成功：回收额度（revoke）+ 更新订单状态
-      const revokeResult = appendEntry(data, {
-        type: 'revoke', amount: refundableCredits, tenantId: ctx.tenantId,
-        uniqueOperationKey: `billing-refund:${order.id}`,
-        memo: `订单退款回收 ${refundableCredits} 张可用额度（${order.plan_snapshot.name}）`,
-        actor: ctx.actorId, initialCredits, at: clock(),
-      });
-      order.status = 'refunded';
-      order.refund_status = 'success';
-      order.refund_out_refund_no = outRefundNo;
-      order.refund_amount_cents = refundAmountCents;
-      order.refund_credits = refundableCredits;
-      order.refunded_at = new Date(clock()).toISOString();
-      order.refunded_by = ctx.actorId;
-      order.refund_transaction_id = providerResult?.refund_id ?? null;
-      const refundEvent = {
-        id: newId('pay'), tenant_id: ctx.tenantId, order_id: order.id,
-        type: 'real_order_refunded', amount_cents: refundAmountCents,
-        currency: order.currency, actor_id: ctx.actorId,
-        created_at: order.refunded_at, refund_no: outRefundNo,
-        refund_credits: refundableCredits, transaction_id: providerResult?.refund_id ?? null,
-      };
-      data.payment_events[refundEvent.id] = refundEvent;
-      return {
-        success: true,
-        order,
-        refunded_credits: refundableCredits,
-        refund_amount_cents: refundAmountCents,
-        balance: revokeResult.balance,
-      };
-    });
-    // provider 退款失败：状态已持久化（refund_status=failed，可重试），此处抛 502
-    if (result.failed) {
-      throw new ApiError(502, 'PAYMENT_REFUND_FAILED', `微信退款失败：${result.error}`, {
-        refundable_credits: result.refundable_credits,
-        refund_amount_cents: result.refund_amount_cents,
-        refund_no: result.refund_no,
-      });
-    }
-    send(200, {
-      ...result,
-      notice: '退款已完成：微信退款到账，系统回收未使用额度；已使用额度对应商品已交付，不可回收',
-    });
-  }
-
-  // ---------- R08 新路由 ----------
-
-  /**
-   * 微信支付回调。公开入口（不走认证，微信不带凭证），签名验证是第一闸口。
-   * 处理逻辑：验签 → 解密 → 根据 out_trade_no 找订单 → 幂等结算 → 返回成功响应。
-   */
-  async function wechatNotifyRoute(ctx, req, send) {
-    // 先读原始 body 用于验签
-    const chunks = [];
-    for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    const bodyBuf = Buffer.concat(chunks);
-    const bodyStr = bodyBuf.toString('utf8');
-
-    const provider = paymentProvider;
-    if (!provider?.verifyNotify) {
-      send(200, { code: 'FAIL', message: '支付 Provider 未配置' });
-      return;
-    }
-    // 验签 + 解密（真实 provider 走 APIv3 签名；mock provider 直接解析 body）
-    const verifyResult = provider.verifyNotify({ headers: req.headers, body: bodyStr });
-    if (!verifyResult?.ok) {
-      send(200, { code: 'FAIL', message: verifyResult?.reason ?? '签名验证失败' });
-      return;
-    }
-    const notify = { event_type: verifyResult.event_type, data: verifyResult.data };
-    if (!notify?.data?.out_trade_no) {
-      send(200, { code: 'FAIL', message: '回调体缺少 out_trade_no' });
-      return;
-    }
-
-    // 幂等结算
+    let result;
     try {
-      await store.mutate(data => {
-        const orders = Object.values(data.billing_orders ?? {});
-        const order = orders.find(o => o.out_trade_no === notify.data.out_trade_no);
-        if (!order) {
-          // 找不到订单，不返回错误（微信会重试，但 out_trade_no 不存在说明业务侧还没建完）
-          return;
-        }
-        if (notify.data.trade_state === 'SUCCESS') {
-          // 幂等：已结算直接跳过
-          if (order.status === 'settled_real') return;
-          const entry = appendEntry(data, {
-            type: 'grant', amount: order.credits, tenantId: order.tenant_id,
-            uniqueOperationKey: `billing-order:${order.id}`,
-            memo: `微信支付套餐开通额度（${order.plan_snapshot.name}）`,
-            actor: 'wechat_callback', initialCredits, at: clock(),
-            lot: { order_id: order.id },
-          });
-          order.status = 'settled_real';
-          order.settled_at = new Date(clock()).toISOString();
-          order.settled_by = 'wechat_callback';
-          order.wechat_trade_state = 'SUCCESS';
-          order.transaction_id = notify.data.transaction_id ?? order.transaction_id;
-          const event = {
-            id: newId('pay'), tenant_id: order.tenant_id, order_id: order.id,
-            type: 'real_order_settled', amount_cents: order.price_cents,
-            currency: order.currency, actor_id: 'wechat_callback',
-            created_at: order.settled_at, transaction_id: order.transaction_id,
-          };
-          data.payment_events[event.id] = event;
-        } else if (['CLOSED', 'REVOKED', 'PAYERROR'].includes(notify.data.trade_state)) {
-          if (order.status === 'pending_wechat_checkout') {
-            order.status = 'wechat_' + notify.data.trade_state.toLowerCase();
-            order.wechat_trade_state = notify.data.trade_state;
-            order.settled_at = new Date(clock()).toISOString();
-          }
-        }
-      });
-      send(200, { code: 'SUCCESS', message: '成功' });
-    } catch (err) {
-      // 结算异常：返回 FAIL 让微信重试；幂等保证不会重复发放
-      send(200, { code: 'FAIL', message: `结算异常：${err.message}` });
+      // 同一退款号重入安全；未知响应保留冻结，之后通过查退款补偿。
+      result = await paymentProvider.refund({ out_trade_no: order.out_trade_no, out_refund_no: order.refund_out_refund_no,
+        refund_amount_cents: order.refund_amount_cents, total_amount_cents: order.price_cents, reason: body.reason ?? '用户申请退款' });
+    } catch (error) {
+      await store.mutate(data => { data.billing_orders[order.id].refund_error = error.message; });
+      throw new ApiError(502, 'PAYMENT_REFUND_FAILED', '退款结果尚未确定，权益保持冻结，请刷新订单查询');
     }
+    const updated = await store.mutate(data => { const o = data.billing_orders[order.id]; finishRefund(data, o, result); return o; });
+    send(200, { order: updated, refunded_credits: updated.refund_status === 'success' ? updated.refund_credits : 0, refund_amount_cents: updated.refund_amount_cents, balance: await store.read(data => balanceOf(data, ctx.tenantId, { initialCredits })) });
   }
 
-  /** Native 下单（已创建订单后的二次下单）。 */
+  async function wechatNotifyRoute(ctx, req, send) {
+    if (!paymentProvider?.verifyNotify) throw new ApiError(503, 'PAYMENT_UNAVAILABLE', '支付通道未配置');
+    const body = (await readBody(req, 1024 * 1024)).toString('utf8');
+    const verified = paymentProvider.verifyNotify({ headers: req.headers, body });
+    if (!verified?.ok) throw new ApiError(401, 'PAYMENT_SIGNATURE_INVALID', '支付通知验签或解密失败');
+    const result = verified.data;
+    await store.mutate(data => {
+      if (result?.out_refund_no) {
+        const order = Object.values(data.billing_orders).find(o => o.refund_out_refund_no === result.out_refund_no);
+        if (!order) throw new ApiError(404, 'ORDER_NOT_FOUND', '退款订单不存在');
+        if (paymentProvider.identity && result.mchid !== paymentProvider.identity.mchid) throw new ApiError(400, 'PAYMENT_IDENTITY_MISMATCH', '退款商户不匹配');
+        if (result.amount?.refund !== order.refund_amount_cents || result.amount?.total !== order.price_cents) throw new ApiError(400, 'REFUND_AMOUNT_MISMATCH', '退款金额不匹配');
+        finishRefund(data, order, result); return;
+      }
+      const order = Object.values(data.billing_orders).find(o => o.out_trade_no && o.out_trade_no === result?.out_trade_no);
+      if (!order) throw new ApiError(404, 'ORDER_NOT_FOUND', '支付订单不存在');
+      if (result.trade_state === 'SUCCESS') settlePayment(data, order, result, 'wechat_callback');
+      else if (['CLOSED', 'REVOKED', 'PAYERROR'].includes(result.trade_state) && order.status === 'pending_wechat_checkout') {
+        order.status = 'wechat_' + result.trade_state.toLowerCase(); order.wechat_trade_state = result.trade_state;
+      }
+    });
+    send(200, { code: 'SUCCESS', message: '成功' });
+  }
+
   async function payBillingOrderRoute(ctx, orderId, send) {
     await requireAction(ctx, 'billing:manage');
     const order = await store.read(data => {
@@ -3756,54 +3645,19 @@ export function createApi({
   /** 查单。 */
   async function queryBillingOrderRoute(ctx, orderId, send) {
     await requireAction(ctx, 'billing:read');
-    const order = await store.read(data => {
-      const item = data.billing_orders?.[orderId] ?? null;
-      if (!item || item.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在');
-      return item;
-    });
-    if (!order.out_trade_no) {
-      send(200, { order, provider_state: null });
-      return;
+    let order = await store.read(data => { const o = data.billing_orders[orderId];
+      if (!o || o.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '订单不存在'); return o; });
+    let result = null;
+    if (order.refund_status === 'processing' && paymentProvider?.queryRefund) {
+      result = await paymentProvider.queryRefund({ out_refund_no: order.refund_out_refund_no });
+      order = await store.mutate(data => { const o = data.billing_orders[orderId]; finishRefund(data, o, result); return o; });
+    } else if (order.out_trade_no && paymentProvider?.queryOrder) {
+      result = await paymentProvider.queryOrder({ out_trade_no: order.out_trade_no });
+      if (result.trade_state === 'SUCCESS') order = await store.mutate(data => settlePayment(data, data.billing_orders[orderId], result, 'query_order'));
     }
-    const provider = paymentProvider;
-    if (!provider?.queryOrder) {
-      send(200, { order, provider_state: { note: '支付 Provider 未配置，仅返回本地状态' } });
-      return;
-    }
-    let providerResult;
-    try { providerResult = await provider.queryOrder({ out_trade_no: order.out_trade_no }); }
-    catch (err) { providerResult = { error: err.message }; }
-    // 同步本地状态（provider 查单返回 SUCCESS 但本地还没 settled 的情况）
-    let updatedOrder = order;
-    if (providerResult?.trade_state === 'SUCCESS' && order.status === 'pending_wechat_checkout') {
-      updatedOrder = await store.mutate(data => {
-        const o = data.billing_orders?.[order.id];
-        if (!o || o.status !== 'pending_wechat_checkout') return o;
-        const entry = appendEntry(data, {
-          type: 'grant', amount: o.credits, tenantId: o.tenant_id,
-          uniqueOperationKey: `billing-order:${o.id}`,
-          memo: `查单触发微信支付额度发放（${o.plan_snapshot.name}）`,
-          actor: 'query_order', initialCredits, at: clock(),
-          lot: { order_id: o.id },
-        });
-        o.status = 'settled_real';
-        o.settled_at = new Date(clock()).toISOString();
-        o.settled_by = 'query_order';
-        o.wechat_trade_state = 'SUCCESS';
-        const event = {
-          id: newId('pay'), tenant_id: o.tenant_id, order_id: o.id,
-          type: 'real_order_settled', amount_cents: o.price_cents, currency: o.currency,
-          actor_id: 'query_order', created_at: o.settled_at,
-          transaction_id: providerResult.transaction_id ?? null,
-        };
-        data.payment_events[event.id] = event;
-        return o;
-      });
-    }
-    send(200, { order: updatedOrder, provider_state: providerResult });
+    send(200, { order, provider_state: result });
   }
 
-  /** 关单。 */
   async function closeBillingOrderRoute(ctx, orderId, send) {
     await requireAction(ctx, 'billing:manage');
     const order = await store.read(data => {
@@ -3819,9 +3673,12 @@ export function createApi({
     let providerResult;
     try { providerResult = await provider.closeOrder({ out_trade_no: order.out_trade_no }); }
     catch (err) { throw new ApiError(502, 'PAYMENT_PROVIDER_ERROR', `关单失败：${err.message}`); }
+    if (providerResult.trade_state === 'SUCCESS') providerResult = await provider.queryOrder({ out_trade_no: order.out_trade_no });
     const updatedOrder = await store.mutate(data => {
       const o = data.billing_orders?.[order.id];
       if (!o) return null;
+      if (providerResult.trade_state === 'SUCCESS') return settlePayment(data, o, providerResult, 'close_order_race');
+      if (providerResult.closed === false) throw new ApiError(409, 'ORDER_CLOSE_UNCONFIRMED', '关单未成功，请刷新订单查询支付结果');
       if (o.status === 'pending_wechat_checkout') {
         o.status = 'wechat_closed';
         o.wechat_trade_state = 'CLOSED';

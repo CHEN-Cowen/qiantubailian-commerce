@@ -281,8 +281,8 @@ export function evaluateGenerationQuality({
   const requestedFormats = formatList(deliverable);
   const sniffed = bytes ? sniffImageType(bytes) : null;
   const expectedMime = actualFormat === 'png' ? 'image/png' : actualFormat === 'jpg' ? 'image/jpeg' : null;
-  const decoded = sniffed === 'image/png' ? decodePng(bytes) : null;
-  const jpegSize = !decoded && sniffed === 'image/jpeg' ? readImageSize(bytes, 'image/jpeg') : null;
+  const decoded = sniffed === 'image/png' ? decodePng(bytes) : output?.decoded_bytes ? decodePng(output.decoded_bytes) : null;
+  const jpegSize = sniffed === 'image/jpeg' ? readImageSize(bytes, 'image/jpeg') : null;
   const measured = decoded
     ? { width: decoded.width, height: decoded.height }
     : jpegSize
@@ -345,7 +345,7 @@ export function evaluateGenerationQuality({
       code: 'FILE_INTEGRITY', label: '文件完整性', status: 'pass', required: true,
       evidence: {
         hash: expectedHash, format: actualFormat, width: measured.width, height: measured.height,
-        bytes: bytes.length, decoder: decoded ? 'full_png' : 'jpeg_header_only',
+        bytes: bytes.length, decoder: decoded ? (sniffed === 'image/png' ? 'full_png' : 'full_jpeg') : 'jpeg_header_only',
       },
     });
   }
@@ -400,6 +400,14 @@ export function evaluateGenerationQuality({
         evidence: { reason: verified.reason, composite: { sha256: composite.sha256 ?? null } },
         suggestedAction: '缺少可解码的掩码/去背主体，无法核对像素保留',
       });
+    } else if (!verified.exact && composite.lossy_encoding && subject.losslessBytes &&
+      verifyCompositeOutput({ outputDecoded: decodePng(subject.losslessBytes), maskBytes: subject.maskBytes, cutoutBytes: subject.cutoutBytes }).exact) {
+      preservation = check({
+        code: 'SUBJECT_PIXEL_PRESERVATION', label: 'JPEG 压缩后主体核对', status: 'unknown',
+        severity: 'high', required: true, adjudicable: true,
+        evidence: { lossy_encoding: true, pre_encoding_exact: true, checked_pixels: verified.checked, mismatches: verified.mismatches },
+        suggestedAction: '压缩前主体像素一致；JPEG 有损编码后需人工对照商品形状、文字和颜色',
+      });
     } else if (verified.exact) {
       preservation = check({
         code: 'SUBJECT_PIXEL_PRESERVATION', label: '主体像素保留', status: 'pass',
@@ -443,7 +451,7 @@ export function evaluateGenerationQuality({
   } else if (protectionMode === 'composite') {
     checks.push(check({
       code: 'SUBJECT_PROTECTION', label: '商品主体保护', status: 'unknown', severity: 'high',
-      required: true, adjudicable: false,
+      required: true, adjudicable: preservation?.evidence?.lossy_encoding === true,
       evidence: { mode: 'composite', preservation_status: preservation?.status ?? null },
       suggestedAction: '本地合成未通过像素核对，不能声称主体已被保护',
     }));

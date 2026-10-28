@@ -47,8 +47,8 @@
               <p class="eyebrow">为什么是千图百炼</p>
               <h2>不止生成好看的图，更交付能上架的图</h2>
               <ul class="showcase-points">
-                <li><span class="point-icon">✓</span>商品主体保护：基于主体掩码锁定关键像素，自动合成新背景</li>
-                <li><span class="point-icon">✓</span>包装文字与 Logo 自动提取后可编辑；关键文字由你在事实环节确认</li>
+                <li><span class="point-icon">✓</span>商品主体保护：支持主体区域检查与本地合成，实际效果需验收</li>
+                <li><span class="point-icon">✓</span>候选文字由你核对确认，品牌 Logo 使用上传原图叠加</li>
                 <li><span class="point-icon">✓</span>按已覆盖的平台规则逐项检查，未核验项如实说明，不强求「一定能上架」</li>
               </ul>
               <button class="primary js-new-project"><span>＋</span> 创建新品上架包</button>
@@ -59,16 +59,11 @@
                 <span class="compare-arrow" aria-hidden="true">→</span>
                 <figure class="compare-item"><div class="compare-thumb scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="生成图样例：晨间窗台场景面霜图" onerror="this.style.display='none'"><div class="jar small"></div><span class="scene-leaf">◒</span></div><figcaption>生成图</figcaption></figure>
               </div>
-              <div class="qa-badges"><span class="qa-badge">✓ 主体一致</span><span class="qa-badge">✓ 文字无误</span><span class="qa-badge">✓ 尺寸规范</span></div>
+              <div class="qa-badges"><span class="qa-badge">效果示例 · 当前任务需独立检查</span></div>
               <p class="showcase-note">流程示意 · 图片为真实模型生成样例</p>
             </div>
           </section>
-          <section class="metric-strip" aria-label="工作概览">
-            <div class="metric"><span>进行中的项目</span><strong>2</strong><small>本周新增 1 个</small></div>
-            <div class="metric"><span>待复核素材</span><strong class="amber">3</strong><small>建议今天处理</small></div>
-            <div class="metric"><span>本月已交付</span><strong>18</strong><small>演示口径</small></div>
-            <div class="metric quota"><span>本月额度</span><strong>68<small>/ 100</small></strong><div class="progress"><i style="width:68%"></i></div><small>剩余 32 次</small></div>
-          </section>
+          <section class="metric-strip" aria-label="工作概览"><p>正在读取你的工作概览…</p></section>
           <section class="section-block projects-block">
             <div class="section-title"><div><h2>继续制作</h2><p>回到最近的商品项目</p></div><button class="text-button" data-view="projects">查看全部 <span>→</span></button></div>
             <div id="home-real-projects"><p class="real-empty">还没有真实项目。点击「新建商品项目」开始你的第一个商品。</p></div>
@@ -92,7 +87,7 @@
               <button class="task-card disabled-task" disabled><span class="task-icon">▤</span><strong>详情页模块</strong><small>后续阶段开放</small><em>后续阶段</em></button>
             </div>
           </section>
-          <section class="section-block delivery-block"><div class="section-title"><div><h2>最近交付</h2><p>可发布状态一目了然</p></div><button class="text-button" data-view="assets">查看交付记录 <span>→</span></button></div><div class="delivery-table"><div class="delivery-row header"><span>商品项目</span><span>交付物</span><span>质量状态</span><span>更新时间</span></div><div class="delivery-row"><span><b>云杉洁面泡沫</b><small>淘宝 · 主图</small></span><span>1 个素材</span><span class="pass-text">● 可发布</span><span>今天 10:42</span></div><div class="delivery-row"><span><b>月光舒缓面霜</b><small>天猫 · 卖点图 02</small></span><span>1 个素材</span><span class="review-text">● 待复核</span><span>今天 09:18</span></div></div></section>
+          <section class="section-block delivery-block"><div class="section-title"><div><h2>最近交付</h2><p>可发布状态一目了然</p></div><button class="text-button" data-view="assets">查看交付记录 <span>→</span></button></div><div class="delivery-table" hidden><div class="delivery-row header"><span>商品项目</span><span>交付物</span><span>质量状态</span><span>更新时间</span></div><div class="delivery-row"><span><b>云杉洁面泡沫</b><small>淘宝 · 主图</small></span><span>1 个素材</span><span class="pass-text">● 可发布</span><span>今天 10:42</span></div><div class="delivery-row"><span><b>月光舒缓面霜</b><small>天猫 · 卖点图 02</small></span><span>1 个素材</span><span class="review-text">● 待复核</span><span>今天 09:18</span></div></div></section>
         </div>
       </section>
 
@@ -109,13 +104,13 @@
         </section>
         <div class="real-divider"><span>以下为演示数据 · 刷新即重置</span></div>
         <div class="filter-bar"><div class="segmented"><button class="selected">全部项目 <b>2</b></button><button>进行中 <b>1</b></button><button>待复核 <b>1</b></button></div><label class="search"><span>⌕</span><input placeholder="搜索商品名称或 SKU" aria-label="搜索项目"></label></div>
-        <div class="project-table"><div class="table-head"><span>项目</span><span>目标平台</span><span>进度</span><span>质量状态</span><span>最近更新</span><span></span></div><div class="table-row" data-open-project="skin" role="button" tabindex="0" aria-label="打开月光舒缓面霜项目"><div class="table-project"><div class="tiny-cover cover-skin"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="月光舒缓面霜缩略图样例" onerror="this.style.display='none'"><div class="cover-product"></div></div><span><b>月光舒缓面霜</b><small>SKU MC-50 · 5 件交付物</small></span></div><span>天猫旗舰店</span><span><b>72%</b><small>3 / 5 已完成</small></span><span class="status-pill amber">待复核</span><span>12 分钟前</span><button class="row-arrow">→</button></div><div class="table-row" data-open-project="lamp" role="button" tabindex="0" aria-label="查看雾白便携台灯状态"><div class="table-project"><div class="tiny-cover cover-lamp"><img class="sample-photo" src="./assets/demo/sample-lamp-hero.jpg" loading="lazy" alt="雾白便携台灯缩略图样例" onerror="this.style.display='none'"><div class="lamp-object"></div></div><span><b>雾白便携台灯</b><small>SKU WL-08 · 3 件交付物</small></span></div><span>京东自营</span><span><b>38%</b><small>素材准备中</small></span><span class="status-pill blue">制作中</span><span>昨天</span><button class="row-arrow">→</button></div></div>
+        <div class="project-table" hidden><div class="table-head"><span>项目</span><span>目标平台</span><span>进度</span><span>质量状态</span><span>最近更新</span><span></span></div><div class="table-row" data-open-project="skin" role="button" tabindex="0" aria-label="打开月光舒缓面霜项目"><div class="table-project"><div class="tiny-cover cover-skin"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="月光舒缓面霜缩略图样例" onerror="this.style.display='none'"><div class="cover-product"></div></div><span><b>月光舒缓面霜</b><small>SKU MC-50 · 5 件交付物</small></span></div><span>天猫旗舰店</span><span><b>72%</b><small>3 / 5 已完成</small></span><span class="status-pill amber">待复核</span><span>12 分钟前</span><button class="row-arrow">→</button></div><div class="table-row" data-open-project="lamp" role="button" tabindex="0" aria-label="查看雾白便携台灯状态"><div class="table-project"><div class="tiny-cover cover-lamp"><img class="sample-photo" src="./assets/demo/sample-lamp-hero.jpg" loading="lazy" alt="雾白便携台灯缩略图样例" onerror="this.style.display='none'"><div class="lamp-object"></div></div><span><b>雾白便携台灯</b><small>SKU WL-08 · 3 件交付物</small></span></div><span>京东自营</span><span><b>38%</b><small>素材准备中</small></span><span class="status-pill blue">制作中</span><span>昨天</span><button class="row-arrow">→</button></div></div>
         <p class="sample-note">封面与素材图片为真实模型生成样例</p>
       </section>
 
       <section class="view" id="assets-view" data-view-panel="assets">
         <div class="page-heading compact"><div><p class="eyebrow">素材与版本</p><h1>素材与版本</h1><p class="heading-note">按商品事实查看原图、生成版本和质检状态。</p></div><button class="secondary" id="upload-button">↑ 上传素材</button></div>
-        <div class="asset-layout"><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
+        <div class="asset-layout" hidden><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
       </section>
 
       <section class="view" id="library-view" data-view-panel="library">
@@ -228,6 +223,7 @@
               </div>
               <div class="wb-human-review" id="wb-human-review" hidden>
                 <label>复核意见<textarea id="wb-review-note" rows="2" placeholder="写明原因或处理意见"></textarea></label>
+                  <label>对照依据<input id="wb-review-evidence" maxlength="500" placeholder="核对了哪张原图、哪个区域或其他证据"></label>
                 <div class="wb-review-actions">
                   <button class="secondary" data-review-decision="needs_review">仍需复核</button>
                   <button class="secondary" data-review-decision="blocked">阻断</button>
@@ -304,8 +300,12 @@
       <div class="spec-grid">
         <label>任务模板<select id="spec-template" aria-label="任务模板"></select></label>
         <label>品牌套件<select id="spec-brand" aria-label="品牌套件"></select></label>
-        <label>目标平台<input id="spec-platform" maxlength="40" placeholder="例如：天猫"></label>
+          <label>目标平台<input id="spec-platform" maxlength="40" placeholder="例如：天猫"></label>
       </div>
+        <details><summary>文字排版</summary><p>文字内容在商品事实中修改；颜色来自品牌套件。以下参数应用到含文字的图片，冻结后用于成品合成；下载包另含可编辑 SVG。</p>
+          <label><input id="spec-custom-layout" type="checkbox"> 使用自定义排版</label>
+          <div class="spec-grid"><label>距左侧（%）<input id="spec-text-x" type="number" min="0" max="95" value="8"></label><label>首行距顶部（%）<input id="spec-text-y" type="number" min="0" max="95" value="75"></label><label>文字区宽度（%）<input id="spec-text-width" type="number" min="5" max="100" value="84"></label><label>字号占短边（%）<input id="spec-text-size" type="number" min="1" max="20" value="4"></label></div>
+        </details>
       <p class="real-note">模板与平台规则来自服务端只读目录。平台规则带来源、版本与复核日期；内置基线未经官方核验，覆盖不足时结论只能是 unknown，不能声称平台通过。</p>
       <div id="spec-body"><p class="truth-hint">正在读取模板与规则…</p></div>
       <p class="form-error" id="spec-error" role="alert"></p>
@@ -327,7 +327,7 @@
       <label>主色（#RRGGBB）<input name="primary" required pattern="#[0-9A-Fa-f]{6}" placeholder="#FF5A2E"></label>
       <label>辅助色（可选，逗号分隔）<input name="secondary" placeholder="#FFF1EB, #15803D"></label>
       <label class="brand-inline"><span><input type="checkbox" name="logo_present"> 套件包含 Logo</span></label>
-      <label>Logo 说明（可选）<input name="logo_description" maxlength="120" placeholder="例如：左上角文字标"></label>
+      <label>Logo 素材 ID（先在项目上传图片）<input name="logo_asset_id" maxlength="80" placeholder="粘贴素材列表中的 ID"></label><label>Logo 说明（可选）<input name="logo_description" maxlength="120" placeholder="例如：左上角文字标"></label>
       <label>授权字体（可选）<input name="font_name" maxlength="60" placeholder="例如：思源黑体"></label>
       <label>字体授权状态<select name="font_license" aria-label="字体授权状态">
         <option value="licensed">已授权（可商用）</option>

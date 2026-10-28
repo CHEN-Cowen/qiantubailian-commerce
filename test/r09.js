@@ -244,7 +244,7 @@ test('R09 未结算订单不能退 → ORDER_NOT_SETTLED', async () => {
   assert.equal(refund.json.error, 'ORDER_NOT_SETTLED');
 });
 
-test('R09 退款失败可重试：provider refund 抛错后记录 failed，重试成功', async () => {
+test('R09 退款失败可重试：provider refund 抛错后保留 processing 和冻结，重试成功', async () => {
   await setupShared();
   const port = shared.port;
   const order = await createAndSettleOrder(port, shared.provider, 'plan_taster_10');
@@ -268,7 +268,7 @@ test('R09 退款失败可重试：provider refund 抛错后记录 failed，重�
   assert.equal(first.json.error, 'PAYMENT_REFUND_FAILED');
   // 订单状态仍是 settled_real（退款失败不扣账本）
   const query = await request(port, `/api/billing/orders/${order.id}/query`, { headers: headers() });
-  assert.equal(query.json.order.refund_status, 'failed');
+  assert.equal(query.json.order.refund_status, 'processing');
   assert.equal(query.json.order.status, 'settled_real');
 
   // 重试：第二次成功

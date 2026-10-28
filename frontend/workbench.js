@@ -43,6 +43,7 @@ const state = {
   selectedDeliverableId: null,
   selectedVersionId: null,
   selectedReportId: null,
+  assets: [],
   versions: [],
   reports: [],
   exports: [],
@@ -75,6 +76,8 @@ export function initWorkbench({ toast } = {}) {
   $('#wb-version-activate')?.addEventListener('click', () => void activateSelectedVersion());
   $('#wb-export-complete')?.addEventListener('click', () => void requestExport('complete'));
   $('#wb-export-partial')?.addEventListener('click', () => void requestExport('partial'));
+  $('#wb-revise-btn')?.addEventListener('click', () => openSpec(state.projectId));
+  $('#wb-download-active')?.addEventListener('click', () => void requestExport('partial'));
   document.addEventListener('click', onDeliverableClick);
   document.addEventListener('click', onReviewDecisionClick);
   window.addEventListener('beforeunload', () => persistSelection());
@@ -119,6 +122,7 @@ export async function openWorkbench(projectId) {
       api.listRunsByProject(projectId).catch(() => ({ runs: [] })),
     ]);
     state.project = detail.project;
+      state.assets = detail.assets ?? [];
     state.specs = specsPayload.specs ?? [];
     state.runs = runsPayload.runs ?? [];
     const saved = safeReadLS();
@@ -188,10 +192,12 @@ function showWorkbench(show) {
   if (show) {
     // 标记 view-panel 为 workbench
     document.querySelectorAll('.view[data-view-panel], .project-view').forEach(el => {
+      if (el === panel) return;
       el.classList.remove('active');
       el.hidden = true;
     });
     panel.classList.add('active');
+    panel.hidden = false;
     document.querySelectorAll('.nav-item[data-view]').forEach(btn => btn.classList.remove('active'));
   } else {
     document.querySelectorAll('.view[data-view-panel]').forEach(el => el.hidden = false);
@@ -230,7 +236,7 @@ function renderSteps() {
   const specs = state.specs;
   const readiness = project?.readiness ?? {};
   const truthDone = (project?.truth_head_version ?? 0) > 0;
-  const assetsDone = (project?.active_asset_count ?? 0) > 0;
+  const assetsDone = state.assets.some(a => a.role_status === 'active');
   const specDone = specs.some(s => (s.validity?.validity ?? 'current') === 'current');
   const runDone = state.activeRun && runTerminal.has(state.activeRun.status);
 
@@ -240,7 +246,7 @@ function renderSteps() {
     { id: 'spec', label: '选效果/生产配置', done: specDone },
     { id: 'generate', label: '确认报价 → 生成', done: Boolean(state.activeRun) },
     { id: 'qa', label: '检查与修订', done: runDone },
-    { id: 'export', label: '下载套图', done: runDone && (state.activeRun?.delivery_completeness?.complete ?? false) },
+    { id: 'export', label: '下载套图', done: state.exports.length > 0 },
   ];
   // 找出当前步骤：第一个未 done 的
   const currentIdx = Math.max(0, steps.findIndex(s => !s.done));
@@ -279,6 +285,8 @@ function renderDeliverables(empty = false) {
     return;
   }
   const deliverables = state.activeRun.deliverables ?? [];
+  $('#wb-qa-status').textContent = qualityStatusLabel[state.activeRun.quality_status] ?? '待检查';
+  $('#wb-qa-note').textContent = '生成完成后仍需通过各项检查才能交付';
   const expected = state.activeRun.delivery_completeness?.expected_units ?? deliverables.reduce((s, d) => s + (d.count || 1), 0);
   const produced = state.activeRun.delivery_completeness?.produced_units ?? deliverables.filter(d => d.status === 'succeeded').reduce((s, d) => s + (d.count || 1), 0);
   progress.textContent = `${produced}/${expected}`;
@@ -288,12 +296,14 @@ function renderDeliverables(empty = false) {
       ?? state.versions.find(v => v.deliverable_id === item.deliverable_id);
     const report = state.reports.find(r => r.id === version?.report_id) ?? null;
     const qual = report?.decision ?? report?.human_decision ?? item.status;
-    const qualLabel = qual === 'succeeded' || qual === 'publishable' ? '已通过'
+    const qualLabel = qual === 'publishable' ? '已通过'
+      : qual === 'succeeded' ? '待检查'
       : qual === 'needs_review' ? '待复核'
       : qual === 'blocked' || qual === 'failed' ? '阻断'
       : qual === 'running' || qual === 'queued' ? '生成中'
       : '待开始';
-    const statusClass = qual === 'succeeded' || qual === 'publishable' ? 'done'
+    const statusClass = qual === 'publishable' ? 'done'
+      : qual === 'succeeded' ? 'review'
       : qual === 'needs_review' ? 'review'
       : qual === 'blocked' || qual === 'failed' ? 'fail'
       : qual === 'running' || qual === 'evaluating' ? 'running'
@@ -320,10 +330,19 @@ function onDeliverableClick(event) {
 function restoreSelectedDeliverable() {
   if (!state.activeRun) return;
   const ids = state.activeRun.deliverables?.map(d => d.deliverable_id) ?? [];
-  if (state.selectedDeliverableId && ids.includes(state.selectedDeliverableId)) return;
+  if (state.selectedDeliverableId && ids.includes(state.selectedDeliverableId)) {
+    const selected = state.versions.find(v => v.id === state.selectedVersionId && v.deliverable_id === state.selectedDeliverableId)
+      ?? state.versions.find(v => v.deliverable_id === state.selectedDeliverableId && v.active);
+    state.selectedVersionId = selected?.id ?? null; state.selectedReportId = selected?.report_id ?? null;
+    return;
+  }
   // 自动选第一个有 active_version 的
   const first = state.activeRun.deliverables?.find(d => d.active_version_id) ?? state.activeRun.deliverables?.[0];
-  if (first) state.selectedDeliverableId = first.deliverable_id;
+  if (first) {
+    state.selectedDeliverableId = first.deliverable_id;
+    const version = state.versions.find(v => v.id === first.active_version_id);
+    state.selectedVersionId = version?.id ?? null; state.selectedReportId = version?.report_id ?? null;
+  }
 }
 
 function selectDeliverable(deliverableId) {
@@ -392,6 +411,7 @@ function renderCenter(empty = false) {
 
   // 原图对比
   const originalAsset = findOriginalAsset(deliverable);
+  $('#wb-original').style.display = state.compareMode && originalAsset ? '' : 'none';
   if (state.compareMode && originalAsset) {
     $('#wb-original .wb-image-holder').innerHTML = `<img src="${escapeHtml(originalAsset.url)}" alt="原图">`;
     $('#wb-original figcaption').textContent = `原图 · ${originalAsset.filename ?? '参考素材'}`;
@@ -413,8 +433,8 @@ function renderCenter(empty = false) {
 
   if (runTerminal.has(state.activeRun.status)) {
     // 修订按钮只在任务终态后才不会被新扣费覆盖；这里保留"局部修订"入口引导到重新执行 run
-    reviseBtn.hidden = false;
-    downloadActive.hidden = false;
+    reviseBtn.hidden = false; reviseBtn.textContent = '调整排版后重新制作';
+    downloadActive.hidden = qual !== 'publishable'; downloadActive.textContent = '创建已通过图片的下载包';
   }
 }
 
@@ -424,13 +444,14 @@ function buildVersionImageUrl(version) {
   // 这里简化：若 version 有 url 直接用，否则按 hash 猜（真实实现需 store 提供读接口）
   if (version?.url) return version.url;
   // fallback：如果这是 demo/mock provider，run.deliverables 里的 attempt 可能给了 output_file
-  return '';
+  return `/api/runs/${encodeURIComponent(state.activeRun.id)}/versions/${encodeURIComponent(version.id)}/content`;
 }
 
 function findOriginalAsset(deliverable) {
   // 原始素材来自 project.assets；deliverable 里没有直接关联，这里返回 null
   // 真实实现需从 run.subject_context.reference_images 或 project.active_assets 映射
-  return null;
+  const asset = state.assets.find(a => a.role === 'subject' && a.role_status === 'active');
+  return asset ? { ...asset, url: `/api/projects/${encodeURIComponent(state.projectId)}/assets/${encodeURIComponent(asset.id)}/content` } : null;
 }
 
 function toggleCompare() {
@@ -481,6 +502,7 @@ function renderQA(empty = false) {
   const deliverable = state.activeRun.deliverables.find(d => d.deliverable_id === state.selectedDeliverableId);
   const version = state.versions.find(v => v.id === state.selectedVersionId);
   const report = state.reports.find(r => r.id === version?.report_id) ?? null;
+  state.selectedReportId = report?.id ?? null;
 
   // 优先显示 report.checks；没有 report 时根据 deliverable.status 构造一条占位
   const checks = report?.checks ?? buildFallbackChecks(deliverable);
@@ -499,6 +521,7 @@ function renderQA(empty = false) {
 }
 
 function renderCheckRow(check) {
+  check = { ...check, status: check.effective_status ?? check.status };
   const icon = check.status === 'pass' ? '✓' : check.status === 'fail' ? '×' : '?';
   const cls = check.status === 'pass' ? 'pass' : check.status === 'fail' ? 'fail' : (check.status === 'unknown' ? 'unknown' : 'review');
   const hardGate = check.hard_gate === true ? ' hard-gate' : '';
@@ -513,6 +536,7 @@ function renderCheckRow(check) {
       </small>
       ${check.evidence ? `<small class="wb-check-evidence">证据：${escapeHtml(typeof check.evidence === 'string' ? check.evidence : JSON.stringify(check.evidence))}</small>` : ''}
       ${check.suggested_action ? `<small>建议：${escapeHtml(check.suggested_action)}</small>` : ''}
+      ${check.status === 'unknown' && check.adjudicable ? `<label><input type="checkbox" data-review-check="${escapeHtml(check.code)}">我已对照素材核对这一项</label>` : ''}
     </div>
   </div>`;
 }
@@ -532,8 +556,14 @@ function onReviewDecisionClick(event) {
 async function submitReview(decision) {
   if (!state.selectedReportId) { state.toast('没有可复核的报告'); return; }
   const note = $('#wb-review-note')?.value?.trim() || null;
+  const evidence = $('#wb-review-evidence')?.value?.trim() || '';
+  if (decision === 'needs_review') { state.toast('保留待复核，不改变检查结论'); return; }
+  const selected = [...document.querySelectorAll('[data-review-check]:checked')];
+  if (!selected.length || !note || !evidence) { state.toast('请勾选已核对的检查项，并填写复核理由和对照依据'); return; }
+  const decisions = selected.map(input => ({ code: input.dataset.reviewCheck,
+    decision: decision === 'blocked' ? 'fail' : 'pass', reason: note, evidence }));
   try {
-    const result = await api.reviewQualityReport(state.selectedReportId, { decisions: [decision], note });
+    const result = await api.reviewQualityReport(state.selectedReportId, { decisions, note });
     // 更新本地 reports
     const updated = result?.report ?? null;
     if (updated) {
@@ -552,6 +582,7 @@ async function submitReview(decision) {
     renderDeliverables();
     renderCenter();
     renderQA();
+    renderExport();
   } catch (error) {
     state.toast(error instanceof ApiFailure ? error.message : String(error));
   }
@@ -621,18 +652,23 @@ function renderExport(empty = false) {
   }
   const run = state.activeRun;
   const dc = run.delivery_completeness ?? {};
-  if (dc.complete) {
-    chip.textContent = `完整交付 · ${dc.produced_units}/${dc.expected_units}`;
+  const passed = (run.deliverables ?? []).filter(d => {
+    const version = state.versions.find(v => v.id === d.active_version_id);
+    const report = state.reports.find(r => r.id === version?.report_id);
+    return report?.decision === 'publishable' && report.validity === 'current';
+  }).length;
+  if (dc.complete && passed === run.deliverables.length) {
+    chip.textContent = `检查通过 · ${passed}/${dc.expected_units}`;
     chip.className = 'wb-chip ok';
   } else {
-    chip.textContent = `部分交付 · ${dc.produced_units}/${dc.expected_units}（缺 ${dc.missing_units ?? 0} 项）`;
+    chip.textContent = `检查通过 ${passed}/${dc.expected_units ?? run.deliverables.length} · 其余待处理`;
     chip.className = 'wb-chip warn';
   }
   const terminal = runTerminal.has(run.status);
   // 完整包按钮：必须 complete=true 且 terminal
-  completeBtn.hidden = !(terminal && dc.complete);
+  completeBtn.hidden = !(terminal && dc.complete && passed === run.deliverables.length);
   // 部分包按钮：terminal 就可以
-  partialBtn.hidden = !terminal;
+  partialBtn.hidden = !terminal || passed === 0;
   history.innerHTML = state.exports.length === 0
     ? '<p class="real-hint">暂无导出记录</p>'
     : `<ul>${state.exports.map(exp => `
@@ -672,7 +708,8 @@ async function handleStartOrContinue() {
   btn.disabled = true;
   btn.textContent = '正在生成报价…';
   try {
-    const quote = await api.createQuote({ project_id: state.project.id });
+    const { quote } = await api.createQuote({ project_id: state.project.id });
+    if (!window.confirm(`本次制作 ${quote.estimated_credits} 张，最多消耗 ${quote.max_credits} 张额度。失败退回，待复核保留预留，包含最多两次修复。是否开始？`)) return;
     state.idempotencyKey = `workbench-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     btn.textContent = '正在启动任务…';
     const result = await api.createRun({
@@ -772,6 +809,7 @@ async function refreshRun(runId, { keepSSE = false } = {}) {
     state.activeRun = result.run;
     state.runs = state.runs.map(r => r.id === runId ? result.run : r);
     await loadRunExtras(runId);
+    restoreSelectedDeliverable();
     renderHeader();
     renderSteps();
     renderDeliverables();

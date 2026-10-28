@@ -55,9 +55,12 @@ export function quoteFromSpec({
   priceVersion = PRICE_VERSION,
   ttlMs = DEFAULT_QUOTE_TTL_MS,
   at = new Date(),
+  finishedImages = false,
+  includeOptional = false,
 } = {}) {
   if (!spec || typeof spec !== 'object') throw new Error('报价需要已冻结的 spec');
-  const deliverables = Array.isArray(spec.deliverables) ? spec.deliverables : [];
+  const deliverables = (Array.isArray(spec.deliverables) ? spec.deliverables : [])
+    .filter(item => !finishedImages || includeOptional || item.required);
   if (deliverables.length === 0) throw new Error('交付清单为空，无法报价');
 
   const lines = deliverables.map(item => ({
@@ -66,7 +69,7 @@ export function quoteFromSpec({
     type: item.type,
     required: Boolean(item.required),
     count: Math.max(1, Number(item.count) || 1),
-    credits: priceOfDeliverable(item),
+    credits: finishedImages ? Math.max(1, Number(item.count) || 1) : priceOfDeliverable(item),
     // 规格字段来自冻结快照（由 spec 层按平台规则计算好），不再硬编码
     width: Number(item.width) || null,
     height: Number(item.height) || null,
@@ -82,9 +85,9 @@ export function quoteFromSpec({
   const maxAttempts = Math.max(1, Math.min(requestedAttempts, DEFAULT_MAX_ATTEMPTS));
   const budgetCap = Number.isFinite(budget.max_credits) ? budget.max_credits : null;
   const requestedCeiling = estimated * maxAttempts;
-  const ceiling = budgetCap === null ? requestedCeiling : Math.min(requestedCeiling, budgetCap);
+  const ceiling = finishedImages ? estimated : budgetCap === null ? requestedCeiling : Math.min(requestedCeiling, budgetCap);
 
-  const notes = ['额度为内部演示积分，不代表真实货币或可计费承诺。'];
+  const notes = [finishedImages ? '按可交付成品计价，每张 1 点；含最多两次修复，失败释放，待复核保留预留。' : '额度为内部演示积分，不代表真实货币或可计费承诺。'];
   notes.push(`默认最多 ${DEFAULT_MAX_ATTEMPTS} 轮（含首轮），任一上限触达即停止。`);
   if (budgetCap !== null && requestedCeiling > budgetCap) {
     notes.push(`模板推荐轮数所需 ${requestedCeiling} 额度超过预算上限 ${budgetCap}，已按上限封顶，触达后停止不再自动扩大预算。`);
@@ -96,7 +99,7 @@ export function quoteFromSpec({
   const createdAt = new Date(at).toISOString();
   const expiresAt = new Date(new Date(at).getTime() + ttlMs).toISOString();
   const contentHash = sha({
-    price_version: priceVersion,
+    price_version: finishedImages ? 'finished-image.1' : priceVersion,
     spec_version: spec.version ?? null,
     deliverable_hash: spec.deliverable_hash ?? null,
     lines,
@@ -106,8 +109,9 @@ export function quoteFromSpec({
   });
 
   return {
+    billing_mode: finishedImages ? 'finished_image' : 'legacy_demo',
     quote_id: `qte_${randomBytes(8).toString('hex')}`,
-    price_version: priceVersion,
+    price_version: finishedImages ? 'finished-image.1' : priceVersion,
     content_hash: contentHash,
     spec_version: spec.version ?? null,
     deliverable_hash: spec.deliverable_hash ?? null,
@@ -127,7 +131,7 @@ export function quoteFromSpec({
     max_attempts: maxAttempts,
     lines,
     notes,
-    settlement_policy: '按已发生的阶段结算；未发生的部分在任务终态时释放回可用额度。',
+    settlement_policy: finishedImages ? '每张可交付图片结算一次；包含最多两次修复，待复核保留预留，失败释放。' : '内部演示按尝试阶段结算。',
   };
 }
 

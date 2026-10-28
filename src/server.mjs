@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { LOOPBACK_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
+import { createPaymentProviderFromEnv } from './providers/payment.mjs';
 
 export const SERVICE = Object.freeze({ status: 'ok', service: 'qiantubailian-commerce', version: '0.23.0', module: 'R12' });
 export const STATIC_FILES = Object.freeze([
@@ -84,7 +85,7 @@ export function createApp({
     store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock,
     initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection, revisionMaxRounds,
     providerMaxConcurrency, tenantMaxConcurrency, unknownReconcileMs,
-    provider, ocr, providerOptions, paymentProvider,
+    provider, ocr, providerOptions, paymentProvider: paymentProvider ?? createPaymentProviderFromEnv().provider,
     demoMode, sessionTtlMs, secureCookies, emailRecoveryConfigured,
   });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
@@ -146,6 +147,7 @@ export function createApp({
   });
   server.setTimeout(20_000, socket => socket.destroy());
   let closing;
+  let paymentTimer, paymentRecovery = null;
   return {
     server,
     jobs: api.jobs,
@@ -155,6 +157,10 @@ export function createApp({
         const onListen = () => {
           server.off('error', onError);
           api.jobs.start();
+          const recover = () => {
+            if (!paymentRecovery) paymentRecovery = api.reconcilePayments().catch(() => {}).finally(() => { paymentRecovery = null; });
+          };
+          paymentTimer = setInterval(recover, 30_000); paymentTimer.unref(); recover();
           resolve(server.address());
         };
         server.once('error', onError);
@@ -164,6 +170,7 @@ export function createApp({
     },
     close({ deadlineMs = 3_000 } = {}) {
       if (closing) return closing;
+      clearInterval(paymentTimer);
       closing = new Promise((resolve, reject) => {
         if (!server.listening) {
           // 同样要等飞行中的 tick 收尾
@@ -180,6 +187,7 @@ export function createApp({
           // 顺序很重要：先停调度并等飞行中的 tick 收尾，再排空写队列，
           // 最后调用方才能安全清理数据目录
           Promise.resolve(api.jobs.stop())
+            .then(() => paymentRecovery)
             .then(() => api.drain?.())
             .then(() => { error ? reject(error) : resolve(); })
             .catch(() => { error ? reject(error) : resolve(); });

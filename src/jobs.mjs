@@ -1,3 +1,4 @@
+import { decodeToPng, renderLayers, prepareSubjectMask, draftPreview } from './raster.mjs';
 /**
  * M05 任务执行骨架：GenerationJob 状态机、Attempt、事件流水、取消、超时与恢复。
  *
@@ -165,7 +166,7 @@ export function createJobs({
         mask_ref: capabilities.simulated === true ? 'mask:simulated:SUBJECT_BLOB_MISSING' : null,
       };
     }
-    const mask = createSubjectMask({ bytes: subjectBytes, mime: subject.mime, box: subject.subject_box ?? null });
+    const mask = await prepareSubjectMask({ bytes: subjectBytes, mime: subject.mime, box: subject.subject_box ?? null });
     const plan = buildReferencePlan({
       subjectAsset: subject, packagingAsset: packaging, styleAssets: styles,
       cutoutSha256: mask.available && mask.cutout_sha256 ? mask.cutout_sha256 : null, maxReferences,
@@ -328,6 +329,7 @@ export function createJobs({
           template_version: spec.template?.version ?? null,
         },
         quote: { quote_id: quote.quote_id, price_version: quote.price_version, content_hash: quote.content_hash },
+        billing_mode: quote.billing_mode ?? 'legacy_demo',
         // M08：导出清单要能追到任务创建时的平台规则版本；来源未核验的状态一并保留
         rule_ref: (() => {
           const matched = spec.channel?.platform
@@ -375,7 +377,7 @@ export function createJobs({
               unit_index: unit,
               unit_total: units,
               // 报价总额不变：第 1 张含基础价与文字块，后续每张按追加价计
-              credits: unit === 1 ? line.credits - (units - 1) * EXTRA_COPY_CREDITS : EXTRA_COPY_CREDITS,
+              credits: quote.billing_mode === 'finished_image' ? 1 : unit === 1 ? line.credits - (units - 1) * EXTRA_COPY_CREDITS : EXTRA_COPY_CREDITS,
               // M06：实际尺寸与格式取自冻结快照，不再硬编码 1024×1024
               width: detail?.width ?? 1024,
               height: detail?.height ?? 1024,
@@ -440,7 +442,7 @@ export function createJobs({
         revision: {
           enabled: capabilities.supports_revision === true,
           provider_support: capabilities.supports_revision === true,
-          max_rounds: Math.max(1, Number(revisionMaxRounds) || REVISION_MAX_ROUNDS),
+          max_rounds: quote.billing_mode === 'finished_image' ? quote.lines.reduce((n, l) => n + l.count, 0) * 2 : Math.max(1, Number(revisionMaxRounds) || REVISION_MAX_ROUNDS),
           max_credits: Math.max(0, Math.floor(quote.max_credits * 0.6)),
           round: 0,
           spent_credits: 0,
@@ -475,6 +477,7 @@ export function createJobs({
     return store.mutate(data => {
       const run = findRun(data, ctx, runId);
       const events = [];
+      if (TERMINAL_STATES.has(run.status) && run.billing_mode === 'finished_image') settleFinishedImages(data, run, clock(), true);
       if (run.cancel_requested === false) {
         run.cancel_requested = true;
         run.cancel_reason = reason;
@@ -541,7 +544,7 @@ export function createJobs({
         // 供应商确认已产出但结果无法取回：成本真实发生，内部额度按已发生阶段结算
         attempt.status = 'succeeded_unavailable';
         attempt.ended_at = new Date(clock()).toISOString();
-        const capture = appendEntry(data, {
+        const capture = run.billing_mode === 'finished_image' ? { applied: false } : appendEntry(data, {
           type: 'capture',
           amount: attempt.planned_credits,
           tenantId: run.tenant_id,
@@ -769,7 +772,9 @@ export function createJobs({
       const cutout = await store.readBlob(run.subject_context.cutout_sha256, 'png');
       const mask = run.subject_context.mask_sha256
         ? await store.readBlob(run.subject_context.mask_sha256, 'png') : null;
-      const composed = compositeSubject({ outputBytes, cutoutBytes: cutout, maskBytes: mask });
+      let decodedOutput = outputBytes;
+      try { decodedOutput = await decodeToPng(outputBytes); } catch { /* 合成模块返回明确失败 */ }
+      const composed = compositeSubject({ outputBytes: decodedOutput, cutoutBytes: cutout, maskBytes: mask });
       composite = {
         available: composed.available,
         applied: composed.applied === true,
@@ -781,8 +786,32 @@ export function createJobs({
     }
 
     // 扩展名以供应商实际格式为准；只有本地合成或供应商未声明格式时才回落 png
-    const ext = composite?.applied ? 'png' : (result.output.format ?? 'png');
-    const outputHash = composite?.applied ? composite.sha256 : result.output.sha256;
+    let finalFormat = null;
+    let overlayBaseHash = null;
+    let losslessOutput = null;
+    if (run.billing_mode === 'finished_image') {
+      const compiled = executionForDeliverable(run.execution?.plan, { deliverableId: target.deliverable_id });
+      const layers = compiled?.text_layers ?? [];
+      const logoLayer = layers.find(l => l.logo);
+      const logoAsset = logoLayer && data.assets[logoLayer.asset_ref];
+      const logoBytes = logoAsset?.tenant_id === run.tenant_id ? await store.readBlob(logoAsset.sha256, logoAsset.ext) : null;
+      finalFormat = target.formats.includes('png') ? 'png' : 'jpg';
+      try {
+        const baseBytes = await decodeToPng(outputBytes);
+        overlayBaseHash = createHash('sha256').update(baseBytes).digest('hex');
+        await store.putBlob(baseBytes, overlayBaseHash, 'png');
+        const rendered = await renderLayers({ bytes: baseBytes, width: result.output.width, height: result.output.height, layers,
+          logoBytes: logoBytes ? await decodeToPng(logoBytes) : null, format: finalFormat });
+        outputBytes = rendered.bytes;
+        losslessOutput = rendered.losslessBytes;
+      } catch (error) {
+        await settleAttemptFailure(data, run, attempt, { code: 'RENDER_ERROR', message: error.message, retryable: false }, events, at);
+        return;
+      }
+    }
+    const ext = finalFormat ?? (composite?.applied ? 'png' : (result.output.format ?? 'png'));
+    const outputHash = createHash('sha256').update(outputBytes).digest('hex');
+    attempt.composite = composite ? { ...composite, lossy_encoding: finalFormat === 'jpg' } : null;
     const requestedFormats = target?.formats ?? ['png'];
     const formatContract = {
       requested: [...requestedFormats],
@@ -824,7 +853,7 @@ export function createJobs({
     data.generation_records[record.id] = record;
     run.generation_record_ids.push(record.id);
 
-    const capture = appendEntry(data, {
+    const capture = run.billing_mode === 'finished_image' ? { applied: false } : appendEntry(data, {
       type: 'capture',
       amount: attempt.planned_credits,
       tenantId: run.tenant_id,
@@ -852,7 +881,7 @@ export function createJobs({
     // M07：产出文件立刻做 Commerce QA；质量结论独立于"生成成功"，
     // 检查结果写入 quality_reports 并驱动 run.quality_status。
     const report = await evaluateAttemptQuality(data, run, attempt, target, {
-      outputBytes, ext, outputHash, composite, recordId: record.id,
+      outputBytes, ext, outputHash, composite, losslessOutput, recordId: record.id,
     }, events, at);
 
     // M08：每个成功产物都留版本；同交付物的旧版本转为历史，不删除、不覆盖
@@ -865,6 +894,7 @@ export function createJobs({
       },
       at,
     });
+    if (overlayBaseHash) version.overlay_base_hash = overlayBaseHash;
     for (const previous of run.versions) {
       if (previous.deliverable_id !== version.deliverable_id || !previous.active) continue;
       previous.active = false;
@@ -979,7 +1009,7 @@ export function createJobs({
   }
 
   async function evaluateAttemptQuality(data, run, attempt, target, {
-    outputBytes, ext, outputHash, composite, recordId,
+    outputBytes, ext, outputHash, composite, losslessOutput = null, recordId,
   }, events, at) {
     const spec = specOfRun(data, run);
     const truth = truthOfRun(data, run, spec);
@@ -1008,8 +1038,9 @@ export function createJobs({
           sha256: outputHash,
           width: attempt.result?.output?.width,
           height: attempt.result?.output?.height,
+          decoded_bytes: ext === 'jpg' && losslessOutput ? await decodeToPng(outputBytes) : null,
         },
-        subject: { maskBytes, cutoutBytes, composite },
+        subject: { maskBytes, cutoutBytes, composite, losslessBytes: losslessOutput },
         assets: activeAssetsOf(data, run),
         ocr,
         now: at,
@@ -1213,7 +1244,7 @@ export function createJobs({
         provider_job_id: handle.provider_job_id,
         idempotency_key: request.idempotency_key,
         request_hash: request.request_hash,
-        planned_credits: target.credits,
+        planned_credits: run.billing_mode === 'finished_image' ? 0 : target.credits,
         charged_credits: 0,
         started_at: new Date(at).toISOString(),
         ended_at: null,
@@ -1262,7 +1293,28 @@ export function createJobs({
     }
   }
 
+  function settleFinishedImages(data, run, at, cancel = false) {
+    if (run.billing_mode !== 'finished_image') return;
+    for (const item of run.deliverables) {
+      if (item.entitlement_settled) continue;
+      const version = run.versions.find(v => v.active && v.deliverable_id === item.deliverable_id);
+      const report = version && data.quality_reports[version.report_id];
+      // 待复核保持该张权益冻结；硬失败/无产物释放，确认可交付才扣一次。
+      if (!cancel && report?.decision === 'needs_review') continue;
+      const type = !cancel && report?.decision === 'publishable' ? 'capture' : 'release';
+      const result = appendEntry(data, { type, amount: 1, tenantId: run.tenant_id, jobId: run.id,
+        uniqueOperationKey: `finished-image:${run.id}:${item.deliverable_id}`,
+        actor: 'system', initialCredits, at, memo: type === 'capture' ? '成品交付，仅结算一次' : '未交付，释放成品额度' });
+      if (result.applied) run.budget[type === 'capture' ? 'captured_credits' : 'released_credits'] += 1;
+      item.entitlement_settled = type;
+    }
+  }
+
   async function releaseRemaining(data, run, events, at, memo) {
+    if (run.billing_mode === 'finished_image') {
+      settleFinishedImages(data, run, at, run.cancel_requested);
+      return;
+    }
     const remaining = run.budget.reserved_credits - run.budget.captured_credits - run.budget.released_credits;
     if (remaining <= 0) return;
     const released = appendEntry(data, {
@@ -1317,7 +1369,8 @@ export function createJobs({
         return 'none';
       }
       const attemptsUsed = run.attempts.filter(attempt => attempt.deliverable_id === target.deliverable_id).length;
-      const creditsNeeded = target.credits;
+      if (run.billing_mode === 'finished_image' && attemptsUsed >= 3) continue;
+      const creditsNeeded = run.billing_mode === 'finished_image' ? 0 : target.credits;
       if (run.budget.captured_credits + run.budget.released_credits + creditsNeeded > run.budget.reserved_credits) {
         revision.stop_reason = 'budget_exhausted';
         events.push(pushEvent(data, run, {
@@ -1436,7 +1489,7 @@ export function createJobs({
         provider_job_id: handle.provider_job_id,
         idempotency_key: request.idempotency_key,
         request_hash: request.request_hash,
-        planned_credits: target.credits,
+        planned_credits: run.billing_mode === 'finished_image' ? 0 : target.credits,
         charged_credits: 0,
         started_at: new Date(at).toISOString(),
         ended_at: null,
@@ -1946,6 +1999,7 @@ export function createJobs({
       const run = context.run;
       if (run) {
         refreshRunQuality(data, run);
+        if (TERMINAL_STATES.has(run.status)) settleFinishedImages(data, run, clock());
         pushEvent(data, run, {
           stage: 'human_review', status: 'reviewed', at: clock(),
           payload: {
@@ -1979,6 +2033,24 @@ export function createJobs({
       channel: context.channel,
       outputExists,
     });
+  }
+
+  async function readVersionContent(ctx, runId, versionId) {
+    const item = await store.read(async data => {
+      const run = findRun(data, ctx, runId);
+      const version = run.versions.find(v => v.id === versionId);
+      if (!version) throw new ApiError(404, 'NOT_FOUND', '图片版本不存在');
+      const report = data.quality_reports[version.report_id];
+      const validity = await reportValidityIn(data, report);
+      const deliverable = run.deliverables.find(d => d.deliverable_id === version.deliverable_id);
+      const clean = report?.decision === 'publishable' && validity.validity === 'current' &&
+        (run.billing_mode !== 'finished_image' || deliverable?.entitlement_settled === 'capture');
+      return { version, clean };
+    });
+    const bytes = await store.readBlob(item.version.hash, item.version.format);
+    if (!bytes) throw new ApiError(410, 'CONTENT_MISSING', '图片文件不可用');
+    return item.clean ? { bytes, mime: item.version.format === 'jpg' ? 'image/jpeg' : `image/${item.version.format}`, preview: false }
+      : { bytes: await draftPreview(bytes), mime: 'image/png', preview: true };
   }
 
   async function listRunVersions(ctx, runId) {
@@ -2047,6 +2119,7 @@ export function createJobs({
     }
     const record = await store.mutate(async data => {
       const run = findRun(data, ctx, runId);
+      if (run.billing_mode === 'finished_image') settleFinishedImages(data, run, clock());
       // 没有产物或仍在执行的任务不允许导出，避免把半成品当正式包
       if (ACTIVE_STATES.has(run.status)) {
         throw new ApiError(409, 'RUN_NOT_TERMINAL', '任务尚未结束，不能导出');
@@ -2075,6 +2148,10 @@ export function createJobs({
 
       const at = clock();
       const manifest = buildManifest({ run, spec, plan, provider: provider.capabilities(), now: at });
+      if (run.billing_mode === 'finished_image' && plan.included.some(({ deliverable }) =>
+        run.deliverables.find(d => d.deliverable_id === deliverable.deliverable_id)?.entitlement_settled !== 'capture')) {
+        throw new ApiError(409, 'ENTITLEMENT_NOT_SETTLED', '此版本的成品额度尚未结算，请重新生成');
+      }
       // R04：文字与 Logo 用可编辑排版层交付；生成图不负责绘制精确文字
       manifest.text_policy = run.execution?.text_policy ?? null;
       manifest.execution = run.execution
@@ -2089,7 +2166,14 @@ export function createJobs({
         }
         entries.push({ name: `images/${deliverable.deliverable_id}.${version.format ?? 'png'}`, bytes });
         const compiled = executionForDeliverable(run.execution?.plan, { deliverableId: deliverable.deliverable_id });
-        const layers = compiled?.text_layers ?? [];
+        let layers = compiled?.text_layers ?? [];
+        for (const layer of layers.filter(l => l.logo)) {
+          const asset = data.assets[layer.asset_ref];
+          if (asset?.tenant_id === run.tenant_id) {
+            const raw = await store.readBlob(asset.sha256, asset.ext);
+            if (raw) { const uri = `data:image/png;base64,${(await decodeToPng(raw)).toString('base64')}`; layers = layers.map(l => l === layer ? { ...l, data_uri: uri } : l); }
+          }
+        }
         const manifestEntry = manifest.assets.find(item => item.deliverable_id === deliverable.deliverable_id);
         if (manifestEntry) {
           manifestEntry.text_layers = layers;
@@ -2097,8 +2181,9 @@ export function createJobs({
         }
         if (layers.length > 0) {
           const mime = version.format === 'jpg' ? 'image/jpeg' : `image/${version.format ?? 'png'}`;
+          const base = version.overlay_base_hash ? await store.readBlob(version.overlay_base_hash, 'png') : bytes;
           const svg = buildOverlaySvg({
-            width: version.width, height: version.height, mime, bytes,
+            width: version.width, height: version.height, mime: version.overlay_base_hash ? 'image/png' : mime, bytes: base,
             layers, title: deliverable.label ?? deliverable.deliverable_id,
           });
           entries.push({ name: `overlays/${deliverable.deliverable_id}.svg`, bytes: Buffer.from(svg) });
@@ -2812,7 +2897,7 @@ export function createJobs({
     start, stop, createRun, cancelRun, confirmBudget, reconcileRun, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
     listGenerationRecords, getGenerationRecord,
     listQualityReports, getQualityReport, reviewQualityReport,
-    listRunVersions, activateVersion, createExport, listExports, getExport, readExportPackage,
+    listRunVersions, readVersionContent, activateVersion, createExport, listExports, getExport, readExportPackage,
     createVideoPlan, listVideoPlans, getVideoPlan, evaluateVideoPlanFrames, generateVideo,
     createJointExport, createBatchExport,
     get activeSubscriptions() { return listeners.size; },

@@ -1,125 +1,116 @@
-# 千图百炼 · 电商商品视觉生产工作台
+# 千图百炼 · 商品视觉工作台
 
-> 当前开发目标已经从早期“小说场景图生成 Agent”升级为面向中小电商商家、品牌团队和代运营的商品视觉生产与校验工作台。本 README 后面保留的小说场景内容只代表仓库历史来源，不代表当前剩余开发目标。
+面向个体商家、个人店主和品牌主理人的商品图工具：上传实拍 → 核对商品事实 → 选择模板与品牌 → 确认报价 → 生成与检查 → 复核 → 下载套图。
 
-## 当前进度
+**当前是单实例开发与集成验证版本。** 页面、成品额度和微信 Adapter 的内部缺口已修复；真实模型效果、OCR 准确率、商户收款和退款仍需授权外部验收。默认使用模拟图片，默认关闭真实收款。
 
-截至 2026-10-26，M01—M12 已完成。M07 已把 Commerce QA 接到生成流水线之后：文件、格式、尺寸、主体像素、颜色、事实、包装文字、品牌、平台规则与内容风险逐项给出 pass/fail/unknown/not_applicable，硬失败直接 blocked，必要项未知为 needs_review，人工复核只能裁决可裁决的未知项，报告随事实或规则变化而失效。
+## 版本与分支
 
-M08 已接入自动修订、版本与正式导出：只对可自动修复的硬失败逐项修订（一次一个关键项，保留已通过项），受 Provider 能力、修订轮数与报价额度三重闸口约束，连续无改善即停且不扩预算；每次成功产物都留版本，回退只切换选用标记、不改写旧报告；完整包要求全部交付物可发布且报告有效，部分包只带仍有效项，任何 stale 结果都会被拒绝导出。导出包为真实 ZIP（图片、manifest、QA 摘要），并显式标注平台合规未声明。
+应用版本 `0.23.0`，服务标记 `R12`。新版位于 [feat/commerce-commercialization](https://github.com/CHEN-Cowen/qiantubailian-commerce/tree/feat/commerce-commercialization)。2026-10-27 复核时远端新版为 `29741e7`，默认 `master` 为 `b623b84`；本轮修复为此基准之后的工作区变更，尚不代表远端已经更新。
 
-M09 已接入授权评测集、冠军—挑战者与灰度闸口：评测集只收显式授权样本，未授权条目直接拒绝，不足 100 个授权 SKU 或留出集不足 20 个时评测状态只能是 `insufficient_dataset`；指标按真实性、未知率、人工接受率与合格成本计算，未知不计为正确；候选需全部指标不劣于冠军且至少一项严格更优才判胜出；灰度上限固定在 5%，候选未胜出或缺真实 Adapter 时比例为 0 并给出阻断原因，灰度观测触达阈值即要求回滚。
+[原始复核报告](docs/commercialization/复核报告-2026-10-27.md) 保留当时问题与复现证据；[修复与验收记录](docs/commercialization/修复记录-2026-10-27.md) 描述当前状态。
 
-M10 已接入结构化详情页、首帧视频计划与联合导出：详情页固定首屏/卖点/场景/细节/规格/服务六模块，每个参数都必须能追到事实、素材、生产配置或品牌套件版本，事实值不一致、引用素材失效、文案版本缺失都直接 blocked；重检只重新解析签名变化的参数，但六模块、事实值、素材生效、文案版本与平台覆盖始终全量检查；视频必须先有可发布且有效的首帧，首段限制 3 秒以内、低幅度动效，音轨必须有授权来源，首中尾分镜必须齐全，任一中间帧硬检查失败立即阻断整段视频，检测不足按待复核；平台不支持 HTML 直传时只给结构化数据与图片，不承诺直传。联合导出会显式列出缺失的视频项，不会静默省略。
+## 当前功能
 
-M11 已接入 SKU 批量导入与协作收口：导入映射只接受已登记目标字段，列缺失、列复用、缺必填映射都直接报错；逐行预览对空编码、非法编码、批内重复与已存在 SKU 逐行给错，单行失败不影响其余行；批量执行前必须确认预算，超预算或无可用条目不允许开始，执行中单条失败只标记该条失败而不中断整批，导出按条目真实任务状态回写状态，完整包拒绝带缺口；成员角色矩阵为 owner/editor/reviewer/viewer，零成员租户把当前操作者引导为 owner，最后一个 owner 不可被移除；品牌配方区分私有与共享，共享配方需 owner 审批，新批准版本让旧引用失效为 stale。
+| 模块 | 功能与边界 |
+| --- | --- |
+| 账户与工作区 | 邮箱密码、服务端会话、CSRF、租户与角色隔离。邮件验证和找回通道仍需外部邮件服务。 |
+| 商品输入 | 项目/SKU、素材上传与替换、来源职责、商品事实版本。创建后自动进入上传。OCR 提供待确认候选，不直接写入已确认事实。 |
+| 商品保护 | PNG/JPEG/WebP 解码、自动掩码或手动主体框、掩码预览。本地合成保留原像素；矩形会保留框内背景，边缘、位置和透视需要复核。 |
+| 品牌与排版 | 品牌色、字体授权状态、上传的真实 Logo；可调整文字位置、宽度和字号。文字从确认事实编译，合成到最终 PNG/JPEG，并附可编辑 SVG。属于基础排版工具。 |
+| 生产与交付 | 冻结配置、报价、任务恢复、有限重试、质检、人工复核、版本与 ZIP 导出。未知检查结果不会自动视为合格。 |
+| 套餐与额度 | 展示体验/尝鲜/月包、购买快照和有效期、最早到期优先。真实账户按可交付成品每张 1 点结算，失败释放，待复核保留预留；演示租户保留旧尝试计价。 |
+| 微信订单 | 真实 Native 下单、签名与响应验签、通知解密/验签、金额/商户核对、查单、关单、退款与查退款。默认禁用，不能用个人收款码冒充自动到账。 |
+| 异常恢复 | 重复通知和退款幂等；退款处理中冻结原订单权益，未知响应保持冻结，成功后回收。每 30 秒补查待支付和处理中退款；异常退款保留冻结并提示商户处理。 |
+| 数据与运维 | 首页概览/素材入口使用当前工作区数据；反馈采用率与导出率分开；未核验的货币成本和修订净改善返回空。提供健康探测和租户业务备份。 |
 
-M12 已接入结果回流、实验口径、商业化闸口、可观测性与租户级备份恢复：采用只落在当前选用、报告可发布且未失效的版本上，驳回必须带登记理由，同一版本以最新反馈为准；效果数据必须显式授权并给出来源，非法行逐行报错而不丢弃整批；实验只比较 control/variant 的可比指标，样本不足直接标 `insufficient_sample`，样本足够也只声明"观测到差异"，不做显著性检验、不宣称因果；套餐当前全部不可计费，没有支付 Provider 时下单与退款一律阻断，模拟 Provider 只能生成内部演示订单，重复结算被拒，真实退款在通道未接入时明确阻断；可观测性只暴露聚合计数，不含素材、事实与提示词内容；备份按租户裁剪并校验数据哈希、记录数与引用文件，恢复仅替换本租户数据，其他租户与备份历史不受影响。
-
-当前限制：生成结果来自确定性模拟 Provider，不是真实模型商品图；额度与套餐是内部演示额度，不代表真实货币；尚无真实授权评测集与第二模型 Adapter，因此 M09 只完成机制与接口，未完成真实模型评测与灰度验收；当前 Provider 不支持视频，M10 只完成分镜、帧级检查与阻断路径，仓库内没有已生成的视频文件，`/api/video-plans/:id/generate` 在该能力下恒为阻断；OCR 与视觉评审模型尚未接入，相应检查只报 unknown，平台规则来源未核验，不能声称平台合规；像素级检查只对 PNG 生效，JPEG 仅校验签名、头部与尺寸；成员与角色是本地记录与权限判定，没有接入真实身份系统与单点登录；批量执行串行逐条推进，没有队列限流；配方审批只有 owner 一个审批角色；效果数据只能由商家自行授权导入，没有对接外部平台 API，实验结论不能作为投放保证；没有真实支付、退款通道，也没有真实收款凭据。
-
-## 在其他软件继续开发
-
-先阅读：
-
-- [剩余开发接手包（M06—M12）](docs/千图百炼_剩余开发接手包_M06-M12.md)
-- [分模块开发与验收计划](docs/千图百炼_分模块开发与验收计划_V1.1.md)
-- [新产品 PRD](docs/千图百炼_新产品PRD_V1.0.md)
-
-其他软件应一次只做一个模块。每个模块完成后先自检，失败即修复并复测；自检通过后按用户当前授权自动提交并推送，再继续下一模块，无需逐模块请示。
-
----
-
-# 千图百炼 · Novel-to-Image
-
-基于 **PilotDeck** 的小说场景图像创作 Agent。输入一段小说或画面描述，系统自动完成场景分析、提示词生成、图片生成、质量评审与迭代优化，并通过工作流面板展示每一步的输出。
-
-## 功能
-
-- **端到端创作**：将原文转换为 SceneSpec 和 Prompt，生成图片并根据质检结果持续优化。
-- **多种生图能力**：封装 Doubao-Seedream-4.0，支持文生图、图生图、图片编辑、多图融合及组图生成。
-- **执行可视化**：实时展示创作进度，点击步骤查看提示词、图片、质检报告和修订内容。
-- **结果可追溯**：按场景与轮次保存产物；工作流面板支持任务链接访问与历史回放。
-
-## Demo
-
-[在线 Demo](https://eggry.github.io/novel-scene-to-image-skill/frontend/?taskid=demo) · [系统架构图](frontend/architecture.svg)
-
-
-
-https://github.com/user-attachments/assets/0da2056a-7c2e-4b30-9d63-1d37ae23a7ac
-
-
-
-Demo 链接以仓库根目录部署到 GitHub Pages 为前提，需先启用 Pages。静态版回放一组真实任务的三轮生成记录，不连接后端、不调用模型；真实创作需运行 PilotDeck 与配套后端。
-
-前端无需构建，部署说明见 [frontend/README.md](frontend/README.md)。
-
+套餐是单次购买，不自动续费。当前配置：体验 3 张/90 天/限一个商品，尝鲜 ¥19/10 张/90 天，日常 ¥69/40 张/30 天，高频 ¥199/150 张/30 天。以 `/api/plans` 实际返回为准，价格仍需结合真实成本验证。
 
 ## 本地运行
 
-M01 提供不依赖外部服务的本地工程底座。前置条件：Node.js `22.22.2`。
+需要 Node.js `>=22.22.2 <23`。运行依赖为 `sharp`（图片解码与合成）和 `qrcode`（订单二维码）；前端为原生 HTML/CSS/ES Modules，无需打包。
+
+```bash
+git clone --branch feat/commerce-commercialization https://github.com/CHEN-Cowen/qiantubailian-commerce.git
+cd qiantubailian-commerce
+npm ci
+npm start
+```
+
+访问 `http://127.0.0.1:3000/`。启动脚本读取根目录 `.env`；参考 [.env.example](.env.example)，不提交密钥。服务只监听本机 loopback。
+
+验证真实账户的推荐开发配置：
+
+```dotenv
+NODE_ENV=development
+HOST=127.0.0.1
+PORT=3000
+QTB_DEMO_MODE=0
+QTB_INITIAL_CREDITS=0
+QTB_PAYMENT_PROVIDER=none
+QTB_ENABLE_REAL_PAYMENTS=0
+QTB_PROVIDER=mock
+```
+
+非生产默认可使用演示身份；真实账户注册获得一次 3 张体验额度。默认上架包仅选择 3 张必需交付物，可用体验额度启动。模拟结果可能因尺寸/质量不达标而无法导出，这时不会按成品收费。选择可选交付物会增加报价。
+
+设置 `QTB_DATA_DIR` 可指定持久数据目录，默认是仓库 `runtime`。例如 PowerShell：
+
+```powershell
+$env:QTB_DATA_DIR='E:\qtb-data'
+$env:PORT='3001'
+npm start
+```
+
+## 架构
+
+```mermaid
+flowchart TD
+  UI[原生页面 / 真实工作台] --> HTTP[Node HTTP]
+  HTTP --> AUTH[会话 / CSRF / 租户授权]
+  AUTH --> API[项目 / 配置 / 报价 / 订单]
+  API --> JOBS[任务编排 / 预留 / 恢复]
+  JOBS --> EXEC[指令 / 商品保护 / 栅格排版 / QA]
+  EXEC --> IMG[模拟或 Seedream Adapter]
+  EXEC --> EXPORT[版本 / 复核 / ZIP]
+  API --> PAY[微信 APIv3 Adapter / 补查]
+  API --> STORE[单进程 JSON / blobs]
+  JOBS --> STORE
+  EXPORT --> STORE
+```
+
+| 路径 | 作用 |
+| --- | --- |
+| `scripts/start.mjs`、`src/config.mjs` | 环境配置与启动退出 |
+| `src/server.mjs`、`src/api.mjs`、`src/auth.mjs` | HTTP、业务路由与授权 |
+| `src/domain.mjs`、`src/catalog.mjs`、`src/spec.mjs` | 事实、模板、平台规则和冻结配置 |
+| `src/jobs.mjs`、`src/execution.mjs` | 任务调度、执行计划与修订 |
+| `src/raster.mjs`、`src/m06.mjs`、`src/ocr.mjs` | 常见图像解码、主体保护、栅格排版和 OCR |
+| `src/credits.mjs`、`src/pricing.mjs`、`src/plans.mjs` | 额度批次、成品报价和套餐 |
+| `src/providers/` | 图像和微信适配器及环境工厂 |
+| `frontend/`、`test/` | 页面、自动回归及本地 HTTP 集成测试 |
+
+## 外部服务与支付
+
+图像默认 `QTB_PROVIDER=mock`。显式选择 `seedream` 必须提供 `PARATERA_API_KEY` 或 `PILOTDECK_SEEDREAM_API_KEY`。当前适配接口没有掩码参数，不接受通过环境变量虚报支持；本地合成需显式开启 `QTB_SEEDREAM_POST_COMPOSITE=1` 并验收实际效果。
+
+OCR 使用 `QTB_OCR_ENDPOINT`、`QTB_OCR_API_KEY`，可选 `QTB_OCR_MODEL` 和超时。未配置就提示不可提取，不返回伪造识别结果。
+
+支付默认 `none`；`mock` 仅供演练。真实支付需显式 `QTB_PAYMENT_PROVIDER=wechat_native`、`QTB_ENABLE_REAL_PAYMENTS=1`，并提供商户号、AppID、APIv3 原始 32 字节密钥、商户私钥、商户证书序列号、平台证书/公钥、平台序列号/公钥 ID、公网 HTTPS 通知地址。配置项见示例文件。不要把个人微信收款码当成商户 API。
+
+当前主体尚无营业执照和商户号，保持真实收款关闭；开通所需外部条件见 [外部依赖清单](docs/commercialization/外部依赖清单.md)。真实 HTTP 实现与模拟契约通过，并不证明真实收款已经验收。
+
+## 验证与部署
 
 ```bash
 npm test
 npm run check
-npm start
+npm run smoke
+npm run healthcheck -- http://127.0.0.1:3000
 ```
 
-启动后访问 `http://127.0.0.1:3000/`；存活检查为 `GET /healthz`，就绪检查为 `GET /readyz`。服务默认只监听 loopback 地址。商品项目、素材、事实、模板/品牌/平台快照、报价、额度账本、任务与 SSE、生成记录、质量报告与人工复核、版本回退与正式导出、授权评测集与模型路由、详情页与视频计划、批量与成员、配方与反馈、效果导入与实验、演示订单、指标与租户备份均已接入 `/api/*`；没有真实 Provider 密钥时使用确定性模拟 Provider，不产生外部费用。可复制 `.env.example` 为 `.env` 调整 `HOST`、`PORT` 和 `NODE_ENV`，真实密钥不要写入仓库。
+自动测试包含登录/隔离、成品额度、退款冻结/重启/跨有效期、通知解密与金额校验，以及签名 HTTP 契约；浏览器人工验收记录见修复文档。测试使用隔离数据和模拟服务，不发生真实扣款。
 
-部署前检查（尚未完成真实上线）：服务只允许绑定 loopback，必须与反向代理同机部署；当前没有内置身份认证，API 仅靠 `x-tenant-id` / `x-actor-id` 区分租户与操作者，对外开放前必须先接入统一鉴权；数据目录需挂载到持久卷并纳入定期备份（可用 `/api/backups` 做租户级演练）；真实支付与外部平台数据仍未接入，因此现在只能以内部演示形态运行。
+生产 `NODE_ENV=production` 关闭演示身份、默认启用 Secure Cookie，需同机 HTTPS 反向代理。当前仅支持**单进程、单实例写入一个数据目录**，不能共享目录启动多个实例。数据目录须持久化；业务备份需要授权，会话与账户的整站灾备应另行保护完整数据目录。
 
-## 安装与使用
-
-前置条件：已安装 PilotDeck、可运行 Node.js，并拥有可调用 Seedream 的 Paratera API Key。
-
-1. 将 `skills/` 中的四个 Skill 目录复制到 `~/.pilotdeck/skills/`。
-2. 将 `plugins/seedream/` 复制到 `~/.pilotdeck/plugins/seedream/`。
-3. 在启动 PilotDeck 的环境中设置 `PARATERA_API_KEY`，然后重启 PilotDeck。
-4. 在设置中确认 Seedream MCP 服务器已连接；若未自动发现，在「MCP 服务器」添加 STDIO 配置：
-
-```json
-{
-  "mcpServers": {
-    "seedream": {
-      "command": "node",
-      "args": ["${userHome}/.pilotdeck/plugins/seedream/server.mjs"],
-      "env": {
-        "PARATERA_API_KEY": "${env:PARATERA_API_KEY}"
-      },
-      "perSession": true,
-      "callTimeoutMs": 300000
-    }
-  }
-}
-```
-
-`~` 表示用户主目录。若 `node` 不在 PATH 中，将 `command` 改为本机 Node.js 可执行文件的绝对路径。API Key 仅保存在本机环境中。
-
-新建 PilotDeck 会话，输入：
-
-> 请使用 novel-scene-image Skill，将以下小说片段生成一张场景图，执行图片质检，并根据评审结果迭代优化：  
-> 孔乙己站在酒馆柜台前，排出九文大钱。身旁的短衣酒客看着他哄笑，他涨红了脸，争辩着“窃书不能算偷”。
-
-工具在 MCP 中的名称为 `mcp__seedream__generate_image`。前端真实任务接口见 [接入说明](frontend/integration.md)。
-
-## 系统架构
-
-我们开发了 **4 个 Skill 和 1 个 MCP Tool**，复用 PilotDeck 的 Agent Loop、Gateway 和 Workspace 执行能力。
-
-| 模块 | 职责 |
-| --- | --- |
-| `novel-scene-image` | 主 Skill：编排其余 Skill 与 Tool，定义迭代、验收与停止规则 |
-| `novel-scene-to-prompt` | 子 Skill：原文 → SceneSpec → 初始 Prompt |
-| `scene-image-critic` | 子 Skill：对照场景需求评审图片，输出评分与问题 |
-| `image-quality-refiner` | 子 Skill：根据评审结果生成修订 Prompt |
-| `generate_image` | Tool：调用 Seedream API，保存图片与生成记录 |
-
-**Agent Loop** 按主 Skill 的规则执行“生成 → 评审 → 修订 → 再生成”，直至达标或达到迭代上限。Skill 提供工作流指令，实际读取与工具调用由 Agent 执行。
-
-**Gateway** 连接后端适配层与 PilotDeck：后端创建会话、提交任务并接收执行事件，结合 Workspace 产物映射为前端 SSE 进度。
-
-**Workspace** 统一管理原文、SceneSpec、Prompt、图片、评审和修订记录，产物保存在 `scenes/<scene_id>/iterations/<NN>/`。当前实现按场景目录隔离任务。
-
-![千图百炼系统架构](frontend/architecture.svg)
+`/healthz` 检查进程版本，`/readyz` 检查静态资源；它们不能证明真实模型或收款正常。业务 API 需要登录会话，写请求还需要 CSRF；旧的身份头只适用于开发演示。部署细节见 [部署手册](docs/commercialization/部署手册.md)。

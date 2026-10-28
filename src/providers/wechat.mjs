@@ -1,3 +1,4 @@
+import QRCode from 'qrcode';
 /**
  * R08 微信 Native 支付 Provider。
  *
@@ -17,7 +18,7 @@
  *   - amount_cents=0 的免单套餐不调微信 API，Provider 内部直接返回 paid 结果
  *   - APIv3 接口签名 + 验签 + AES-256-GCM 解密 + SHA256-RSA2048 验签证书链
  */
-import { createHash, createSign, createVerify, randomBytes, createDecipheriv } from 'node:crypto';
+import { createHash, createSign, createVerify, randomBytes, createDecipheriv, X509Certificate } from 'node:crypto';
 
 export const WECHAT_PAYMENT_PROVIDER_ID = 'wechat_native';
 export const WECHAT_PAYMENT_VERSION = 'wechat-native.1';
@@ -66,17 +67,18 @@ export function verifyApiV3Signature({ timestamp, nonce, body, signature, platfo
  * ciphertext = base64(12字节IV + 16字节TAG + N字节密文)
  * apiv3Key 是 32 字节（可能 base64 编码）。
  */
-export function decryptApiV3Resource({ ciphertext, apiv3Key } = {}) {
+export function decryptApiV3Resource({ ciphertext, apiv3Key, nonce, associated_data = '' } = {}) {
   if (!apiv3Key) throw new Error('decryptApiV3Resource 需要 APIv3 密钥');
   const keyBuf = apiv3Key.length === 32 && Buffer.isBuffer(apiv3Key)
     ? apiv3Key
-    : Buffer.from(apiv3Key, 'base64');
+    : Buffer.from(apiv3Key, 'utf8');
   if (keyBuf.length !== 32) throw new Error('APIv3 密钥解码后必须 32 字节');
   const cipherBuf = Buffer.from(ciphertext, 'base64');
-  const iv = cipherBuf.subarray(0, 12);
+  const iv = Buffer.from(nonce ?? '', 'utf8');
   const tag = cipherBuf.subarray(cipherBuf.length - 16);
-  const data = cipherBuf.subarray(12, cipherBuf.length - 16);
+  const data = cipherBuf.subarray(0, cipherBuf.length - 16);
   const decipher = createDecipheriv('aes-256-gcm', keyBuf, iv);
+  decipher.setAAD(Buffer.from(associated_data, 'utf8'));
   decipher.setAuthTag(tag);
   try {
     const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
@@ -113,6 +115,7 @@ function _pem(value) {
  */
 export function createWechatPaymentProvider({
   mchid, appid, apiv3Key, privateKeyPem, platformCertPem, notifyUrl,
+  serialNo, platformSerial, fetchImpl = globalThis.fetch, clock = () => Date.now(), timeoutMs = 15_000,
 } = {}) {
   const missing = [];
   if (!mchid?.trim()) missing.push('QTB_WX_MCHID');
@@ -134,9 +137,41 @@ export function createWechatPaymentProvider({
     baseUrl: 'https://api.mch.weixin.qq.com',
   };
 
+  function verify(headers, body) {
+    const get = name => typeof headers.get === 'function' ? headers.get(name) : headers[name];
+    const timestamp = get('wechatpay-timestamp');
+    if (!timestamp || !Number.isFinite(Number(timestamp)) || Math.abs(Number(new Date(clock())) / 1000 - Number(timestamp)) > 300) return { ok: false, reason: '签名时间戳无效或已过期' };
+    let expected = platformSerial;
+    if (!expected) {
+      try { expected = new X509Certificate(config.platformCertPem).serialNumber; } catch { /* 公钥模式需显式配置 ID */ }
+    }
+    if (!expected || get('wechatpay-serial') !== expected) return { ok: false, reason: '微信验签证书序列号不匹配' };
+    return verifyApiV3Signature({ timestamp, nonce: get('wechatpay-nonce'), body,
+      signature: get('wechatpay-signature'), platformCertPem: config.platformCertPem });
+  }
+
+  async function request(method, urlPath, payload) {
+    if (!serialNo) throw new Error('缺少商户 API 证书序列号 QTB_WX_SERIAL_NO');
+    const body = payload === undefined ? '' : JSON.stringify(payload);
+    const signed = signApiV3({ method, urlPath, body, privateKeyPem: config.privateKeyPem, timestamp: Math.floor(clock() / 1000) });
+    const authorization = `WECHATPAY2-SHA256-RSA2048 mchid="${config.mchid}",nonce_str="${signed.nonceStr}",signature="${signed.signature}",timestamp="${signed.timestamp}",serial_no="${serialNo}"`;
+    const response = await fetchImpl(config.baseUrl + urlPath, {
+      method, headers: { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json' },
+      ...(body ? { body } : {}), signal: AbortSignal.timeout(timeoutMs),
+    });
+    const raw = await response.text();
+    const valid = verify(response.headers, raw);
+    if (!valid.ok) throw new Error(`微信响应验签失败：${valid.reason}`);
+    let data = {};
+    if (raw) { try { data = JSON.parse(raw); } catch { throw new Error('微信响应不是 JSON'); } }
+    if (!response.ok) throw new Error(`微信接口 ${response.status}：${data.code ?? 'ERROR'} ${data.message ?? ''}`);
+    return data;
+  }
+
   return {
     id: WECHAT_PAYMENT_PROVIDER_ID,
     version: WECHAT_PAYMENT_VERSION,
+    identity: { mchid: config.mchid, appid: config.appid },
     capabilities() {
       return {
         real_money: true,
@@ -149,7 +184,7 @@ export function createWechatPaymentProvider({
         acceptance: 'not_verified',
       };
     },
-    async createNativeOrder({ out_trade_no, description, amount_cents, attach = null } = {}) {
+    async createNativeOrder({ out_trade_no, description, amount_cents, attach = null, expires_at } = {}) {
       if (!validateOutTradeNo(out_trade_no)) throw new Error('商户订单号无效');
       if (!description || description.length > 127) throw new Error('订单描述不能为空且不超过 127 字符');
       if (!Number.isInteger(amount_cents) || amount_cents < 0) throw new Error('金额必须为非负整数分');
@@ -159,16 +194,22 @@ export function createWechatPaymentProvider({
           transaction_id: `free_${out_trade_no}`, code_url: null, qr_code_url: null, zero_amount: true,
         };
       }
-      // 真实 HTTP 调用占位（需要外部验收后填入）
-      throw new Error('createNativeOrder 真实 HTTP 调用未实现——需要通过外部验收后填入');
+      const result = await request('POST', '/v3/pay/transactions/native', {
+        mchid: config.mchid, appid: config.appid, out_trade_no, description,
+        notify_url: config.notifyUrl, amount: { total: amount_cents, currency: 'CNY' },
+        ...(attach ? { attach } : {}), ...(expires_at ? { time_expire: expires_at } : {}),
+      });
+      if (!result.code_url?.startsWith('weixin://')) throw new Error('微信未返回有效支付链接');
+      return { ...result, out_trade_no, trade_state: 'NOTPAY', qr_code_url: await QRCode.toDataURL(result.code_url, { width: 256, margin: 2 }) };
     },
     async queryOrder({ out_trade_no } = {}) {
       if (!validateOutTradeNo(out_trade_no)) throw new Error('商户订单号无效');
-      throw new Error('queryOrder 真实 HTTP 调用未实现');
+      return request('GET', `/v3/pay/transactions/out-trade-no/${encodeURIComponent(out_trade_no)}?mchid=${encodeURIComponent(config.mchid)}`);
     },
     async closeOrder({ out_trade_no } = {}) {
       if (!validateOutTradeNo(out_trade_no)) throw new Error('商户订单号无效');
-      throw new Error('closeOrder 真实 HTTP 调用未实现');
+      await request('POST', `/v3/pay/transactions/out-trade-no/${encodeURIComponent(out_trade_no)}/close`, { mchid: config.mchid });
+      return { out_trade_no, closed: true, trade_state: 'CLOSED' };
     },
     async refund({ out_trade_no, out_refund_no, refund_amount_cents, total_amount_cents, reason = '' } = {}) {
       if (!validateOutTradeNo(out_trade_no)) throw new Error('商户订单号无效');
@@ -176,20 +217,29 @@ export function createWechatPaymentProvider({
       if (!Number.isInteger(refund_amount_cents) || refund_amount_cents <= 0) throw new Error('退款金额必须为正整数分');
       if (!Number.isInteger(total_amount_cents) || total_amount_cents <= 0) throw new Error('原订单金额必须为正整数分');
       if (refund_amount_cents > total_amount_cents) throw new Error('退款金额不能超过原订单金额');
-      throw new Error('refund 真实 HTTP 调用未实现');
+      return request('POST', '/v3/refund/domestic/refunds', {
+        out_trade_no, out_refund_no, reason, notify_url: config.notifyUrl,
+        amount: { refund: refund_amount_cents, total: total_amount_cents, currency: 'CNY' },
+      });
+    },
+    queryRefund({ out_refund_no }) {
+      if (!validateOutTradeNo(out_refund_no)) throw new Error('退款单号无效');
+      return request('GET', `/v3/refund/domestic/refunds/${encodeURIComponent(out_refund_no)}`);
     },
     verifyNotify({ headers = {}, body = '' } = {}) {
       const timestamp = String(headers['wechatpay-timestamp'] ?? headers['Wechatpay-Timestamp'] ?? '');
       const nonce = String(headers['wechatpay-nonce'] ?? headers['Wechatpay-Nonce'] ?? '');
       const signature = String(headers['wechatpay-signature'] ?? headers['Wechatpay-Signature'] ?? '');
-      const signResult = verifyApiV3Signature({ timestamp, nonce, body, signature, platformCertPem: config.platformCertPem });
+      const signResult = verify(headers, body);
       if (!signResult.ok) return { ok: false, reason: `签名验证失败：${signResult.reason}` };
       let payload;
       try { payload = typeof body === 'string' ? JSON.parse(body) : body; }
       catch (err) { return { ok: false, reason: `回调体 JSON 解析失败：${err.message}` }; }
       const resource = payload?.resource;
       if (!resource?.ciphertext) return { ok: false, reason: '回调体缺少加密资源' };
-      const decryptResult = decryptApiV3Resource({ ciphertext: resource.ciphertext, apiv3Key: config.apiv3Key });
+      let decryptResult;
+      try { decryptResult = decryptApiV3Resource({ ...resource, apiv3Key: config.apiv3Key }); }
+      catch (error) { return { ok: false, reason: error.message }; }
       if (!decryptResult.ok) return { ok: false, reason: decryptResult.reason };
       return { ok: true, event_type: payload.event_type, data: decryptResult.data };
     },
@@ -235,7 +285,8 @@ export function createMockWechatPaymentProvider({ realMoney = false } = {}) {
     },
     queryOrder({ out_trade_no } = {}) {
       const record = store.get(out_trade_no);
-      return { out_trade_no, trade_state: record?.state ?? 'NOTPAY' };
+      return { out_trade_no, trade_state: record?.state ?? 'NOTPAY', transaction_id: `MOCK_${out_trade_no}`,
+        amount: { total: record?.amount_cents, currency: 'CNY' } };
     },
     closeOrder({ out_trade_no } = {}) {
       const record = store.get(out_trade_no);
@@ -248,11 +299,17 @@ export function createMockWechatPaymentProvider({ realMoney = false } = {}) {
       const record = store.get(out_trade_no);
       if (!record) throw new Error('订单不存在');
       if (record.state !== 'SUCCESS') throw new Error('只有已支付订单可以退款');
+      const existing = record.refunds.find(r => r.out_refund_no === out_refund_no);
+      if (existing) return { out_trade_no, out_refund_no, status: existing.state };
       if (refund_amount_cents > total_amount_cents) throw new Error('退款金额超过订单金额');
       if ((record.refunded_total ?? 0) + refund_amount_cents > total_amount_cents) throw new Error('累计退款超过订单金额');
       record.refunds.push({ out_refund_no, amount: refund_amount_cents, state: 'SUCCESS' });
       record.refunded_total = (record.refunded_total ?? 0) + refund_amount_cents;
       return { out_trade_no, out_refund_no, refund_amount: refund_amount_cents, status: 'SUCCESS' };
+    },
+    queryRefund({ out_refund_no }) {
+      const found = [...store.values()].flatMap(x => x.refunds).find(x => x.out_refund_no === out_refund_no);
+      return { out_refund_no, status: found?.state ?? 'PROCESSING' };
     },
     _setState(out_trade_no, state) {
       const record = store.get(out_trade_no) ?? { out_trade_no, amount_cents: 0, description: '', state: 'NOTPAY', refunds: [] };
@@ -264,7 +321,7 @@ export function createMockWechatPaymentProvider({ realMoney = false } = {}) {
         event_type: trade_state === 'SUCCESS' ? 'TRANSACTION.SUCCESS' : 'TRANSACTION.CLOSED',
         data: {
           out_trade_no, transaction_id: transaction_id ?? `MOCK_${out_trade_no}`,
-          trade_state, amount: { total: 1900, currency: 'CNY' },
+          trade_state, amount: { total: store.get(out_trade_no)?.amount_cents ?? 1900, currency: 'CNY' },
         },
       };
     },

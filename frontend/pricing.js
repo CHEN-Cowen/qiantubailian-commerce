@@ -21,6 +21,7 @@ const state = {
   plans: null,          // { price_version, plans: [...], usage_example, delivery_definition, commerce_constraints }
   payment: null,        // { provider, configured, acceptance, note, can_purchase }
   balance: null,        // 额度账本
+  toast: message => window.alert(message),
   order: null,          // 创建订单结果（待支付状态）
 };
 
@@ -39,13 +40,19 @@ export function initPricing({ toast } = {}) {
     void openPricing({ autoBuyPlanId: planId });
   });
   // 关闭
-  $('#pricing-dialog')?.addEventListener('close', () => { state.order = null; });
+  $('#pricing-dialog')?.addEventListener('close', () => { state.order = null; clearTimeout(state.pollTimer); });
+  document.addEventListener('click', async event => {
+    const button = event.target.closest('[data-query-order]');
+    if (!button) return;
+    try { const result = await api.queryBillingOrder(button.dataset.queryOrder); state.order = result.order; state.balance = (await api.credits()).balance; render(); }
+    catch (error) { state.toast?.(errorText(error)); }
+  });
 }
 
 export async function openPricing({ autoBuyPlanId = null } = {}) {
   const dialog = $('#pricing-dialog');
   if (!dialog) return;
-  dialog.showModal();
+  if (!dialog.open) dialog.showModal();
   renderLoading('正在读取价格与额度…');
   try {
     const [plans, balance] = await Promise.all([
@@ -56,7 +63,9 @@ export async function openPricing({ autoBuyPlanId = null } = {}) {
     state.payment = plans.payment;
     state.balance = balance.balance ?? balance;
     state.order = null;
+    state.orders = (await api.listBillingOrders()).orders ?? [];
     render();
+    scheduleOrderPoll();
     if (autoBuyPlanId) {
       const plan = (state.plans.plans ?? []).find(p => p.id === autoBuyPlanId);
       if (plan) await buyPlan(plan);
@@ -90,6 +99,7 @@ function render() {
   const acceptance = payment.acceptance ?? 'simulated_only';
 
   const plansHtml = plans.map(plan => {
+    plan.free = plan.kind === 'experience' || plan.price_cents === 0;
     const disabled = plan.free ? false : !canPurchase;
     const validity = plan.validity_days >= 28
       ? `到账起 ${plan.validity_days} 天内有效，不结转`
@@ -118,7 +128,7 @@ function render() {
   }).join('');
 
   const usage = state.plans?.usage_example ?? {};
-  const rules = state.plans?.commerce_constraints ?? {};
+  const rules = state.plans?.rules ?? {};
   const dc = state.plans?.delivery_definition ?? {};
 
   body.innerHTML = `
@@ -130,7 +140,7 @@ function render() {
         <div class="balance-cell"><span>已消耗</span><b>${balance.consumed ?? 0}</b></div>
         <div class="balance-cell"><span>总额度</span><b>${balance.granted_total ?? 0}</b></div>
       </div>
-      <p class="real-note">${escapeHtml(balance.currency ?? '内部演示额度')} · 刷新后从账本重新读取</p>
+        <p class="real-note">成品额度 · 通过检查后结算，失败释放；待复核保持预留</p>
       ${state.plans?.price_version ? `<p class="real-hint">价格版本 ${escapeHtml(state.plans.price_version)}</p>` : ''}
     </section>
 
@@ -149,12 +159,12 @@ function render() {
       <div class="rules-grid">
         <div class="rule-cell">
           <b>一张图消耗多少？</b>
-          <p>${escapeHtml(usage.default_per_unit ?? '按冻结快照交付项定义；主图 / 卖点图通常各 1 张 = 1 额度')}</p>
+          <p>${escapeHtml(usage.description ?? usage.default_per_unit ?? '按冻结快照交付项定义；主图 / 卖点图通常各 1 张 = 1 额度')}</p>
           ${usage.typical_quote ? `<small>例：${escapeHtml(usage.typical_quote)}</small>` : ''}
         </div>
         <div class="rule-cell">
           <b>什么叫"一张成品"？</b>
-          <p>${escapeHtml(dc.definition ?? '一次生产 run 冻结的每个交付项每张图算一张；同一个已付版本重复下载不扣费')}</p>
+          <p>${escapeHtml(dc.summary ?? dc.definition ?? '一次生产 run 冻结的每个交付项每张图算一张；同一个已付版本重复下载不扣费')}</p>
         </div>
         <div class="rule-cell">
           <b>自动修复次数？</b>
@@ -180,6 +190,7 @@ function render() {
     </section>
 
     ${state.order ? renderOrder(state.order) : ''}
+    <section class="pricing-section"><h2>我的订单</h2>${(state.orders ?? []).map(renderOrder).join('') || '<p>尚无订单</p>'}</section>
   `;
 
   // 绑定购买按钮
@@ -193,15 +204,22 @@ function render() {
 }
 
 function renderOrder(order) {
-  const statusText = { pending: '待支付', paid: '已支付', expired: '已过期', failed: '已失败' }[order.status] ?? order.status;
+  const statusText = { pending_wechat_checkout: '待扫码支付', settled_real: '已到账', settled_demo: '演示到账', refunded: '已退款', wechat_closed: '已关闭', pending: '待支付', paid: '已支付', expired: '已过期', failed: '已失败' }[order.status] ?? order.status;
   return `
     <section class="pricing-section order-section">
       <h2>订单状态</h2>
-      <p>订单号：<b>${escapeHtml(order.id)}</b> · ${escapeHtml(statusText)} · 金额 ¥${yuan(order.total_cents ?? 0)}</p>
-      ${order.payment_qr_url ? `<div class="qr-placeholder">扫码二维码（模拟）：${escapeHtml(order.payment_qr_url)}</div>` : ''}
-      <p class="real-note">模拟订单；真实支付需配置微信 Native 支付并完成商户入驻（R08）。</p>
+      <p>订单号：<b>${escapeHtml(order.id)}</b> · ${escapeHtml(statusText)} · 金额 ¥${yuan(order.price_cents ?? 0)}</p>
+      ${order.pay_qr && order.status === 'pending_wechat_checkout' ? `<img width="256" height="256" src="${escapeHtml(order.pay_qr)}" alt="本次订单微信支付二维码">` : ''}
+      ${order.code_url && order.status === 'pending_wechat_checkout' ? `<p>请在可信支付客户端打开本次订单链接：<a href="${escapeHtml(order.code_url)}">微信支付</a></p><button data-query-order="${escapeHtml(order.id)}">刷新付款结果</button>` : ''}
+${order.refund_status ? `<p>退款状态：${escapeHtml(order.refund_status)}</p>` : ''}
+      ${order.refund_error ? `<p role="alert">${escapeHtml(order.refund_error)}</p>` : ''}
+      ${order.refund_status === 'processing' ? `<button data-query-order="${escapeHtml(order.id)}">刷新退款状态</button>` : ''}
+      ${order.real_money && order.status === 'settled_real' && order.refund_status !== 'processing' ? `<button data-refund-order="${escapeHtml(order.id)}">申请退还未使用额度</button>` : ''}
+      <p class="real-note">${order.simulated ? '演示订单，未发生真实收款。' : '付款结果以服务端确认为准；不自动续费。'}</p>
     </section>`;
 }
+
+if (typeof document !== 'undefined') initPricing();
 
 async function buyPlan(plan) {
   const button = document.querySelector(`[data-buy-plan="${plan.id}"]`);
@@ -225,9 +243,38 @@ async function buyPlan(plan) {
     // 刷新额度
     const credits = await api.credits().catch(() => ({}));
     state.balance = credits.balance ?? credits;
+    state.orders = (await api.listBillingOrders()).orders ?? [];
     render();
+    scheduleOrderPoll();
   } catch (error) {
     state.toast?.(errorText(error));
     if (button) { button.disabled = false; button.textContent = plan.free ? '领取体验额度' : `支付 ¥${yuan(plan.price_cents)}`; }
   }
 }
+
+function scheduleOrderPoll() {
+  clearTimeout(state.pollTimer);
+  if (!$('#pricing-dialog')?.open) return;
+  const pending = [state.order, ...(state.orders ?? [])].filter(o => o && (o.status === 'pending_wechat_checkout' || o.refund_status === 'processing'));
+  if (!pending.length) return;
+  state.pollTimer = setTimeout(async () => {
+    try {
+      for (const id of new Set(pending.map(o => o.id))) await api.queryBillingOrder(id);
+      state.orders = (await api.listBillingOrders()).orders ?? [];
+      if (state.order) state.order = state.orders.find(o => o.id === state.order.id) ?? state.order;
+      state.balance = (await api.credits()).balance;
+      render();
+    } catch { /* 查单失败仍保持未确认，下一轮恢复 */ }
+    scheduleOrderPoll();
+  }, 5000);
+}
+document.addEventListener('click', async event => {
+  const button = event.target.closest('[data-refund-order]');
+  if (!button || !window.confirm('按未使用额度比例申请退款？处理中对应额度将冻结。')) return;
+  button.disabled = true;
+  try {
+    state.order = (await api.refundBillingOrder(button.dataset.refundOrder)).order;
+    state.orders = (await api.listBillingOrders()).orders ?? [];
+    state.balance = (await api.credits()).balance; render(); scheduleOrderPoll();
+  } catch (error) { state.toast(errorText(error)); button.disabled = false; }
+});

@@ -29,7 +29,6 @@ export function createProviderFromEnv(env = process.env, options = {}) {
         apiKey,
         baseUrl: env.PILOTDECK_SEEDREAM_BASE_URL?.trim() || undefined,
         model: env.PILOTDECK_SEEDREAM_MODEL?.trim() || undefined,
-        supportsMask: env.QTB_SEEDREAM_SUPPORTS_MASK === '1',
         supportsPostComposite: env.QTB_SEEDREAM_POST_COMPOSITE === '1',
         ...options,
       }),

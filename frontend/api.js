@@ -112,6 +112,8 @@ export const api = {
     });
   },
   listTruthVersions: id => call(`/api/projects/${encodeURIComponent(id)}/truth-versions`),
+  extractAssetFacts: (project, asset) => call(`/api/projects/${encodeURIComponent(project)}/assets/${encodeURIComponent(asset)}/fact-extraction`, { method: 'POST', json: {} }),
+  updateSubjectBox: (project, asset, subject_box) => call(`/api/projects/${encodeURIComponent(project)}/assets/${encodeURIComponent(asset)}/subject-box`, { method: 'PUT', json: { subject_box } }),
   createTruthVersion: (id, body) => call(`/api/projects/${encodeURIComponent(id)}/truth-versions`, { method: 'POST', json: body }),
   readiness: id => call(`/api/projects/${encodeURIComponent(id)}/readiness`),
   // M04：目录、品牌套件与生产配置
@@ -191,6 +193,9 @@ export const api = {
   // R07：价格与计费
   listPlans: () => call('/api/plans'),
   createBillingOrder: body => call('/api/billing/orders', { method: 'POST', json: body }),
+  queryBillingOrder: id => call(`/api/billing/orders/${encodeURIComponent(id)}/query`),
+  refundBillingOrder: id => call(`/api/billing/orders/${encodeURIComponent(id)}/refund`, { method: 'POST', json: {} }),
+  closeBillingOrder: id => call(`/api/billing/orders/${encodeURIComponent(id)}/close`, { method: 'POST', json: {} }),
   listBillingOrders: ({ status } = {}) => {
     const query = new URLSearchParams();
     if (status) query.set('status', String(status));
@@ -199,13 +204,11 @@ export const api = {
   },
   cancelBillingOrder: orderId => call(`/api/billing/orders/${encodeURIComponent(orderId)}/cancel`, { method: 'POST' }),
   // R05 追加：listGenerationRecords / reconcileRun
-  listGenerationRecords: runId => call(`/api/runs/${encodeURIComponent(runId)}/generation-records`),
-  reconcileRun: runId => call(`/api/runs/${encodeURIComponent(runId)}/reconcile`, { method: 'POST' }),
   /**
    * 下载导出包：走同源直接打开即可，后端已经设置 attachment。
    * 浏览器会处理跨域/CORS和文件保存对话框。
    */
   downloadExportUrl: exportId => `/api/exports/${encodeURIComponent(exportId)}/download`,
   listGenerationRecords: runId => call(`/api/runs/${encodeURIComponent(runId)}/generation-records`),
-  reconcileRun: runId => call(`/api/runs/${encodeURIComponent(runId)}/reconcile`, { method: 'POST' }),
+  reconcileRun: (runId, body) => call(`/api/runs/${encodeURIComponent(runId)}/reconcile`, { method: 'POST', json: body }),
 };

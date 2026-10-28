@@ -92,12 +92,14 @@ export function compileTextLayers({ deliverable, truth, brandKitVersion = null }
   if (logo?.present === true && deliverable?.logo_allowed === true) {
     layers.push({
       source: 'brand_logo', fact_key: null, text: '', logo: true,
-      asset_ref: logo.asset_sha256 ?? null, editable_text: false,
+      asset_ref: logo.asset_id ?? null, editable_text: false,
       note: 'Logo 使用品牌原图叠加，不让生成模型重绘',
     });
   }
   const compiled = layers.map((layer, index) => {
-    const box = layouts[Math.min(index, layouts.length - 1)] ?? layouts[0] ?? { x: 0.08, y: 0.82, width: 0.84, size: 0.04, weight: 500, align: 'left' };
+    const originalBox = layouts[Math.min(index, layouts.length - 1)] ?? layouts[0] ?? { x: 0.08, y: 0.82, width: 0.84, size: 0.04, weight: 500, align: 'left' };
+    const layout = deliverable.text_layout;
+    const box = layout && !layer.logo ? { ...originalBox, x: layout.x, y: Math.min(0.95, layout.y + index * layout.size_ratio * 1.5), width: layout.width, size: layout.size_ratio } : originalBox;
     return {
       id: `layer_${index + 1}`,
       ...layer,
@@ -264,7 +266,8 @@ export function buildOverlaySvg({ width, height, mime, bytes, layers = [], title
     const size = Math.max(12, Math.round(layer.size_ratio * Math.min(width, height)));
     const font = layer.font_family ? `font-family="${escape(layer.font_family)}"` : '';
     if (layer.logo) {
-      return `<g id="${escape(layer.id)}" data-source="brand_logo"><text x="${x}" y="${y}" font-size="${size}" fill="${escape(layer.color)}" ${font}>[Logo 图层：使用品牌原图叠加]</text></g>`;
+      if (!layer.data_uri) return '';
+      return `<g id="${escape(layer.id)}" data-source="brand_logo"><image href="${escape(layer.data_uri)}" x="${x}" y="${y}" width="${Math.round(layer.width * width)}" height="${Math.round(height * 0.12)}" preserveAspectRatio="xMinYMin meet"/></g>`;
     }
     const anchor = layer.align === 'center' ? 'middle' : 'start';
     const textX = layer.align === 'center' ? Math.round((layer.x + layer.width / 2) * width) : x;

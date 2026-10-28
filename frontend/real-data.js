@@ -54,6 +54,7 @@ export function initRealData({ toast } = {}) {
   $$('[data-close-dialog]').forEach(button => {
     button.addEventListener('click', () => document.getElementById(button.dataset.closeDialog)?.close());
   });
+  document.addEventListener('qb:view-change', event => { if (['home', 'projects', 'assets'].includes(event.detail?.view)) void refresh(); });
   void refresh();
 }
 
@@ -65,6 +66,7 @@ async function refresh() {
     renderProjects();
     renderUploadOptions();
     renderHomeRealProjects();
+    await renderAccountData();
   } catch (error) {
     state.projects = [];
     if (list) list.innerHTML = `<p class="real-empty real-error">${escapeHtml(errorText(error))}</p>`;
@@ -79,7 +81,7 @@ function renderHomeRealProjects() {
   const projects = state.projects ?? [];
   if (projects.length === 0) {
     holder.innerHTML = '<p class="real-empty">还没有真实项目。点击「新建商品项目」开始你的第一个商品。</p>';
-    if (demo) demo.hidden = false; // 展示 demo 作为示例
+    if (demo) demo.hidden = true;
     return;
   }
   if (demo) demo.hidden = true;
@@ -185,6 +187,7 @@ async function submitCreate(event) {
     $('#project-dialog').close();
     state.toast(`已创建真实项目：${payload.project.name}（${payload.project.sku}），请上传素材并确认事实`);
     await refresh();
+    openUploadDialog(payload.project.id);
   } catch (error) {
     $('#project-error').textContent = errorText(error);
   } finally {
@@ -312,7 +315,10 @@ function renderTruth() {
     : `<ul class="truth-asset-list">${assets.map(asset => `<li class="${asset.role_status === 'active' ? '' : 'is-superseded'}">
         <span class="real-state ${asset.role_status === 'active' ? 'ok' : 'muted'}">${asset.role_status === 'active' ? '生效' : '已替换'}</span>
         <b>${escapeHtml(asset.filename)}</b>
+        <code>素材 ID：${escapeHtml(asset.id)}</code>
         <span>${ROLE_LABELS[asset.role] ?? asset.role} · ${asset.width}×${asset.height} · sha ${escapeHtml(shortHash(asset.sha256))}</span>
+        ${asset.role_status === 'active' && asset.role !== 'style' ? `<button type="button" data-action="extract-facts" data-asset-id="${escapeHtml(asset.id)}">提取候选文字</button>` : ''}
+        ${asset.role === 'subject' && asset.role_status === 'active' ? `<details><summary>调整商品主体框</summary><p>按画布比例填写 0～1；框内商品会被保护。</p>${['x','y','width','height'].map(k => `<label>${k}<input data-box="${k}" type="number" min="0" max="1" step="0.01" value="${asset.subject_box?.[k] ?? (k === 'width' || k === 'height' ? 0.8 : 0.1)}"></label>`).join('')}<button type="button" data-action="save-subject-box" data-asset-id="${escapeHtml(asset.id)}">保存主体框并预览</button><div data-mask-preview></div></details>` : ''}
       </li>`).join('')}</ul>`;
 
   const facts = truth_head?.facts?.length ? truth_head.facts : [{}];
@@ -367,6 +373,10 @@ function onTruthClick(event) {
   const trigger = event.target.closest('[data-action]');
   if (!trigger) return;
   const action = trigger.dataset.action;
+  if (action === 'extract-facts' || action === 'save-subject-box') {
+    void handleAssetAction(trigger, action);
+    return;
+  }
   if (action === 'add-fact') {
     $('#truth-facts').insertAdjacentHTML('beforeend', factRow({}));
     return;
@@ -379,6 +389,33 @@ function onTruthClick(event) {
   }
   if (action === 'save-draft') void saveTruth(false);
   if (action === 'confirm') void saveTruth(true);
+}
+
+async function handleAssetAction(button, action) {
+  button.disabled = true;
+  const project = state.detail.project.id, asset = button.dataset.assetId;
+  try {
+    if (action === 'extract-facts') {
+      const result = await api.extractAssetFacts(project, asset);
+      if (!result.configured || !result.candidates?.length) throw new Error(result.note ?? '未提取到文字，请手动填写');
+      for (const [index, candidate] of result.candidates.entries()) {
+        $('#truth-facts').insertAdjacentHTML('beforeend', factRow({ ...candidate, key: `待确认文字 ${index + 1}`, confirmed: false }));
+      }
+      $('#truth-block-error').textContent = '候选文字已加入，请修改事实项名称、核对文字后逐项确认。';
+    } else {
+      const section = button.closest('details');
+      const box = Object.fromEntries($$('[data-box]', section).map(input => [input.dataset.box, Number(input.value)]));
+      await api.updateSubjectBox(project, asset, box);
+      const item = state.detail.assets.find(a => a.id === asset); if (item) item.subject_box = box;
+      const url = `/api/projects/${encodeURIComponent(project)}/assets/${encodeURIComponent(asset)}/mask-preview`;
+      const response = await fetch(url, { credentials: 'same-origin' });
+      if (!response.ok) { const error = await response.json(); throw new Error(error.message); }
+      const preview = section.querySelector('[data-mask-preview]');
+      const old = preview.querySelector('img'); if (old) URL.revokeObjectURL(old.src);
+      const img = document.createElement('img'); img.alt = '商品保护区域掩码'; img.style.maxWidth = '240px'; img.src = URL.createObjectURL(await response.blob()); preview.replaceChildren(img);
+    }
+  } catch (error) { $('#truth-block-error').textContent = error.message; }
+  finally { button.disabled = false; }
 }
 
 function collectFacts() {
@@ -449,4 +486,28 @@ async function saveTruth(confirm) {
     }
     errorNode.textContent = errorText(error);
   }
+}
+
+async function renderAccountData() {
+  const [runs, credits, exported] = await Promise.all([api.listRuns(), api.credits(), api.listExports({})]);
+  const list = runs.runs ?? [], balance = credits.balance ?? {};
+  const summaries = [
+    ['商品项目', state.projects.length, '当前工作区'],
+    ['待复核任务', list.filter(r => r.quality_status === 'needs_review').length, '按任务统计'],
+    ['导出记录', (exported.exports ?? []).length, '当前工作区累计'],
+    ['可用额度', balance.available ?? 0, '预留 ' + (balance.reserved ?? 0) + ' 张'],
+  ];
+  $('.metric-strip').innerHTML = summaries.map(([label, value, note]) => '<div class="metric"><span>'+label+'</span><strong>'+value+'</strong><small>'+note+'</small></div>').join('');
+  const delivery = $('.delivery-table');
+  if (delivery) delivery.hidden = false;
+  if (delivery) delivery.innerHTML = (exported.exports ?? []).slice(0, 5).map(e => '<p>'+escapeHtml(e.package_filename ?? e.id)+' · '+escapeHtml(e.created_at)+'</p>').join('') || '<p class="real-empty">尚无真实交付记录。</p>';
+  const assets = $('#assets-view .asset-layout');
+  if (assets) assets.hidden = false;
+  if (assets) assets.innerHTML = '<div class="real-list">'+state.projects.map(p => '<article class="real-card"><b>'+escapeHtml(p.name)+'</b><span>'+p.asset_count+' 张素材</span><button class="text-button" data-real-workbench="'+escapeHtml(p.id)+'">查看版本与交付</button></article>').join('')+'</div>';
+  document.querySelectorAll('[data-real-workbench]').forEach(button => button.onclick = () => window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: button.dataset.realWorkbench } })));
+  // 搜索只筛当前账户真实项目；演示表保留在源码供独立示例使用。
+  const table = $('.project-table'); if (table) table.hidden = true;
+  const search = $('.search input');
+  if (search) search.oninput = () => $$('#real-list .real-card').forEach(card => card.hidden = !card.textContent.toLowerCase().includes(search.value.trim().toLowerCase()));
+  const segmented = document.querySelector('.segmented'); if (segmented) segmented.hidden = true;
 }

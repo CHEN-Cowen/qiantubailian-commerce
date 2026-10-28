@@ -283,14 +283,12 @@ test('R11 指标包含商业化口径', async t => {
   assert.ok(m.business.avg_first_image_ms !== null, '有完成任务时 avg_first_image_ms 不应为 null');
   assert.ok(m.business.avg_first_image_ms >= 0, '首张可用图耗时不能为负');
 
-  // 有导出时，采用率应该 > 0
-  assert.ok(m.business.adoption_rate !== null, '有导出时 adoption_rate 不应为 null');
-  assert.ok(m.business.adoption_rate > 0, '采用率应大于 0');
-  assert.ok(m.business.adoption_rate <= 1, '采用率不能超过 1');
+  // 导出率与采用反馈、真实货币成本分开
 
-  // 每张成本应为正数
-  assert.ok(m.business.cost_per_image !== null, 'cost_per_image 不应为 null');
-  assert.ok(m.business.cost_per_image > 0, '每张成本应大于 0');
+  assert.equal(m.business.cost_per_image, null, '未核验的费用不能冒充货币成本');
+  assert.ok(m.business.export_rate > 0);
+  assert.ok(m.business.credits_per_image > 0);
+  // 每张成品消耗额度与货币成本分开
 
   // 隐私：指标不得包含素材内容或提示词
   const metricsStr = JSON.stringify(m);

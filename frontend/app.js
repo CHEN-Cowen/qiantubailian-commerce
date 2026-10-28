@@ -72,7 +72,7 @@ $$('[data-open-project]').forEach(card => {
   card.addEventListener('click', activateProject);
   card.addEventListener('keydown', activateProject);
 });
-$('#quick-start').addEventListener('click', startWizard);
+$('#quick-start').addEventListener('click', () => document.querySelector('#import-button')?.click());
 $('#background-task').addEventListener('click', () => toast('此为演示入口；请在「商品项目」中打开真实项目使用仅换背景'));
 $('#back-home').addEventListener('click', closeProject);
 $('#start-generation').addEventListener('click', startWizard);
