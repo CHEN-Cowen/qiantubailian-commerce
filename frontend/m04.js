@@ -39,6 +39,7 @@ const state = {
   resolutions: {},
   frozen: 0,
   viewing: null,
+  catalogLoaded: false,
 };
 
 const errorText = error => {
@@ -82,6 +83,23 @@ export function initM04({ toast } = {}) {
     if (view === 'library') { await renderLibraryView(); }
   });
   $('#brand-kit-new')?.addEventListener('click', () => openBrandDialog());
+  // 模块03 E3：品牌卡「用于新项目」→ 向导 brand 模式（library 视图会整体重渲染，
+  // 监听绑定在容器上做事件委托，重渲染后依然生效）
+  $('#brand-kit-list')?.addEventListener('click', event => {
+    const trigger = event.target.closest('[data-action="brand-use"]');
+    if (!trigger) return;
+    const card = trigger.closest('[data-brand-kit-id]');
+    if (!card) return;
+    window.dispatchEvent(new CustomEvent('qb:open-wizard', { detail: { mode: 'brand', brandKitId: card.dataset.brandKitId } }));
+  });
+  // 模块03 E2：模板卡「用此风格制作新品」→ 向导 style 模式（全新商品，仅预选模板）
+  $('#library-template-list')?.addEventListener('click', event => {
+    const trigger = event.target.closest('[data-action="style-use"]');
+    if (!trigger) return;
+    const card = trigger.closest('[data-template-id]');
+    if (!card) return;
+    window.dispatchEvent(new CustomEvent('qb:open-wizard', { detail: { mode: 'style', templateId: card.dataset.templateId } }));
+  });
 }
 
 async function renderLibraryView() {
@@ -92,7 +110,9 @@ async function renderLibraryView() {
   list.innerHTML = '<p class="real-empty">正在读取品牌配方…</p>';
   tplList.innerHTML = '<p class="real-empty">正在读取模板…</p>';
   try {
-    if (state.brandKits === null) await loadCatalog();
+    // 模块03：brand-use / style-use 入口依赖目录已加载；旧判断 brandKits === null 永不成立，
+    // 首次进 library 会把已有品牌误报为空，这里用显式加载标记兜底
+    if (!state.catalogLoaded) await loadCatalog();
     // 品牌配方
     if (!state.brandKits || state.brandKits.length === 0) {
       list.innerHTML = `<p class="real-empty">还没有品牌配方。<button class="text-button" id="brand-kit-new-inline">新建一个</button></p>`;
@@ -123,9 +143,10 @@ async function renderLibraryView() {
       tplList.innerHTML = '<p class="real-empty">系统预置模板未加载</p>';
     } else {
       tplList.innerHTML = templates.map(tpl => `
-        <article class="template-card">
+        <article class="template-card" data-template-id="${escapeHtml(tpl.id)}">
           <b>${escapeHtml(tpl.name)}</b>
           <small>${escapeHtml(tpl.description ?? tpl.id)} · ${(tpl.deliverables ?? []).length} 个交付物</small>
+          <div class="bk-actions"><button class="text-button" data-action="style-use">用此风格制作新品</button></div>
         </article>`).join('');
     }
   } catch (error) {
@@ -138,6 +159,7 @@ async function loadCatalog() {
   const [templates, kits] = await Promise.all([api.listTemplates(), api.listBrandKits()]);
   state.templates = templates.templates;
   state.brandKits = kits.brand_kits;
+  state.catalogLoaded = true;
 }
 
 async function openSpec(projectId) {

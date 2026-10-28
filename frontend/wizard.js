@@ -9,6 +9,9 @@ import { ApiFailure, api } from './api.js';
  * 3. 报价全部来自服务端 createQuote 响应，前端不硬编码任何价格与张数。
  * 4. 生成两段式：先冻结 spec 并取价，再凭 Idempotency-Key 创建任务，防重复扣费。
  * 5. 失败渲染为失败，不虚构进度；关键项未确认被服务端闸口与前端双重拦截。
+ *
+ * 模块03：支持 qb:open-wizard 复用入口——E1 同商品再做一套（reuse，沿用项目/素材/事实，可改后重确认）、
+ * E2 用此风格制作新品（style，仅预选模板/品牌，事实与素材一律重新确认）、E3 品牌入口（brand，只预选品牌）。
  */
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -60,6 +63,12 @@ const state = {
   quote: null,
   phase: 'idle', // idle | freezing | quoting | creating | done
   idempotencyKey: '',
+  // 模块03：商品与品牌复用（E1 同商品再做一套 / E2 用此风格制作新品 / E3 品牌入口）
+  entry: null,          // 待应用的 qb:open-wizard 请求（进入 create 视图并重置后消费）
+  entryKind: '',        // '' | 'reuse' | 'style'
+  styleTemplateId: '',  // E2/E3 预选模板（进入第 3 步且目录中存在时套用）
+  styleBrandKitId: '',  // E2/E3 预选品牌（进入第 3 步且目录中存在时套用）
+  reuseSpec: null,      // E1 沿用 spec 冻结快照（模板/品牌/平台），快照不随品牌 head 漂移
 };
 
 function showToast(message) {
@@ -109,6 +118,147 @@ function renderResumeBanner() {
   $('#wiz-resume-note').textContent =
     `服务端已保存项目 ${draft.projectId}${draft.step ? `（进行到第 ${draft.step} 步）` : ''}；浏览器里未上传完的文件无法恢复。`;
   banner.hidden = state.step !== 1;
+}
+
+// ---------- 模块03：商品与品牌复用（E1 再做一套 / E2 用此风格做新品 / E3 品牌入口） ----------
+function renderEntryBanner(title, note = '') {
+  const banner = $('#wiz-reuse');
+  if (!banner) return;
+  if (!title) { banner.hidden = true; return; }
+  $('#wiz-reuse-title').textContent = title;
+  $('#wiz-reuse-note').textContent = note;
+  banner.hidden = false;
+}
+
+/** 入口统一收口：real-data/m04 抛 qb:open-wizard，这里切到 create 视图（经 hash 路由走 app.js 的 setView）。 */
+function requestEntry(detail = {}) {
+  state.entry = detail && typeof detail === 'object' ? detail : {};
+  if (location.hash === '#create') { resetForEntry(); applyEntry(); }
+  else location.hash = 'create';
+}
+
+function applyEntry() {
+  const entry = state.entry;
+  state.entry = null;
+  if (!entry) return;
+  // 未带 detail 的普通打开（新建按钮）不经过这里，保持全新制作行为不变
+  if (entry.mode === 'reuse' && entry.projectId) void enterReuse(String(entry.projectId));
+  else if (entry.mode === 'style') enterStyle({ templateId: entry.templateId ?? '', brandKitId: entry.brandKitId ?? '' });
+  else if (entry.mode === 'brand') enterStyle({ templateId: '', brandKitId: entry.brandKitId ?? '' });
+}
+
+/** E1 同商品再做一套：沿用同一项目与素材，不新建项目、不强制重新上传。 */
+async function enterReuse(projectId) {
+  clearDraft(); // 复用流程自带完整项目上下文，先清掉无关的向导草稿
+  state.entryKind = 'reuse';
+  state.reuseSpec = null;
+  try {
+    const detail = await api.getProject(projectId);
+    state.project = detail.project;
+    state.assets = detail.assets ?? [];
+    state.asset = state.assets.find(asset => asset.role === 'subject' && asset.role_status === 'active')
+      ?? state.assets.find(asset => asset.role_status === 'active' && asset.role !== 'style')
+      ?? null;
+    $('#wiz-name').value = state.project.name;
+    $('#wiz-truth-name').value = state.project.name;
+    $('#wiz-name').disabled = true; // 项目已存在，名称随项目带入，不在此处改名
+    if (state.asset) {
+      $('#wiz-preview').hidden = true;
+      const result = $('#wiz-upload-result');
+      result.hidden = false;
+      result.innerHTML = `<div class="upload-done"><b>沿用已上传素材</b>
+        <p>${escapeHtml(state.asset.filename)} · ${state.asset.width}×${state.asset.height}px · 素材 ID ${escapeHtml(state.asset.id)} · sha256 ${escapeHtml(shortHash(state.asset.sha256))}</p>
+        <p>不重新上传也可直接进入下一步；如需换图请重新选择文件（同名图会提示替换并使旧来源事实失效）。</p></div>`;
+      $('#wiz-upload-status').hidden = true;
+      $('#wiz-next-1').disabled = false;
+    } else {
+      resetStep1();
+    }
+    refreshReuseBanner();
+    setStep(1);
+    renderResumeBanner();
+    if (state.project.spec_head_version) void loadReuseSpec(state.project.spec_head_version);
+  } catch (error) {
+    showToast(`打开「再做一套」失败：${errorText(error)}`);
+    location.hash = 'projects';
+  }
+}
+
+function refreshReuseBanner() {
+  if (state.entryKind !== 'reuse' || !state.project) return;
+  let summary = `沿用：商品事实 v${state.project.truth_head_version}`;
+  if (state.reuseSpec?.brandName) summary += ` · 品牌 ${state.reuseSpec.brandName}`;
+  if (state.reuseSpec?.templateName) summary += ` · 模板 ${state.reuseSpec.templateName}`;
+  renderEntryBanner(`${summary}，可修改`,
+    '同商品再做一套：项目与已确认事实原样带入；修改任一事实行会自动取消该行「已确认」，需重新确认后才会生效。');
+}
+
+/** E1 第 3 步预选依据：读 spec 冻结快照（模板/品牌/平台），快照内容不随后续品牌或模板更新漂移。 */
+async function loadReuseSpec(version) {
+  try {
+    const { spec } = await api.getSpec(state.project.id, version);
+    state.reuseSpec = {
+      templateId: spec.template?.id ?? '',
+      templateName: spec.template?.name ?? '',
+      brandKitId: spec.brand_kit?.id ?? '',
+      brandName: spec.brand_kit?.name ?? '',
+      platform: spec.channel?.platform ?? '',
+    };
+    refreshReuseBanner();
+  } catch {
+    // 快照读取失败不阻断复用：摘要只显示商品事实部分，第 3 步走默认推荐流程
+  }
+}
+
+/** E2 用此风格制作新品 / E3 品牌入口：全新商品，只预选模板与品牌。 */
+function enterStyle({ templateId = '', brandKitId = '' } = {}) {
+  clearDraft(); // 新商品是新的制作会话，不接续旧向导草稿
+  state.entryKind = 'style';
+  state.styleTemplateId = templateId;
+  state.styleBrandKitId = brandKitId;
+  // 旧商品的素材、事实、卖点与确认状态已由 resetForEntry 清空，这里只做风格预选声明
+  renderEntryBanner('沿用风格；新商品的事实与素材需重新确认，不沿用旧商品信息', '正在读取模板与品牌名称…');
+  void applyStyleBannerNames(templateId, brandKitId);
+}
+
+async function applyStyleBannerNames(templateId, brandKitId) {
+  const parts = [];
+  if (templateId) {
+    try { parts.push(`模板 ${(await api.getTemplate(templateId)).template?.name ?? templateId}`); }
+    catch { parts.push(`模板 ${templateId}`); }
+  }
+  if (brandKitId) {
+    try { parts.push(`品牌 ${(await api.getBrandKit(brandKitId)).brand_kit?.name ?? brandKitId}`); }
+    catch { parts.push(`品牌 ${brandKitId}`); }
+  }
+  if (state.entryKind !== 'style') return; // 会话已被重置（用户重新进入向导）
+  renderEntryBanner(
+    `沿用风格：${parts.join(' · ') || '默认推荐模板'}；新商品的事实与素材需重新确认，不沿用旧商品信息`,
+    parts.length ? '模板与品牌仅预选，进入第 3 步后可修改。' : '',
+  );
+}
+
+/** 第 3 步目录加载后套用预选：只选目录中仍存在的项，失效项明确回落，不静默假装选上。 */
+function applyStep3Preselect() {
+  const reuse = state.reuseSpec;
+  if (reuse) {
+    if (reuse.templateId && state.templates.some(item => item.id === reuse.templateId)) {
+      state.templateId = reuse.templateId;
+    } else if (reuse.templateId) showToast('原模板已不在目录中，已改为默认推荐');
+    if (reuse.brandKitId && state.brandKits.some(kit => kit.id === reuse.brandKitId)) state.brandKitId = reuse.brandKitId;
+    if (reuse.platform) $('#wiz-platform').value = reuse.platform;
+    return;
+  }
+  if (state.styleTemplateId) {
+    if (state.templates.some(item => item.id === state.styleTemplateId)) state.templateId = state.styleTemplateId;
+    else showToast('所选模板已不在目录中，已改为默认推荐');
+    state.styleTemplateId = '';
+  }
+  if (state.styleBrandKitId) {
+    if (state.brandKits.some(kit => kit.id === state.styleBrandKitId)) state.brandKitId = state.styleBrandKitId;
+    else showToast('所选品牌配方不可用，已改为不使用品牌');
+    state.styleBrandKitId = '';
+  }
 }
 
 // ---------- 第 1 步：上传商品 ----------
@@ -269,21 +419,28 @@ async function enterStep2() {
     $('#wiz-facts').innerHTML = facts.length
       ? facts.map(fact => factRowHtml(fact)).join('')
       : factRowHtml({});
-    $('#wiz-ocr-note').textContent = '正在读取文字识别结果…';
-    const result = await api.extractAssetFacts(state.project.id, state.asset.id);
-    state.ocr = result;
-    renderOcrNote(result);
-    if (result.configured && result.candidates?.length) {
-      // 候选只进列表且一律待确认：不自动勾「已确认」，不生成假识别结果
-      for (const [index, candidate] of result.candidates.entries()) {
-        addFactRow({
-          key: candidate.key ?? `待确认文字 ${index + 1}`,
-          value: candidate.value ?? '',
-          source_asset_id: candidate.source_asset_id ?? state.asset.id,
-          confirmed: false,
-          critical: false,
-          note: candidate.note ?? undefined,
-        });
+    if (state.entryKind === 'reuse') {
+      // E1 复用：事实行已从 truth_head 原样带入（key/value/critical/confirmed）。
+      // 不重复跑 OCR，避免候选行与沿用行重复；修改任一行内容会自动取消该行「已确认」。
+      $('#wiz-ocr-note').className = 'state-note';
+      $('#wiz-ocr-note').textContent = '已沿用现有商品事实（未重新运行文字识别）；请逐行核对，修改内容后需重新勾选「已确认」。';
+    } else {
+      $('#wiz-ocr-note').textContent = '正在读取文字识别结果…';
+      const result = await api.extractAssetFacts(state.project.id, state.asset.id);
+      state.ocr = result;
+      renderOcrNote(result);
+      if (result.configured && result.candidates?.length) {
+        // 候选只进列表且一律待确认：不自动勾「已确认」，不生成假识别结果
+        for (const [index, candidate] of result.candidates.entries()) {
+          addFactRow({
+            key: candidate.key ?? `待确认文字 ${index + 1}`,
+            value: candidate.value ?? '',
+            source_asset_id: candidate.source_asset_id ?? state.asset.id,
+            confirmed: false,
+            critical: false,
+            note: candidate.note ?? undefined,
+          });
+        }
       }
     }
     setStep(2);
@@ -398,6 +555,7 @@ async function enterStep3() {
     const [templates, kits] = await Promise.all([api.listTemplates(), api.listBrandKits()]);
     state.templates = templates.templates ?? [];
     state.brandKits = kits.brand_kits ?? [];
+    applyStep3Preselect(); // 模块03：E1 沿用 spec 快照 / E2·E3 预选风格（仅目录中仍存在的项）
     renderTemplates();
     renderBrandOptions();
     setStep(3);
@@ -651,6 +809,10 @@ function resetForEntry() {
   state.resolutions = {};
   state.templateId = '';
   state.brandKitId = '';
+  state.entryKind = '';
+  state.styleTemplateId = '';
+  state.styleBrandKitId = '';
+  state.reuseSpec = null;
   state.phase = 'idle';
   state.idempotencyKey = newIdempotencyKey(); // 每次打开向导重新生成幂等键
   resetStep1();
@@ -665,6 +827,7 @@ function resetForEntry() {
   $('#wiz-spec-notes').innerHTML = '';
   $('#wiz-quote').hidden = true;
   $('#wiz-quote').innerHTML = '';
+  $('#wiz-reuse').hidden = true;
   $('#wiz-done').hidden = true;
   $('#wiz-generate-error').textContent = '';
   $('#wiz-truth-error').textContent = '';
@@ -791,9 +954,23 @@ export function initWizard() {
   });
   $('#wiz-resume-continue')?.addEventListener('click', () => void continueDraft());
   $('#wiz-resume-restart')?.addEventListener('click', () => { clearDraft(); resetForEntry(); });
-  // 每次进入 create 视图都回到第 1 步并重新生成幂等键；服务端草稿通过「继续上次」恢复
+  // 模块03 E1：修改任一事实行内容（名称/值/来源）时自动取消该行「已确认」——
+  // 不能带着旧确认状态修改内容；关键项未确认由「确认并继续」的现有校验拦截
+  const dropFactConfirmation = event => {
+    const field = event.target.closest('[data-wiz-fact]');
+    if (!field || field.dataset.wizFact === 'confirmed' || field.dataset.wizFact === 'critical') return;
+    const confirmed = field.closest('.fact-row')?.querySelector('[data-wiz-fact="confirmed"]');
+    if (confirmed?.checked) confirmed.checked = false;
+  };
+  $('#wiz-facts')?.addEventListener('input', dropFactConfirmation);
+  $('#wiz-facts')?.addEventListener('change', dropFactConfirmation);
+  // 模块03：复用入口事件（再做一套 / 用此风格制作新品 / 品牌用于新项目）统一从这里进向导
+  window.addEventListener('qb:open-wizard', event => requestEntry(event.detail ?? {}));
+  // 每次进入 create 视图都回到第 1 步并重新生成幂等键；服务端草稿通过「继续上次」恢复。
+  // 重置完成后若有待应用的 qb:open-wizard 复用请求（E1/E2/E3），再应用预填与沿用摘要
   document.addEventListener('qb:view-change', event => {
-    if (event.detail?.view === 'create') resetForEntry();
+    if (event.detail?.view === 'create') { resetForEntry(); applyEntry(); }
+    else state.entry = null; // 用户中途改去其它视图时丢弃未消费的复用请求
   });
 }
 

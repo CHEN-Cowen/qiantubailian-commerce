@@ -104,6 +104,7 @@ function renderHomeRealProjects() {
           <button class="text-button" data-action="truth">商品事实</button>
           <button class="text-button" data-action="spec">生产配置</button>
           <button class="text-button" data-action="workbench">打开工作台 →</button>
+          <button class="text-button" data-action="remake">再做一套</button>
         </div>
       </div>
     </article>`;
@@ -121,6 +122,10 @@ function renderHomeRealProjects() {
       const action = trigger.dataset.action;
       if (action === 'workbench') window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: card.dataset.projectId } }));
       if (action === 'spec') window.dispatchEvent(new CustomEvent('qb:open-spec', { detail: { projectId: card.dataset.projectId } }));
+      if (action === 'remake') {
+        // 模块03 E1：同商品再做一套 → 向导复用模式
+        window.dispatchEvent(new CustomEvent('qb:open-wizard', { detail: { mode: 'reuse', projectId: card.dataset.projectId } }));
+      }
       if (action === 'truth') void openTruthDialog(card.dataset.projectId);
     });
   });
@@ -148,6 +153,7 @@ function renderProjects() {
         <button class="text-button" data-action="upload">上传素材</button>
         <button class="text-button" data-action="spec">生产配置</button>
         <button class="text-button" data-action="run">开始生产</button>
+        <button class="text-button" data-action="remake">再做一套</button>
       </div>
     </article>`;
   }).join('');
@@ -231,6 +237,10 @@ function onRealListClick(event) {
   }
   if (action === 'run' || action === 'workbench') {
     window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId } }));
+  }
+  if (action === 'remake') {
+    // 模块03 E1：同商品再做一套 → 向导复用模式（沿用项目、素材与已确认事实）
+    window.dispatchEvent(new CustomEvent('qb:open-wizard', { detail: { mode: 'reuse', projectId } }));
   }
 }
 

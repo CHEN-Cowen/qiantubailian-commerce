@@ -146,3 +146,44 @@ test('前端脚本不得引用已被删除的 DOM 节点（防止首屏 addEvent
     }
   }
 });
+
+// 模块03：商品与品牌复用（E1 同商品再做一套 / E2 用此风格制作新品 / E3 品牌入口）契约
+test('M03-复用 qb:open-wizard 事件、复用入口、向导复用模式与不沿用声明', async () => {
+  const [html, wizard, realData, m04] = await Promise.all([
+    read('index.html'), read('wizard.js'), read('real-data.js'), read('m04.js'),
+  ]);
+  // 事件接线：入口 dispatch，wizard 在 window 上监听，视图切换仍走 app.js 的 setView（hash 路由）
+  assert.match(wizard, /addEventListener\('qb:open-wizard'/, 'wizard 必须监听 qb:open-wizard');
+  assert.match(realData, /qb:open-wizard/, 'real-data 项目入口必须派发 qb:open-wizard');
+  assert.match(m04, /qb:open-wizard/, 'm04 模板/品牌入口必须派发 qb:open-wizard');
+  // E1 入口：项目卡片与首页卡片的「再做一套」按钮（remake）
+  assert.match(realData, /data-action="remake"/);
+  assert.match(realData, /再做一套/);
+  assert.match(realData, /mode: 'reuse'/);
+  // E2/E3 入口：模板卡「用此风格制作新品」、品牌卡 brand-use 接上
+  assert.match(m04, /data-action="style-use"/);
+  assert.match(m04, /用此风格制作新品/);
+  assert.match(m04, /data-action="brand-use"/);
+  assert.match(m04, /mode: 'style'/);
+  assert.match(m04, /mode: 'brand'/);
+  // 向导三种复用模式
+  assert.match(wizard, /mode === 'reuse'/);
+  assert.match(wizard, /mode === 'style'/);
+  assert.match(wizard, /mode === 'brand'/);
+  // E1：沿用已上传素材 + 沿用摘要「沿用：商品事实 vN · 品牌 X · 模板 Y，可修改」
+  assert.match(wizard, /沿用已上传素材/);
+  assert.match(wizard, /沿用：商品事实 v/);
+  assert.match(wizard, /· 品牌 \$\{state\.reuseSpec\.brandName\}/);
+  assert.match(wizard, /· 模板 \$\{state\.reuseSpec\.templateName\}/);
+  assert.match(wizard, /，可修改/);
+  assert.match(wizard, /api\.getSpec\(/, 'E1 第 3 步应按 spec 冻结快照预选模板/品牌/平台');
+  // E1：修改事实行内容自动取消该行「已确认」
+  assert.match(wizard, /confirmed\.checked = false/, '修改事实行必须自动取消已确认');
+  // E2/E3：沿用风格声明，明确不沿用旧商品信息
+  assert.match(wizard, /沿用风格：/);
+  assert.match(wizard, /新商品的事实与素材需重新确认，不沿用旧商品信息/);
+  // 复用摘要横幅容器接入 create 视图
+  assert.ok(html.includes('id="wiz-reuse"'), 'index.html 缺少复用摘要横幅 #wiz-reuse');
+  assert.ok(html.includes('id="wiz-reuse-title"'), 'index.html 缺少 #wiz-reuse-title');
+  assert.ok(html.includes('id="wiz-reuse-note"'), 'index.html 缺少 #wiz-reuse-note');
+});
