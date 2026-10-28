@@ -623,7 +623,7 @@ function renderAdvanced(empty = false) {
     <div>是否回传供应商成本：${supplier.provider_cost_reported ? '是' : '未回传'}</div>
     ${supplier.note ? `<div class="real-note">${escapeHtml(supplier.note)}</div>` : ''}
     ${state.generationRecords.length > 0 ? `<div class="real-note">最近记录：</div>
-      <ol style="margin:4px 0 0 18px;padding:0;font-size:12px;color:#2A2420">
+      <ol style="margin:4px 0 0 18px;padding:0;font-size:12px;color:#263A32">
         ${state.generationRecords.slice(0, 5).map(r => `
           <li>attempt_id=${escapeHtml(r.attempt_id ?? r.id)} · ${escapeHtml(r.status)} · 内部 ${escapeHtml(r.cost?.internal_credits ?? 0)} · ${formatTime(r.created_at)}</li>
         `).join('')}

@@ -498,6 +498,9 @@ async function renderAccountData() {
     ['可用额度', balance.available ?? 0, '预留 ' + (balance.reserved ?? 0) + ' 张'],
   ];
   $('.metric-strip').innerHTML = summaries.map(([label, value, note]) => '<div class="metric"><span>'+label+'</span><strong>'+value+'</strong><small>'+note+'</small></div>').join('');
+  // 顶栏额度常驻：与额度弹窗同源（服务端账本），不写死也不四舍五入成好看的数字
+  const creditValue = $('#topbar-credit-value');
+  if (creditValue) creditValue.textContent = String(balance.available ?? 0);
   const delivery = $('.delivery-table');
   if (delivery) delivery.hidden = false;
   if (delivery) delivery.innerHTML = (exported.exports ?? []).slice(0, 5).map(e => '<p>'+escapeHtml(e.package_filename ?? e.id)+' · '+escapeHtml(e.created_at)+'</p>').join('') || '<p class="real-empty">尚无真实交付记录。</p>';

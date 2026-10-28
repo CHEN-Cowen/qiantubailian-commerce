@@ -15,19 +15,19 @@ window.__qtbAuthReady = new Promise(resolve => { releaseReady = resolve; });
 const stateLabel = text => text;
 
 const GATE_CSS = `
-.auth-gate{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:rgba(42,36,32,.55);padding:20px;overflow:auto}
-.auth-card{width:min(420px,100%);background:#FAF8F5;border:1px solid #ECE6DF;border-radius:14px;box-shadow:0 24px 60px rgba(36,30,25,.28);padding:30px 28px;color:#2A2420}
+.auth-gate{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:rgba(38,58,50,.55);padding:20px;overflow:auto}
+.auth-card{width:min(420px,100%);background:#F7F8F5;border:1px solid #DFE5DC;border-radius:14px;box-shadow:0 24px 60px rgba(38,58,50,.28);padding:30px 28px;color:#263A32}
 .auth-card h1{font-size:22px;line-height:1.3;margin:0 0 8px;letter-spacing:-.3px}
-.auth-card .eyebrow{margin:0 0 6px;color:#D63A12;font-size:10px;font-weight:800;letter-spacing:1.7px}
-.auth-lead{color:#6E655D;font-size:13px;margin:0 0 20px}
+.auth-card .eyebrow{margin:0 0 6px;color:#2C4C3B;font-size:10px;font-weight:800;letter-spacing:1.7px}
+.auth-lead{color:#6D786F;font-size:13px;margin:0 0 20px}
 .auth-form{display:grid;gap:14px}
-.auth-form label{display:grid;gap:5px;font-size:12px;color:#6E655D}
-.auth-form input{border:1px solid #E5DED6;border-radius:7px;background:#fff;padding:10px 11px;font-size:14px;color:#2A2420}
-.auth-form input:focus{outline:3px solid #FFC9AD;outline-offset:1px}
+.auth-form label{display:grid;gap:5px;font-size:12px;color:#6D786F}
+.auth-form input{border:1px solid #DFE5DC;border-radius:7px;background:#fff;padding:10px 11px;font-size:14px;color:#263A32}
+.auth-form input:focus{outline:3px solid #A9C7B4;outline-offset:1px}
 .auth-error{margin:0;color:#dc2626;background:#fff0f0;border:1px solid #f1cccc;border-radius:6px;padding:8px 10px;font-size:12px}
 .auth-submit{width:100%;margin-top:4px}
 .auth-switch{margin-top:14px;text-align:center}
-.auth-note{color:#9C9188;font-size:11px;line-height:1.6;margin:12px 0 0}
+.auth-note{color:#8B978D;font-size:11px;line-height:1.6;margin:12px 0 0}
 @media(max-width:420px){.auth-card{padding:24px 18px}.auth-card h1{font-size:19px}}
 `;
 

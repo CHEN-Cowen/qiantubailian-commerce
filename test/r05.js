@@ -243,9 +243,9 @@ test('R05 UI 契约：工作台必需 DOM 节点存在', async () => {
   assert.match(js, /runTerminal|TERMINAL_STATES/);
   assert.match(js, /localStorage/);
 
-  // CSS 品牌色
-  assert.match(css, /#FAF8F5/);
-  assert.match(css, /#FF5A2E/);
+  // CSS 品牌色：体验优化模块 01 起为绿色系统（低饱和绿 #365F49 / 暖白 #F7F8F5）
+  assert.match(css, /#F7F8F5/);
+  assert.match(css, /#365F49/);
 });
 
 test('R05 共享 server 清理', async () => {

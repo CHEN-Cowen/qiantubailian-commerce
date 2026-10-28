@@ -23,23 +23,23 @@
       </a>
       <nav class="main-nav" aria-label="主导航">
         <button class="nav-item active" data-view="home">首页</button>
-        <button class="nav-item" data-view="projects">商品项目</button>
-        <button class="nav-item" data-view="assets">素材与版本</button>
-        <button class="nav-item" data-view="library">模板与品牌</button>
+        <button class="nav-item" data-view="projects">我的商品</button>
+        <button class="nav-item" data-view="assets">我的作品</button>
+        <button class="nav-item" data-view="library">品牌与模板</button>
       </nav>
       <div class="top-actions">
-        <span class="mock-badge" id="data-note-button" role="button" tabindex="0" title="查看数据说明"><span class="dot"></span>演示数据</span>
-        <button class="secondary" data-open="pricing" title="额度、套餐与使用规则">额度</button>
+        <span class="mock-badge" id="data-note-button" role="button" tabindex="0" title="查看数据说明"><span class="dot"></span>演示边界</span>
+        <button class="credit-chip" data-open="pricing" id="topbar-credits" title="额度、套餐与使用规则"><b id="topbar-credit-value">—</b> 可用额度</button>
         <button class="icon-button" id="help-button" aria-label="查看说明" title="查看说明">?</button>
-        <button class="avatar" aria-label="账户菜单">林</button>
+        <button class="avatar" aria-label="账户菜单">我</button>
       </div>
     </header>
 
     <main>
       <section class="view active" id="home-view" data-view-panel="home">
         <div class="page-heading">
-          <div><p class="eyebrow">快捷创意工厂</p><h1>把新品，做成一套<span class="h1-accent">能上架的视觉资产</span>。</h1><p class="heading-note">从商品事实开始，按平台目标生成、检查并交付。</p></div>
-          <div class="heading-actions"><button class="secondary" id="import-button">新建商品项目</button><button class="primary js-new-project" id="new-project-button"><span>＋</span> 创建新品上架包</button></div>
+          <div><p class="eyebrow">快捷创意工厂</p><h1>把新品，做成一套<span class="h1-accent">能上架的视觉资产</span>。</h1><p class="heading-note">上传商品图、确认必要信息、选择风格与交付即可开始；费用在生成前明确说明。</p></div>
+          <div class="heading-actions"><button class="secondary" id="import-button">导入商品资料</button><button class="primary js-new-project" id="new-project-button"><span>＋</span> 开始制作</button></div>
         </div>
         <div class="home-grid">
           <section class="section-block showcase-block" aria-label="效果展示">
@@ -92,7 +92,7 @@
       </section>
 
       <section class="view" id="projects-view" data-view-panel="projects">
-        <div class="page-heading compact"><div><p class="eyebrow">商品项目</p><h1>商品项目</h1><p class="heading-note">每个项目都保留商品事实、素材版本和质量证据。</p></div><button class="primary" id="projects-new"><span>＋</span> 新建项目</button></div>
+        <div class="page-heading compact"><div><p class="eyebrow">我的商品</p><h1>我的商品</h1><p class="heading-note">每个商品都保留事实、素材与原图；可继续制作、再做一套，或从已有风格制作新品。</p></div><button class="primary" id="projects-new"><span>＋</span> 新建商品</button></div>
         <section class="real-projects" id="real-projects" aria-live="polite">
           <div class="real-head">
             <div><h2>我的项目</h2></div>
@@ -109,15 +109,15 @@
       </section>
 
       <section class="view" id="assets-view" data-view-panel="assets">
-        <div class="page-heading compact"><div><p class="eyebrow">素材与版本</p><h1>素材与版本</h1><p class="heading-note">按商品事实查看原图、生成版本和质检状态。</p></div><button class="secondary" id="upload-button">↑ 上传素材</button></div>
+        <div class="page-heading compact"><div><p class="eyebrow">我的作品</p><h1>我的作品</h1><p class="heading-note">按商品与任务查看生成的图片、当前选用版本和质量检查结果；历史版本不会被覆盖。</p></div><button class="secondary" id="upload-button">↑ 上传素材</button></div>
         <div class="asset-layout" hidden><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
       </section>
 
       <section class="view" id="library-view" data-view-panel="library">
         <div class="page-heading compact">
           <div>
-            <p class="eyebrow">模板与品牌</p>
-            <h1>模板与品牌</h1>
+            <p class="eyebrow">品牌与模板</p>
+            <h1>品牌与模板</h1>
             <p class="heading-note">
               品牌配方记录你常用的背景、光线、构图与文字排版；新商品套用同一个配方，整套图视觉保持一致。
             </p>
@@ -324,8 +324,8 @@
     <p class="real-note">套件只追加版本，已冻结的配置引用固定版本，不会被新版本改写。</p>
     <form id="brand-form" class="real-form">
       <label>套件名称<input name="name" required maxlength="60" placeholder="例如：月光品牌套件"></label>
-      <label>主色（#RRGGBB）<input name="primary" required pattern="#[0-9A-Fa-f]{6}" placeholder="#FF5A2E"></label>
-      <label>辅助色（可选，逗号分隔）<input name="secondary" placeholder="#FFF1EB, #15803D"></label>
+      <label>主色（#RRGGBB）<input name="primary" required pattern="#[0-9A-Fa-f]{6}" placeholder="#365F49"></label>
+      <label>辅助色（可选，逗号分隔）<input name="secondary" placeholder="#EDF2EC, #2C6B45"></label>
       <label class="brand-inline"><span><input type="checkbox" name="logo_present"> 套件包含 Logo</span></label>
       <label>Logo 素材 ID（先在项目上传图片）<input name="logo_asset_id" maxlength="80" placeholder="粘贴素材列表中的 ID"></label><label>Logo 说明（可选）<input name="logo_description" maxlength="120" placeholder="例如：左上角文字标"></label>
       <label>授权字体（可选）<input name="font_name" maxlength="60" placeholder="例如：思源黑体"></label>

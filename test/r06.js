@@ -21,12 +21,12 @@ test('R06 首页文案：移除绝对承诺', async () => {
   assert.match(html, /不强求.*一定能上架/);
 });
 
-test('R06 导航清晰：商品项目 / 模板与品牌 / 素材与版本', async () => {
+test('R06 导航清晰：我的商品 / 品牌与模板 / 我的作品', async () => {
   const html = await read('frontend/index.html');
   assert.match(html, /data-view="home">首页/);
-  assert.match(html, /data-view="projects">商品项目/);
-  assert.match(html, /data-view="assets">素材与版本/);
-  assert.match(html, /data-view="library">模板与品牌/);
+  assert.match(html, /data-view="projects">我的商品/);
+  assert.match(html, /data-view="assets">我的作品/);
+  assert.match(html, /data-view="library">品牌与模板/);
 });
 
 test('R06 品牌配方 + 模板库页面真实渲染容器存在', async () => {

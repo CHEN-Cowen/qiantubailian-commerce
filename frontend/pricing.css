@@ -4,18 +4,18 @@
 
 .pricing-section { margin-bottom: 28px; }
 .pricing-section h2 {
-  font-size: 15px; font-weight: 600; color: #2A2420; margin: 0 0 12px 0;
+  font-size: 15px; font-weight: 600; color: #263A32; margin: 0 0 12px 0;
 }
 
 /* 额度账本 */
 .balance-row {
   display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 12px; background: #FFFDF9; border: 1px solid #EFEBE5; border-radius: 10px;
+  gap: 12px; background: #FFFFFF; border: 1px solid #DFE5DC; border-radius: 10px;
   padding: 14px 16px;
 }
 .balance-cell { text-align: center; }
-.balance-cell span { display: block; font-size: 11px; color: #7A7066; margin-bottom: 4px; }
-.balance-cell b { display: block; font-size: 22px; font-weight: 700; color: #2A2420; }
+.balance-cell span { display: block; font-size: 11px; color: #6D786F; margin-bottom: 4px; }
+.balance-cell b { display: block; font-size: 22px; font-weight: 700; color: #263A32; }
 
 /* 套餐卡片 */
 .pricing-grid {
@@ -24,36 +24,36 @@
 }
 .pricing-card {
   position: relative; padding: 16px 14px;
-  border: 1px solid #EFEBE5; border-radius: 12px; background: #FFFDF9;
+  border: 1px solid #DFE5DC; border-radius: 12px; background: #FFFFFF;
   display: flex; flex-direction: column; gap: 10px;
 }
-.pricing-card.free { border-color: #D5E8D5; background: #F2FAF2; }
-.pricing-card.disabled { opacity: 0.55; background: #F7F4F1; }
+.pricing-card.free { border-color: #D5E8D5; background: #EDF2EC; }
+.pricing-card.disabled { opacity: 0.55; background: #F7F8F5; }
 .pricing-badge {
   position: absolute; top: -8px; right: 10px;
   padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
-  background: #FFE9DC; color: #B44423;
+  background: #E6EFE8; color: #2C5B41;
 }
-.pricing-card h3 { margin: 0; font-size: 15px; font-weight: 600; color: #2A2420; }
-.pricing-price { margin: 0; font-size: 28px; font-weight: 700; color: #2A2420; line-height: 1.1; }
-.pricing-price b { color: #FF5A2E; }
+.pricing-card h3 { margin: 0; font-size: 15px; font-weight: 600; color: #263A32; }
+.pricing-price { margin: 0; font-size: 28px; font-weight: 700; color: #263A32; line-height: 1.1; }
+.pricing-price b { color: #365F49; }
 .pricing-price small {
-  display: block; font-size: 12px; font-weight: 500; color: #7A7066; margin-top: 2px;
+  display: block; font-size: 12px; font-weight: 500; color: #6D786F; margin-top: 2px;
 }
 .free-label {
-  font-size: 20px; font-weight: 700; color: #1B7A3A;
+  font-size: 20px; font-weight: 700; color: #2C6B45;
 }
 .pricing-highlights {
   list-style: none; padding: 0; margin: 0;
-  font-size: 12px; color: #2A2420; display: flex; flex-direction: column; gap: 3px;
+  font-size: 12px; color: #263A32; display: flex; flex-direction: column; gap: 3px;
 }
-.pricing-highlights li::before { content: '✓ '; color: #1B7A3A; }
-.pricing-highlights .terms { color: #7A7066; font-size: 11px; margin-top: 2px; }
+.pricing-highlights li::before { content: '✓ '; color: #2C6B45; }
+.pricing-highlights .terms { color: #6D786F; font-size: 11px; margin-top: 2px; }
 .pricing-validity {
-  font-size: 11px; color: #7A7066; margin: 0;
+  font-size: 11px; color: #6D786F; margin: 0;
 }
 .pricing-card button { width: 100%; margin-top: auto; }
-.pricing-card button[disabled] { background: #D9D3CC; color: #8A8278; cursor: not-allowed; }
+.pricing-card button[disabled] { background: #D5DED6; color: #8B978D; cursor: not-allowed; }
 .pricing-lock {
   font-size: 11px; color: #B91C1C; margin: 0; text-align: center;
 }
@@ -61,22 +61,22 @@
 /* 使用规则 */
 .rules-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
-  background: #FFFDF9; border: 1px solid #EFEBE5; border-radius: 10px; padding: 12px 14px;
+  background: #FFFFFF; border: 1px solid #DFE5DC; border-radius: 10px; padding: 12px 14px;
 }
-.rule-cell { padding: 8px 10px; border-bottom: 1px dotted #F2EFEB; }
+.rule-cell { padding: 8px 10px; border-bottom: 1px dotted #EDF2EC; }
 .rule-cell:last-child { border-bottom: none; }
-.rule-cell b { display: block; font-size: 12px; color: #2A2420; margin-bottom: 3px; }
-.rule-cell p { margin: 0; font-size: 12px; color: #5C544C; }
-.rule-cell small { display: block; margin-top: 2px; font-size: 11px; color: #7A7066; }
+.rule-cell b { display: block; font-size: 12px; color: #263A32; margin-bottom: 3px; }
+.rule-cell p { margin: 0; font-size: 12px; color: #5F6B62; }
+.rule-cell small { display: block; margin-top: 2px; font-size: 11px; color: #6D786F; }
 
 /* 订单区块 */
 .order-section {
-  background: #FFFDF9; border: 1px dashed #EFEBE5; border-radius: 10px;
+  background: #FFFFFF; border: 1px dashed #DFE5DC; border-radius: 10px;
   padding: 12px 14px;
 }
 .qr-placeholder {
-  margin-top: 8px; padding: 12px; background: #FAF8F5; border-radius: 8px;
-  font-family: ui-monospace, monospace; font-size: 11px; color: #7A7066;
+  margin-top: 8px; padding: 12px; background: #F7F8F5; border-radius: 8px;
+  font-family: ui-monospace, monospace; font-size: 11px; color: #6D786F;
 }
 
 /* 窄屏 */

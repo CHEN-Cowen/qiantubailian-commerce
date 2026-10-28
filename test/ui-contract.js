@@ -12,7 +12,7 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   const [html, app, style, viewport] = await Promise.all([
     read('index.html'), read('app.js'), read('style.css'), read('viewport.css'),
   ]);
-  for (const text of ['快捷创意', '商品项目', '素材与版本', '商品事实已确认', '质量检查', '专业模式', '演示项目 · 刷新重置']) {
+  for (const text of ['快捷创意', '我的商品', '我的作品', '商品事实已确认', '质量检查', '专业模式', '演示项目 · 刷新重置']) {
     assert.match(html, new RegExp(text));
   }
   assert.match(html, /短视频首帧[\s\S]*后续阶段/);
@@ -23,8 +23,9 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   assert.match(app, /function openDrawer\(\)/);
   assert.match(app, /project !== 'skin'/);
   assert.match(app, /addEventListener\('keydown', activateProject\)/);
-  assert.match(style, /--primary:#FF5A2E/);
-  assert.match(style, /--accent:#E8890C/);
+  // 体验优化模块 01：主色切换为低饱和绿（F1 建议色 #365F49 / #6E8F79）
+  assert.match(style, /--primary:#365F49/);
+  assert.match(style, /--accent:#6E8F79/);
   assert.match(viewport, /@media\(max-width:760px\)/);
   assert.match(style, /\.view,\.project-view\{display:none\}/);
   assert.match(html, /刷新后重置/);
