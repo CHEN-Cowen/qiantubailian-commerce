@@ -486,13 +486,183 @@ async function renderAccountData() {
   const delivery = $('.delivery-table');
   if (delivery) delivery.hidden = false;
   if (delivery) delivery.innerHTML = (exported.exports ?? []).slice(0, 5).map(e => '<p>'+escapeHtml(e.package_filename ?? e.id)+' · '+escapeHtml(e.created_at)+'</p>').join('') || '<p class="real-empty">尚无真实交付记录。</p>';
+  // 模块06：我的作品页。真实作品渲染进 #real-works；.asset-layout 是 r06 契约保留的演示样例区，
+  // 不再被真实数据覆盖/展开（演示边界不抢真实功能的显眼位置）。
   const assets = $('#assets-view .asset-layout');
-  if (assets) assets.hidden = false;
-  if (assets) assets.innerHTML = '<div class="real-list">'+state.projects.map(p => '<article class="real-card"><b>'+escapeHtml(p.name)+'</b><span>'+p.asset_count+' 张素材</span><button class="text-button" data-real-workbench="'+escapeHtml(p.id)+'">查看版本与交付</button></article>').join('')+'</div>';
+  if (assets) assets.hidden = true;
+  const worksBody = $('#real-works-body');
+  if (worksBody) {
+    worksBody.innerHTML = '<div class="loading-line"></div><p class="real-hint">正在读取真实作品…</p>';
+    void renderRealWorks();
+  }
   document.querySelectorAll('[data-real-workbench]').forEach(button => button.onclick = () => window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: button.dataset.realWorkbench } })));
+  bindRealWorksActions();
   // 搜索只筛当前账户真实项目；演示表保留在源码供独立示例使用。
   const table = $('.project-table'); if (table) table.hidden = true;
   const search = $('.search input');
-  if (search) search.oninput = () => $$('#real-list .real-card').forEach(card => card.hidden = !card.textContent.toLowerCase().includes(search.value.trim().toLowerCase()));
+  if (search) search.oninput = () => {
+    const keyword = search.value.trim().toLowerCase();
+    $$('#real-list .real-card').forEach(card => card.hidden = !card.textContent.toLowerCase().includes(keyword));
+    $$('#real-works-body .real-work-group').forEach(group => group.hidden = keyword !== '' && !group.textContent.toLowerCase().includes(keyword));
+  };
   const segmented = document.querySelector('.segmented'); if (segmented) segmented.hidden = true;
+}
+
+/* ---------- 模块06：我的作品（按商品/任务展示套图） ----------
+   数据流：listRunsByProject(每个商品) → 取最近 1 个 run → getRun（交付物+选用版本）
+   + listRunVersions + listQualityReports + listExports(projectId) →
+   每张图渲染：选用(active)/检查(decision)/交付(export)/历史版本数；已交付可下载，
+   未结算/待复核的预览服务端自带水印，如实标注。 */
+const WORK_DECISION_META = {
+  publishable: ['检查通过', 'ok'],
+  needs_review: ['待复核', 'warn'],
+  blocked: ['检查未通过', 'bad'],
+};
+const WORK_RUN_STATUS_LABEL = {
+  pending: '排队中', preparing: '准备中', generating: '生成中', qa: '检查中',
+  needs_review: '待复核', budget_confirmation: '待确认额度', completed: '已完成',
+  failed: '失败', cancelled: '已取消',
+};
+
+function workVersionImageUrl(runId, versionId) {
+  return `/api/runs/${encodeURIComponent(runId)}/versions/${encodeURIComponent(versionId)}/content`;
+}
+
+async function renderRealWorks() {
+  const body = $('#real-works-body');
+  if (!body) return;
+  const projects = state.projects ?? [];
+  if (projects.length === 0) {
+    body.innerHTML = `<div class="empty-state"><p>还没有作品：先在「商品项目」创建商品并完成一次生成，图片会按商品归类展示在这里。</p>
+      <div class="state-actions"><button type="button" class="primary" data-works-start>开始第一套图</button></div></div>`;
+    return;
+  }
+  const results = await Promise.all(projects.map(async project => {
+    try {
+      const runsRes = await api.listRunsByProject(project.id);
+      const runs = (runsRes.runs ?? []).slice().sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')));
+      const latest = runs[0] ?? null;
+      const [runDetail, versions, reports, exportList] = latest ? await Promise.all([
+        api.getRun(latest.id).catch(() => null),
+        api.listRunVersions(latest.id),
+        api.listQualityReports(latest.id),
+        api.listExports({ projectId: project.id }),
+      ]) : [null, { versions: [] }, { reports: [] }, { exports: [] }];
+      return { project, runs, run: runDetail?.run ?? latest, versions: versions.versions ?? [], reports: reports.reports ?? [], exports: exportList.exports ?? [], error: null };
+    } catch (error) {
+      return { project, runs: [], run: null, versions: [], reports: [], exports: [], error };
+    }
+  }));
+  if ($('#real-works-body') !== body) return; // 视图已重渲染，丢弃过期结果
+  body.innerHTML = results.map(item => renderRealWorkGroup(item)).join('');
+}
+
+function renderRealWorkGroup({ project, runs, run, versions, reports, exports, error }) {
+  const head = `<button type="button" class="real-work-head" data-works-toggle>
+      <span class="real-product" title="${escapeHtml(project.name)}">${escapeHtml(project.name)}</span>
+      <span class="real-meta"><span>${runs.length} 个任务</span><i>›</i></span>
+    </button>`;
+  if (error) {
+    return `<article class="real-work-group">${head}
+      <div class="real-work-body"><div class="state-note danger"><div><b>读取「${escapeHtml(project.name)}」的作品失败</b><br>${escapeHtml(errorText(error))}
+        <div class="state-actions"><button type="button" class="secondary" data-works-retry>重试</button></div></div></div></div>
+    </article>`;
+  }
+  if (!run) {
+    return `<article class="real-work-group">${head}
+      <div class="real-work-body"><p class="real-hint">该商品还没有生成任务。</p>
+        <div class="state-actions"><button type="button" class="primary" data-works-open="${escapeHtml(project.id)}">打开工作台开始生成</button></div></div>
+    </article>`;
+  }
+  const statusLabel = WORK_RUN_STATUS_LABEL[run.status] ?? run.status;
+  const runExports = exports.filter(e => e.run_id === run.id);
+  const deliveredExport = runExports.find(e => (e.status ?? '') === 'delivered') ?? runExports[0] ?? null;
+  const runHead = `<div class="real-work-run-head">
+      <b title="${escapeHtml(run.id)}">任务 ${escapeHtml(run.id.slice(0, 12))}…</b>
+      <span>${escapeHtml(statusLabel)} · 更新 ${escapeHtml(formatWorkTime(run.updated_at))} · ${deliveredExport ? '已交付' : '未交付'}</span>
+    </div>`;
+  const deliverables = run.deliverables ?? [];
+  const shots = deliverables.map(deliverable => {
+    const active = versions.find(v => v.id === deliverable.active_version_id)
+      ?? versions.filter(v => v.deliverable_id === deliverable.deliverable_id).sort((a, b) => b.number - a.number)[0] ?? null;
+    const versionCount = versions.filter(v => v.deliverable_id === deliverable.deliverable_id).length;
+    const report = active?.report_id ? reports.find(r => r.id === active.report_id) ?? null : null;
+    const decision = report?.decision ?? null;
+    const [decisionLabel, decisionCls] = decision
+      ? (WORK_DECISION_META[decision] ?? [decision, 'warn'])
+      : ['未检查', 'warn'];
+    const tags = [
+      active ? '<span class="wb-chip ok">选用</span>' : '<span class="wb-chip">无选用</span>',
+      `<span class="wb-chip ${decisionCls}">${escapeHtml(decisionLabel)}</span>`,
+      deliveredExport ? '<span class="wb-chip ok">已交付</span>' : `<span class="wb-chip">未交付</span>`,
+      `<span class="wb-chip">${versionCount} 个版本</span>`,
+    ];
+    const action = deliveredExport
+      ? `<a class="text-button" href="${escapeHtml(api.downloadExportUrl(deliveredExport.id))}">下载</a>`
+      : (run.status === 'completed'
+        ? `<button type="button" class="text-button" data-works-open="${escapeHtml(project.id)}">去交付</button>`
+        : '');
+    return `<figure class="real-shot">
+      ${active
+        ? `<img src="${escapeHtml(workVersionImageUrl(run.id, active.id))}" alt="${escapeHtml(deliverable.label ?? deliverable.deliverable_id)}" loading="lazy">`
+        : '<div class="real-shot-info"><p class="real-hint">暂无可用版本</p></div>'}
+      <figcaption class="real-shot-info">
+        <b title="${escapeHtml(deliverable.label ?? deliverable.deliverable_id)}">${escapeHtml(deliverable.label ?? deliverable.deliverable_id)}</b>
+        <span class="real-shot-tags">${tags.join('')}</span>
+        ${deliveredExport ? '' : `<span class="real-watermark-note">未结算/待复核，预览带水印</span>`}
+        <span class="real-shot-actions">${action}</span>
+      </figcaption>
+    </figure>`;
+  }).join('');
+  const olderRuns = runs.slice(1);
+  const olderNote = olderRuns.length > 0
+    ? `<details class="real-works-more"><summary>历史任务（${olderRuns.length} 个，默认只展示最近一次）</summary>
+        <ul>${olderRuns.map(r => `<li title="${escapeHtml(r.id)}">${escapeHtml(r.id.slice(0, 12))}… · ${escapeHtml(WORK_RUN_STATUS_LABEL[r.status] ?? r.status)} · ${escapeHtml(formatWorkTime(r.created_at))}</li>`).join('')}</ul>
+      </details>`
+    : '';
+  return `<article class="real-work-group">${head}
+    <div class="real-work-body">
+      <div class="real-work-run">
+        ${runHead}
+        ${shots
+          ? `<div class="real-work-shots">${shots}</div>`
+          : '<p class="real-hint">该任务还没有交付物。</p>'}
+      </div>
+      ${olderNote}
+      <div class="state-actions"><button type="button" class="secondary" data-works-open="${escapeHtml(project.id)}">打开工作台查看全部版本与交付</button></div>
+    </div>
+  </article>`;
+}
+
+function bindRealWorksActions() {
+  const body = $('#real-works-body');
+  if (!body) return;
+  body.onclick = event => {
+    const open = event.target.closest('[data-works-open]');
+    if (open) {
+      window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: open.dataset.worksOpen } }));
+      return;
+    }
+    if (event.target.closest('[data-works-start]')) {
+      // 空状态直接开始：跳到「我的商品」视图（app.js 的 setView 由导航按钮触发）
+      document.querySelector('.nav-item[data-view="projects"]')?.click();
+      return;
+    }
+    if (event.target.closest('[data-works-retry]')) {
+      body.innerHTML = '<div class="loading-line"></div>';
+      void renderRealWorks();
+      return;
+    }
+    const toggle = event.target.closest('[data-works-toggle]');
+    if (toggle) {
+      const groupBody = toggle.nextElementSibling;
+      if (groupBody) groupBody.hidden = !groupBody.hidden;
+    }
+  };
+}
+
+function formatWorkTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }

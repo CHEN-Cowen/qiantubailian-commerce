@@ -55,6 +55,18 @@ const state = {
   pollIntervalMs: 15000,
   sseReconnectAttempts: 0,
   compareMode: false,
+  // 模块06：修改工作台状态（文字排版修改 / 前后对比 / 历史版本 / 指定图片重生成）
+  edit: {
+    open: false,
+    deliverableId: null,
+    layersPayload: null,     // GET text-layers 的返回 {version_id, layers, limits, ...}
+    layersError: null,
+    loading: false,
+    result: null,            // POST text-edits 成功结果 {version, previous_version_id, report, issues, activated}
+    beforeVersionId: null,   // 前后对比的“修改前”版本
+    regen: null,             // {childRunId, sourceRunId, beforeActiveId}
+    regenTimer: null,
+  },
   // 新建 run 时的幂等键（工作台生命周期内固定，离开就重置）
   idempotencyKey: null,
 };
@@ -78,6 +90,26 @@ export function initWorkbench({ toast } = {}) {
   $('#wb-export-partial')?.addEventListener('click', () => void requestExport('partial'));
   $('#wb-revise-btn')?.addEventListener('click', () => openSpec(state.projectId));
   $('#wb-download-active')?.addEventListener('click', () => void requestExport('partial'));
+  // 模块06：修改工作台
+  $('#wb-edit-open')?.addEventListener('click', () => enterEditMode());
+  $('#wb-edit-close')?.addEventListener('click', closeEditMode);
+  $('#wb-edit-apply')?.addEventListener('click', () => void applyTextEditsSubmit());
+  $('#wb-regenerate')?.addEventListener('click', () => void requestRegenerate());
+  $('#wb-edit-thumbs')?.addEventListener('click', event => {
+    const btn = event.target.closest('[data-edit-thumb]');
+    if (btn) switchEditDeliverable(btn.dataset.editThumb);
+  });
+  $('#wb-edit-versions')?.addEventListener('click', event => {
+    const btn = event.target.closest('[data-edit-activate]');
+    if (btn) void activateEditVersion(btn.dataset.editActivate);
+  });
+  $('#wb-edit-error')?.addEventListener('click', event => {
+    if (event.target.closest('[data-edit-retry]')) {
+      $('#wb-edit-error').textContent = '';
+      void loadTextLayers();
+    }
+  });
+  $('#wb-edit-layers')?.addEventListener('input', updateApplyState);
   document.addEventListener('click', onDeliverableClick);
   document.addEventListener('click', onReviewDecisionClick);
   window.addEventListener('beforeunload', () => persistSelection());
@@ -112,9 +144,12 @@ export async function openWorkbench(projectId) {
   state.idempotencyKey = null;
   clearPolling();
   closeSSE();
+  closeEditMode();
   showWorkbench(true);
   $('#wb-project-title').textContent = '正在打开项目…';
   $('#wb-project-subtitle').textContent = '读取项目、任务与交付状态';
+  $('#wb-deliverables').innerHTML = '<div class="loading-line"></div>';
+  $('#wb-empty-hint').hidden = true;
   try {
     const [detail, specsPayload, runsPayload] = await Promise.all([
       api.getProject(projectId),
@@ -170,12 +205,21 @@ export async function openWorkbench(projectId) {
     }
     $('#wb-project-title').textContent = '打开失败';
     $('#wb-project-subtitle').textContent = '点击"← 商品项目"返回列表';
+    // 模块06：首屏错误带重试按钮，而不是只靠 toast 一闪而过
+    const hint = $('#wb-empty-hint');
+    if (hint) {
+      hint.hidden = false;
+      hint.innerHTML = `<div class="state-note danger"><div><b>打开工作台失败</b><br>${escapeHtml(error instanceof ApiFailure ? error.message : String(error))}
+        <div class="state-actions"><button type="button" class="secondary" id="wb-retry-open">重试</button></div></div></div>`;
+      $('#wb-retry-open')?.addEventListener('click', () => void openWorkbench(projectId));
+    }
   }
 }
 
 function closeWorkbench() {
   clearPolling();
   closeSSE();
+  closeEditMode();
   persistSelection();
   state.activeRun = null;
   showWorkbench(false);
@@ -372,9 +416,11 @@ function renderCenter(empty = false) {
   const meta = $('#wb-canvas-meta');
   const reviseBtn = $('#wb-revise-btn');
   const downloadActive = $('#wb-download-active');
+  const editOpenBtn = $('#wb-edit-open');
 
   reviseBtn.hidden = true;
   downloadActive.hidden = true;
+  editOpenBtn.hidden = true;
   versionSwitch.hidden = true;
   dual.hidden = true;
 
@@ -435,7 +481,13 @@ function renderCenter(empty = false) {
     // 修订按钮只在任务终态后才不会被新扣费覆盖；这里保留"局部修订"入口引导到重新执行 run
     reviseBtn.hidden = false; reviseBtn.textContent = '调整排版后重新制作';
     downloadActive.hidden = qual !== 'publishable'; downloadActive.textContent = '创建已通过图片的下载包';
+    // 模块06：任务终态且有版本时提供「修改此张」入口
+    editOpenBtn.hidden = versionsOfThis.length === 0;
   }
+}
+
+function versionImageUrl(runId, versionId) {
+  return `/api/runs/${encodeURIComponent(runId)}/versions/${encodeURIComponent(versionId)}/content`;
 }
 
 function buildVersionImageUrl(version) {
@@ -444,7 +496,7 @@ function buildVersionImageUrl(version) {
   // 这里简化：若 version 有 url 直接用，否则按 hash 猜（真实实现需 store 提供读接口）
   if (version?.url) return version.url;
   // fallback：如果这是 demo/mock provider，run.deliverables 里的 attempt 可能给了 output_file
-  return `/api/runs/${encodeURIComponent(state.activeRun.id)}/versions/${encodeURIComponent(version.id)}/content`;
+  return versionImageUrl(state.activeRun.id, version.id);
 }
 
 function findOriginalAsset(deliverable) {
@@ -691,6 +743,482 @@ async function requestExport(scope) {
   }
 }
 
+// ---------- 模块06：修改工作台 ----------
+// 数据流：进入修改态 → GET text-layers（可编辑层+安全边界）→ 本地 diff 出 edits →
+// POST text-edits（免费，不调生成模型）→ 刷新版本/报告 → 前后对比 + 结果如实渲染；
+// 历史版本可 activate 恢复；「仅重做此张」走 POST regenerate 子任务并轮询到终态。
+const DECISION_META = {
+  publishable: ['检查通过', 'ok'],
+  needs_review: ['待复核', 'warn'],
+  blocked: ['检查未通过', 'bad'],
+};
+const ISSUE_LABELS = {
+  PACKAGING_TEXT_READONLY: '包装关键文字只读，不可改写',
+  TEXT_TOO_LONG: '文字过长',
+  TEXT_EMPTY: '文字不能为空',
+  LAYOUT_OUT_OF_RANGE: '排版参数超出安全范围',
+  LAYOUT_INVALID: '排版参数必须是数字',
+  LAYER_NOT_FOUND: '文字层不存在',
+  DUPLICATE_LAYER_EDIT: '同一文字层被重复修改',
+};
+const CREATED_BY_LABEL = {
+  user_text_edit: '文字排版修改',
+  regeneration: '指定图片重生成',
+  system: '系统生成',
+};
+
+function enterEditMode(deliverableId = null) {
+  const run = state.activeRun;
+  if (!run) return;
+  state.edit.open = true;
+  state.edit.deliverableId = deliverableId
+    ?? state.selectedDeliverableId
+    ?? run.deliverables?.[0]?.deliverable_id ?? null;
+  state.edit.layersPayload = null;
+  state.edit.layersError = null;
+  state.edit.result = null;
+  state.edit.beforeVersionId = null;
+  $('#wb-edit-panel').hidden = false;
+  // 与主视图选中项保持一致，退出修改后仍停留在该交付物
+  if (state.edit.deliverableId && state.edit.deliverableId !== state.selectedDeliverableId) {
+    selectDeliverable(state.edit.deliverableId);
+  }
+  renderEditPanel();
+  void loadTextLayers();
+  $('#wb-edit-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeEditMode() {
+  stopRegenPolling();
+  state.edit.open = false;
+  state.edit.regen = null;
+  const panel = $('#wb-edit-panel');
+  if (panel) panel.hidden = true;
+}
+
+function switchEditDeliverable(deliverableId) {
+  if (!deliverableId || !state.edit.open || deliverableId === state.edit.deliverableId) return;
+  state.edit.deliverableId = deliverableId;
+  state.edit.layersPayload = null;
+  state.edit.layersError = null;
+  state.edit.result = null;
+  state.edit.beforeVersionId = null;
+  selectDeliverable(deliverableId);
+  renderEditPanel();
+  void loadTextLayers();
+}
+
+async function loadTextLayers() {
+  const run = state.activeRun;
+  const deliverableId = state.edit.deliverableId;
+  if (!run || !deliverableId || !state.edit.open) return;
+  state.edit.loading = true;
+  state.edit.layersError = null;
+  renderEditLayersArea();
+  if (run.status !== 'completed') {
+    state.edit.loading = false;
+    state.edit.layersError = {
+      code: 'RUN_NOT_TERMINAL',
+      message: '任务尚未完成，生成结束后才能修改文字排版；进行中的任务请等待终态。',
+    };
+    renderEditLayersArea();
+    return;
+  }
+  try {
+    const payload = await api.listTextLayers(run.id, deliverableId);
+    if (!state.edit.open || state.edit.deliverableId !== deliverableId) return;
+    state.edit.layersPayload = payload;
+    state.edit.loading = false;
+    renderEditLayersArea();
+    updateApplyState();
+  } catch (error) {
+    if (!state.edit.open || state.edit.deliverableId !== deliverableId) return;
+    state.edit.loading = false;
+    state.edit.layersError = {
+      code: error.code ?? 'REQUEST_FAILED',
+      message: error instanceof ApiFailure ? error.message : String(error),
+    };
+    renderEditLayersArea();
+  }
+}
+
+function renderEditPanel() {
+  const deliverable = state.activeRun?.deliverables?.find(d => d.deliverable_id === state.edit.deliverableId);
+  $('#wb-edit-deliverable-label').textContent = deliverable?.label ?? state.edit.deliverableId ?? '—';
+  renderEditThumbs();
+  renderEditPreview();
+  renderEditLayersArea();
+  renderEditVersions();
+  renderEditResult();
+  renderEditCompare();
+}
+
+function renderEditThumbs() {
+  const holder = $('#wb-edit-thumbs');
+  const run = state.activeRun;
+  const items = (run?.deliverables ?? []).filter(d => state.versions.some(v => v.deliverable_id === d.deliverable_id));
+  if (!run || items.length === 0) {
+    holder.innerHTML = '<p class="real-hint">还没有可修改的图片。</p>';
+    return;
+  }
+  holder.innerHTML = items.map(item => {
+    const version = state.versions.find(v => v.id === item.active_version_id)
+      ?? state.versions.find(v => v.deliverable_id === item.deliverable_id);
+    const label = item.label ?? item.deliverable_id;
+    const active = item.deliverable_id === state.edit.deliverableId;
+    return `<button type="button" class="wb-edit-thumb${active ? ' active' : ''}" data-edit-thumb="${escapeHtml(item.deliverable_id)}" title="${escapeHtml(label)}">
+      <img src="${escapeHtml(versionImageUrl(run.id, version.id))}" alt="${escapeHtml(label)} 缩略图" loading="lazy">
+      <span>${escapeHtml(label)}</span>
+    </button>`;
+  }).join('');
+}
+
+function renderEditPreview() {
+  const holder = $('#wb-edit-preview-holder');
+  const run = state.activeRun;
+  const deliverable = run?.deliverables?.find(d => d.deliverable_id === state.edit.deliverableId);
+  const version = state.versions.find(v => v.deliverable_id === state.edit.deliverableId && v.id === deliverable?.active_version_id)
+    ?? state.versions.find(v => v.deliverable_id === state.edit.deliverableId);
+  if (!run || !version) {
+    holder.innerHTML = '<p class="real-hint">该交付物还没有可用版本。</p>';
+    $('#wb-edit-preview-caption').textContent = '当前选用版本';
+    return;
+  }
+  holder.innerHTML = `<img src="${escapeHtml(versionImageUrl(run.id, version.id))}" alt="${escapeHtml(deliverable?.label ?? '')} 当前选用版本">`;
+  $('#wb-edit-preview-caption').textContent = `当前选用版本 · V${version.number}`;
+}
+
+function renderEditLayersArea() {
+  const holder = $('#wb-edit-layers');
+  const limitsNote = $('#wb-edit-limits-note');
+  if (state.edit.loading) {
+    holder.innerHTML = '<div class="loading-line"></div><p class="real-hint">正在读取文字层与安全边界…</p>';
+    limitsNote.textContent = '';
+    return;
+  }
+  if (state.edit.layersError) {
+    holder.innerHTML = `<div class="state-note danger"><div><b>无法读取文字层</b><br>${escapeHtml(state.edit.layersError.message)}
+      <div class="state-actions"><button type="button" class="secondary" data-edit-retry>重试</button></div></div></div>`;
+    limitsNote.textContent = '';
+    return;
+  }
+  const payload = state.edit.layersPayload;
+  if (!payload) {
+    holder.innerHTML = '<p class="real-hint">正在读取文字层…</p>';
+    return;
+  }
+  const limits = payload.limits ?? {};
+  limitsNote.textContent = limits.text_max_length ? `文案 ≤ ${limits.text_max_length} 字` : '';
+  const layers = payload.layers ?? [];
+  if (layers.length === 0) {
+    holder.innerHTML = '<p class="real-hint">该版本没有文字层（来自不支持文字层的生成路径），不能做文字排版修改；可使用「仅重做此张」。</p>';
+    return;
+  }
+  holder.innerHTML = layers.map(layer => {
+    // 只读层：包装关键文字 / Logo —— 明确标注不可编辑与原因
+    if (layer.logo === true || layer.readonly_reason) {
+      const reason = layer.logo === true
+        ? '品牌 Logo 使用品牌原图叠加，不可编辑（LOGO_USES_ORIGINAL_PIXEL）'
+        : '包装关键文字必须与原始包装一致，不可改写（PACKAGING_TEXT_READONLY）';
+      return `<div class="wb-layer readonly">
+        <div class="wb-layer-head"><b>${escapeHtml(layer.label ?? layer.id)}</b><span class="wb-layer-tag">只读</span></div>
+        <p class="real-note">${escapeHtml(reason)}</p>
+        <p class="wb-layer-text-preview" title="${escapeHtml(layer.text ?? '')}">${escapeHtml(layer.text ?? '')}</p>
+      </div>`;
+    }
+    const numberField = (field, value, min, max, label) => `<label>${label}（${min}–${max}）<input type="number" data-layer-id="${escapeHtml(layer.id)}" data-layer-field="${field}" min="${min}" max="${max}" step="0.001" value="${escapeHtml(value)}"></label>`;
+    return `<div class="wb-layer" data-layer-row="${escapeHtml(layer.id)}">
+      <div class="wb-layer-head"><b>${escapeHtml(layer.label ?? layer.id)}</b><span class="wb-layer-tag">可编辑</span></div>
+      <label class="wb-layer-text">文案<input type="text" data-layer-id="${escapeHtml(layer.id)}" data-layer-field="text" maxlength="${escapeHtml(limits.text_max_length ?? 60)}" value="${escapeHtml(layer.text ?? '')}"></label>
+      ${layer.editable_layout === true ? `<div class="wb-layer-fields">
+        ${numberField('x', layer.x, limits.min_x ?? 0, limits.max_x ?? 0.95, 'X 位置')}
+        ${numberField('y', layer.y, limits.min_y ?? 0.02, limits.max_y ?? 0.98, 'Y 位置')}
+        ${numberField('width', layer.width, limits.min_width ?? 0.15, limits.max_width ?? 0.96, '宽度')}
+        ${numberField('size_ratio', layer.size_ratio, limits.min_size_ratio ?? 0.018, limits.max_size_ratio ?? 0.16, '字号')}
+      </div>` : ''}
+    </div>`;
+  }).join('');
+}
+
+/** 与服务端 applyTextEdits 相同的 diff 口径：只有实际变化才进 edits，避免“保存一下”就出新版本。 */
+function collectEdits() {
+  const payload = state.edit.layersPayload;
+  if (!payload) return null;
+  const fieldsByLayer = new Map();
+  for (const input of document.querySelectorAll('#wb-edit-layers input[data-layer-id]')) {
+    const id = input.dataset.layerId;
+    if (!fieldsByLayer.has(id)) fieldsByLayer.set(id, {});
+    fieldsByLayer.get(id)[input.dataset.layerField] = input;
+  }
+  const edits = [];
+  for (const layer of payload.layers ?? []) {
+    if (layer.logo === true || (layer.editable_text !== true && layer.editable_layout !== true)) continue;
+    const fields = fieldsByLayer.get(layer.id) ?? {};
+    const edit = { id: layer.id };
+    let changed = false;
+    if (layer.editable_text === true && fields.text && fields.text.value !== layer.text) {
+      edit.text = fields.text.value;
+      changed = true;
+    }
+    if (layer.editable_layout === true) {
+      for (const field of ['x', 'y', 'width', 'size_ratio']) {
+        const input = fields[field];
+        if (!input || input.value === '') continue;
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) continue;
+        if (Math.abs(value - Number(layer[field])) > 1e-6) { edit[field] = value; changed = true; }
+      }
+    }
+    if (changed) edits.push(edit);
+  }
+  return edits;
+}
+
+function updateApplyState() {
+  const btn = $('#wb-edit-apply');
+  if (!btn) return;
+  const edits = state.edit.layersPayload ? collectEdits() : [];
+  btn.disabled = state.edit.loading || !edits || edits.length === 0 || Boolean(state.edit.regenTimer);
+}
+
+async function applyTextEditsSubmit() {
+  const run = state.activeRun;
+  const payload = state.edit.layersPayload;
+  if (!run || !payload || !state.edit.open) return;
+  if (state.edit.regenTimer) { state.toast('该交付物有进行中的重生成，完成前不能修改文字排版'); return; }
+  const edits = collectEdits() ?? [];
+  if (edits.length === 0) { state.toast('没有实际修改：改动任意文案或排版后再应用'); return; }
+  const btn = $('#wb-edit-apply');
+  btn.disabled = true;
+  btn.textContent = '正在应用修改…';
+  $('#wb-edit-error').textContent = '';
+  try {
+    const result = await api.applyTextEdits(run.id, state.edit.deliverableId, {
+      base_version_id: payload.version_id,
+      edits,
+    });
+    state.edit.result = result;
+    state.edit.beforeVersionId = result.previous_version_id;
+    state.edit.layersPayload = null; // 新版本已选用，需基于它重新读取文字层
+    const runRes = await api.getRun(run.id).catch(() => null);
+    if (runRes?.run) {
+      state.activeRun = runRes.run;
+      state.runs = state.runs.map(item => item.id === run.id ? runRes.run : item);
+    }
+    await loadRunExtras(run.id);
+    renderDeliverables();
+    renderCenter();
+    renderQA();
+    renderExport();
+    renderEditPanel();
+    void loadTextLayers();
+    state.toast(result.activated
+      ? '修改已应用并通过检查，已自动选用新版本'
+      : '修改已应用：新版本已保存，因检查未全部通过未自动选用');
+  } catch (error) {
+    if (error instanceof ApiFailure) showEditError(error);
+    else $('#wb-edit-error').textContent = String(error);
+  } finally {
+    btn.textContent = '应用修改（免费）';
+    updateApplyState();
+  }
+}
+
+function showEditError(error) {
+  const node = $('#wb-edit-error');
+  const issues = error.details?.issues;
+  if (Array.isArray(issues) && issues.length > 0) {
+    node.innerHTML = `<b>${escapeHtml(error.message)}</b><ul class="wb-issue-list">${issues.map(item =>
+      `<li><b>${escapeHtml(ISSUE_LABELS[item.code] ?? item.code)}</b>${escapeHtml(item.message ?? '')}${item.id ? `（${escapeHtml(layerLabelOf(item.id))}）` : ''}</li>`).join('')}</ul>`;
+    return;
+  }
+  if (error.code === 'VERSION_CONFLICT') {
+    node.innerHTML = `<b>当前选用版本已变化</b>（可能有其他修改或重生成）。请基于最新版本重试：
+      <button type="button" class="text-button" data-edit-retry>刷新最新版本</button>`;
+    return;
+  }
+  node.textContent = error.message ?? String(error);
+}
+
+function layerLabelOf(layerId) {
+  const layer = state.edit.layersPayload?.layers?.find(item => item.id === layerId);
+  return layer?.label ?? layerId;
+}
+
+function renderEditResult() {
+  const holder = $('#wb-edit-result');
+  const result = state.edit.result;
+  if (!result) { holder.hidden = true; holder.innerHTML = ''; return; }
+  const decision = result.report?.decision ?? null;
+  const [decisionLabel, decisionCls] = DECISION_META[decision] ?? ['状态未知', 'warn'];
+  const lines = [
+    `<div class="wb-chip ${decisionCls}">新版本 V${result.version?.number ?? '—'} · ${escapeHtml(decisionLabel)}</div>`,
+  ];
+  if (result.activated) {
+    lines.push('<p class="real-note">检查通过：新版本已自动选用为当前版本，旧版本保留在历史中可随时恢复。</p>');
+  } else if (decision === 'needs_review') {
+    lines.push('<p class="real-note warn">待复核：新版本只登记为历史版本，当前选用版本保持不变；人工复核通过后才能交付。</p>');
+  } else {
+    lines.push('<p class="real-note warn">检查未通过：新版本只登记为历史版本，当前选用版本保持不变，不会被放行。</p>');
+  }
+  holder.innerHTML = lines.join('');
+  holder.hidden = false;
+}
+
+function renderEditCompare() {
+  const holder = $('#wb-edit-compare');
+  const run = state.activeRun;
+  const before = state.edit.beforeVersionId;
+  const after = state.edit.result?.version?.id;
+  if (!run || !before || !after) { holder.hidden = true; return; }
+  $('#wb-edit-before-holder').innerHTML = `<img src="${escapeHtml(versionImageUrl(run.id, before))}" alt="修改前版本" loading="lazy">`;
+  $('#wb-edit-after-holder').innerHTML = `<img src="${escapeHtml(versionImageUrl(run.id, after))}" alt="修改后版本" loading="lazy">`;
+  $('#wb-edit-before-caption').textContent = `修改前 · V${state.versions.find(v => v.id === before)?.number ?? '—'}`;
+  $('#wb-edit-after-caption').textContent = `修改后 · V${state.edit.result.version.number}`;
+  holder.hidden = false;
+}
+
+function renderEditVersions() {
+  const holder = $('#wb-edit-versions');
+  const deliverableId = state.edit.deliverableId;
+  const versions = state.versions.filter(v => v.deliverable_id === deliverableId).sort((a, b) => b.number - a.number);
+  $('#wb-edit-version-count').textContent = versions.length > 0 ? `${versions.length} 个版本` : '';
+  if (!state.activeRun || versions.length === 0) {
+    holder.innerHTML = '<p class="real-hint">该交付物还没有版本。</p>';
+    return;
+  }
+  const deliverable = state.activeRun.deliverables?.find(d => d.deliverable_id === deliverableId);
+  holder.innerHTML = versions.map(version => {
+    const report = state.reports.find(r => r.id === version.report_id) ?? null;
+    const decision = report?.decision ?? null;
+    const [decisionLabel, decisionCls] = decision
+      ? (DECISION_META[decision] ?? [decision, 'warn'])
+      : ['无报告', 'warn'];
+    const isActive = deliverable?.active_version_id === version.id;
+    return `<div class="wb-version-row${isActive ? ' active' : ''}">
+      <div class="wb-version-main">
+        <b>V${version.number}${isActive ? ' · 当前选用' : ''}</b>
+        <small title="${escapeHtml(version.note ?? '')}">${escapeHtml(version.note ?? '—')}</small>
+        <small>${formatTime(version.created_at)} · ${escapeHtml(CREATED_BY_LABEL[version.created_by] ?? version.created_by ?? '—')}</small>
+      </div>
+      <div class="wb-version-side">
+        <span class="wb-chip ${decisionCls}">${escapeHtml(decisionLabel)}</span>
+        ${isActive ? '' : `<button type="button" class="text-button" data-edit-activate="${escapeHtml(version.id)}">选用此版本</button>`}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function activateEditVersion(versionId) {
+  const run = state.activeRun;
+  if (!run || !versionId) return;
+  try {
+    const result = await api.activateVersion(run.id, versionId);
+    state.activeRun = result.run;
+    state.runs = state.runs.map(item => item.id === run.id ? result.run : item);
+    await loadRunExtras(run.id);
+    state.toast('已切换选用版本；被替代版本保留在历史中，可随时恢复');
+    renderDeliverables();
+    renderCenter();
+    renderQA();
+    renderExport();
+    renderEditPanel();
+  } catch (error) {
+    state.toast(error instanceof ApiFailure ? error.message : String(error));
+  }
+}
+
+// ---------- 指定图片重生成（模块05 后端 + 模块06 界面） ----------
+function stopRegenPolling() {
+  if (state.edit.regenTimer) {
+    clearInterval(state.edit.regenTimer);
+    state.edit.regenTimer = null;
+  }
+}
+
+async function requestRegenerate() {
+  const run = state.activeRun;
+  const deliverable = run?.deliverables?.find(d => d.deliverable_id === state.edit.deliverableId);
+  if (!run || !deliverable) return;
+  if (state.edit.regenTimer) { state.toast('该交付物已有进行中的重生成，请等待完成后再试'); return; }
+  if (run.status !== 'completed') { state.toast('任务尚未完成，不能重生成'); return; }
+  const confirmed = window.confirm(
+    `仅重做这一张「${deliverable.label ?? deliverable.deliverable_id}」：按张结算，预计消耗 1 点额度（以服务端实际报价为准），失败或取消会释放预留。其他交付物与当前选用版本不受影响。是否继续？`);
+  if (!confirmed) return;
+  const status = $('#wb-edit-regen-status');
+  const btn = $('#wb-regenerate');
+  btn.disabled = true;
+  status.hidden = false;
+  status.innerHTML = '<p class="real-note">正在创建重生成子任务…</p>';
+  const idempotencyKey = `regen-${run.id}-${deliverable.deliverable_id}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    const result = await api.regenerateDeliverable(run.id, { deliverable_id: deliverable.deliverable_id }, idempotencyKey);
+    state.edit.regen = {
+      childRunId: result.run.id,
+      sourceRunId: run.id,
+      beforeActiveId: deliverable.active_version_id ?? null,
+    };
+    status.innerHTML = `<p class="real-note">子任务 <b>${escapeHtml(result.run.id)}</b> 已创建 · ${escapeHtml(runStatusLabel[result.run.status] ?? result.run.status)}。完成后会自动刷新本页。</p>`;
+    stopRegenPolling();
+    state.edit.regenTimer = globalThis.setInterval(() => void pollRegen(), 2500);
+    void pollRegen();
+  } catch (error) {
+    status.hidden = false;
+    if (error instanceof ApiFailure) {
+      // REGENERATION_IN_PROGRESS / REGENERATION_UNSUPPORTED 等错误码的服务端文案本身可读，如实透出
+      status.innerHTML = `<div class="state-note danger"><div><b>无法发起重生成</b><br>${escapeHtml(error.message)}</div></div>`;
+    } else {
+      status.hidden = true;
+      state.toast(String(error));
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function pollRegen() {
+  const regen = state.edit.regen;
+  if (!regen) { stopRegenPolling(); return; }
+  const status = $('#wb-edit-regen-status');
+  try {
+    const result = await api.getRun(regen.childRunId);
+    const child = result.run;
+    if (!runTerminal.has(child.status)) {
+      status.hidden = false;
+      status.innerHTML = `<p class="real-note">重生成进行中：子任务 <b>${escapeHtml(child.id)}</b> · ${escapeHtml(runStatusLabel[child.status] ?? child.status)}。只影响这一张，完成后自动刷新。</p>`;
+      return;
+    }
+    stopRegenPolling();
+    const sourceRes = await api.getRun(regen.sourceRunId).catch(() => null);
+    if (sourceRes?.run) {
+      state.activeRun = sourceRes.run;
+      state.runs = state.runs.map(item => item.id === regen.sourceRunId ? sourceRes.run : item);
+    }
+    await loadRunExtras(regen.sourceRunId);
+    renderDeliverables();
+    renderCenter();
+    renderQA();
+    renderExport();
+    renderEditPanel();
+    status.hidden = false;
+    if (child.status === 'completed') {
+      const deliverable = state.activeRun?.deliverables?.find(d => d.deliverable_id === state.edit.deliverableId);
+      const activated = Boolean(deliverable) && deliverable.active_version_id !== regen.beforeActiveId;
+      status.innerHTML = activated
+        ? '<div class="state-note ok">重生成完成：新图已通过检查并自动选用；旧版本保留在历史版本中。</div>'
+        : '<div class="state-note warn">重生成完成：新图未通过检查或待复核，已保留为历史版本，当前选用版本未变。</div>';
+    } else if (child.status === 'cancelled') {
+      status.innerHTML = '<div class="state-note warn">重生成已取消：预留额度已释放，未产生扣费。</div>';
+    } else {
+      status.innerHTML = `<div class="state-note danger">重生成未成功（${escapeHtml(runStatusLabel[child.status] ?? child.status)}）：按张预留已释放/未结算，可继续修改文字或再次重做。</div>`;
+    }
+    state.edit.regen = null;
+    updateApplyState();
+  } catch (error) {
+    console.warn('[workbench] 重生成轮询失败', error?.message ?? error);
+  }
+}
+
 // ---------- 创建/继续 run ----------
 async function handleStartOrContinue() {
   // 如果已有非终态 run，直接恢复 SSE 即可
@@ -702,6 +1230,7 @@ async function handleStartOrContinue() {
   }
   // 否则尝试创建新 run
   if (!state.project) { state.toast('没有项目'); return; }
+  closeEditMode();
   const spec = (state.specs || []).find(s => (s.validity?.validity ?? 'current') === 'current') ?? state.specs?.[0];
   if (!spec) { state.toast('请先在"生产配置"里冻结一个快照'); return; }
   const btn = $('#wb-btn-start');
@@ -817,6 +1346,12 @@ async function refreshRun(runId, { keepSSE = false } = {}) {
     renderQA();
     renderAdvanced();
     renderExport();
+    // 模块06：修改面板打开时同步缩略条/预览/历史版本（不重画文字层输入，避免清掉未应用的编辑）
+    if (state.edit.open) {
+      renderEditThumbs();
+      renderEditPreview();
+      renderEditVersions();
+    }
     if (runTerminal.has(state.activeRun.status)) {
       closeSSE();
       clearPolling();

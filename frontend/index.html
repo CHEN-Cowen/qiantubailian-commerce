@@ -219,6 +219,14 @@
 
       <section class="view" id="assets-view" data-view-panel="assets">
         <div class="page-heading compact"><div><p class="eyebrow">我的作品</p><h1>我的作品</h1><p class="heading-note">按商品与任务查看生成的图片、当前选用版本和质量检查结果；历史版本不会被覆盖。</p></div><button class="secondary" id="upload-button">↑ 上传素材</button></div>
+        <!-- 模块06：真实作品区。按商品/任务展示套图，标识选用、检查、交付与历史版本；演示样例区保留在下方但默认隐藏 -->
+        <section class="real-works" id="real-works" aria-live="polite">
+          <div class="real-head">
+            <div><h2>真实作品 · 按商品与任务</h2></div>
+            <span class="real-badge">选用 / 检查 / 交付 / 历史版本</span>
+          </div>
+          <div id="real-works-body"><p class="real-hint">正在读取真实作品…</p></div>
+        </section>
         <div class="asset-layout" hidden><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
       </section>
 
@@ -295,6 +303,7 @@
                 <button class="text-button" id="wb-version-activate" hidden>选为当前版本</button>
               </div>
               <div class="wb-toolbar-right">
+                <button class="text-button" id="wb-edit-open" hidden>✎ 修改此张</button>
                 <button class="text-button" id="wb-compare-toggle">↔ 原图对比</button>
               </div>
             </div>
@@ -376,6 +385,58 @@
               <div class="wb-export-history" id="wb-export-history"></div>
             </div>
           </aside>
+
+          <!-- 模块06：修改工作台。文字排版修改（免费）、前后对比、历史版本选用/恢复、指定图片重生成。
+               范围说明：仅此一张受影响；文字修改不重新调用生成模型。 -->
+          <section class="wb-edit" id="wb-edit-panel" hidden aria-label="修改工作台">
+            <div class="wb-edit-head">
+              <div>
+                <h2>修改工作台 · <span id="wb-edit-deliverable-label">—</span></h2>
+                <p class="real-note">仅此一张受影响：文字排版修改只重画这张图的文字层，其他交付物、任务与账本保持不变。</p>
+              </div>
+              <button class="secondary" id="wb-edit-close">退出修改</button>
+            </div>
+            <div class="wb-edit-thumbs" id="wb-edit-thumbs" aria-label="切换其他交付物"></div>
+            <div class="wb-edit-grid">
+              <div class="wb-edit-preview-col">
+                <figure class="wb-dual-item" id="wb-edit-preview">
+                  <figcaption id="wb-edit-preview-caption">当前选用版本</figcaption>
+                  <div class="wb-image-holder" id="wb-edit-preview-holder"><p class="real-hint">正在加载预览…</p></div>
+                </figure>
+                <div class="wb-edit-compare" id="wb-edit-compare" hidden>
+                  <div class="wb-section-title">前后对比 <span>修改前 / 修改后</span></div>
+                  <div class="wb-dual" id="wb-edit-compare-dual">
+                    <figure class="wb-dual-item">
+                      <figcaption id="wb-edit-before-caption">修改前</figcaption>
+                      <div class="wb-image-holder" id="wb-edit-before-holder"></div>
+                    </figure>
+                    <figure class="wb-dual-item">
+                      <figcaption id="wb-edit-after-caption">修改后</figcaption>
+                      <div class="wb-image-holder" id="wb-edit-after-holder"></div>
+                    </figure>
+                  </div>
+                  <p class="real-note">本次未重新调用生成模型，底图保持不变；只重画文字层并重新执行质量检查。</p>
+                </div>
+              </div>
+              <div class="wb-edit-side">
+                <div class="wb-section">
+                  <div class="wb-section-title">文字修改（免费）<span id="wb-edit-limits-note"></span></div>
+                  <div id="wb-edit-layers"><p class="real-hint">正在读取文字层…</p></div>
+                  <p class="form-error" id="wb-edit-error" role="alert"></p>
+                  <div class="wb-edit-regen-status" id="wb-edit-regen-status" hidden></div>
+                  <div class="wb-edit-actions">
+                    <button class="secondary" id="wb-regenerate" type="button">仅重做此张</button>
+                    <button class="primary" id="wb-edit-apply" type="button" disabled>应用修改（免费）</button>
+                  </div>
+                  <div id="wb-edit-result" hidden></div>
+                </div>
+                <div class="wb-section">
+                  <div class="wb-section-title">历史版本与选用<span id="wb-edit-version-count"></span></div>
+                  <div class="wb-edit-versions" id="wb-edit-versions"></div>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </section>
     </main>

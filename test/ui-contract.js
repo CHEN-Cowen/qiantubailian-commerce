@@ -187,3 +187,114 @@ test('M03-复用 qb:open-wizard 事件、复用入口、向导复用模式与不
   assert.ok(html.includes('id="wiz-reuse-title"'), 'index.html 缺少 #wiz-reuse-title');
   assert.ok(html.includes('id="wiz-reuse-note"'), 'index.html 缺少 #wiz-reuse-note');
 });
+
+// 模块06：修改工作台 + 我的作品页 + 全站一致性契约
+test('M06 修改工作台节点、api 客户端方法、范围与免费文案、历史版本与重生成接线', async () => {
+  const [html, workbench, api, workbenchCss] = await Promise.all([
+    read('index.html'), read('workbench.js'), read('api.js'), read('workbench.css'),
+  ]);
+  // 关键节点：文字修改面板容器、重生成按钮、前后对比容器、历史版本容器、缩略切换
+  for (const id of ['wb-edit-panel', 'wb-edit-layers', 'wb-edit-apply', 'wb-regenerate',
+    'wb-edit-compare', 'wb-edit-compare-dual', 'wb-edit-versions', 'wb-edit-thumbs',
+    'wb-edit-preview-holder', 'wb-edit-before-holder', 'wb-edit-after-holder']) {
+    assert.ok(html.includes(`id="${id}"`), `index.html 缺少修改工作台节点 #${id}`);
+  }
+  // api.js 新方法：text-layers / text-edits / regenerate（幂等键头）
+  assert.match(api, /listTextLayers/, 'api.js 缺少 listTextLayers');
+  assert.match(api, /applyTextEdits/, 'api.js 缺少 applyTextEdits');
+  assert.match(api, /regenerateDeliverable/, 'api.js 缺少 regenerateDeliverable');
+  assert.match(api, /text-layers/);
+  assert.match(api, /text-edits/);
+  assert.match(api, /\/regenerate/);
+  assert.match(api, /Idempotency-Key/, 'regenerate 必须携带 Idempotency-Key 头');
+  // 范围与免费文案（F2：仅此一张受影响；文字修改不重调生成模型）
+  assert.match(html, /仅此一张受影响/);
+  assert.match(html, /本次未重新调用生成模型/);
+  assert.match(html, /应用修改（免费）/);
+  assert.match(html, /仅重做此张/);
+  assert.match(workbench, /选用此版本/, '历史版本必须提供「选用此版本」恢复入口');
+  // workbench.js 关键函数：进入修改态、读层、应用、diff、历史版本、切换、重生成轮询
+  for (const fn of ['enterEditMode', 'closeEditMode', 'switchEditDeliverable', 'loadTextLayers',
+    'collectEdits', 'applyTextEditsSubmit', 'renderEditVersions', 'activateEditVersion',
+    'renderEditCompare', 'requestRegenerate', 'pollRegen']) {
+    assert.match(workbench, new RegExp(`function ${fn}\\(`), `workbench.js 缺少函数 ${fn}`);
+  }
+  // 接线到模块05 API 客户端
+  assert.match(workbench, /api\.listTextLayers\(/);
+  assert.match(workbench, /api\.applyTextEdits\(/);
+  assert.match(workbench, /api\.regenerateDeliverable\(/);
+  // 重生成确认提示必须包含按张结算/预计消耗说明
+  assert.match(workbench, /按张结算/);
+  assert.match(workbench, /预计消耗 1 点/);
+  // 检查结果如实渲染：blocked 不能画成绿色成功（DECISION_META 映射三种 decision）
+  assert.match(workbench, /publishable: \['检查通过', 'ok'\]/);
+  assert.match(workbench, /needs_review: \['待复核', 'warn'\]/);
+  assert.match(workbench, /blocked: \['检查未通过', 'bad'\]/);
+  // VERSION_CONFLICT 提供基于最新版本重试的路径
+  assert.match(workbench, /VERSION_CONFLICT/);
+  assert.match(workbench, /data-edit-retry/);
+  // 只读层标注：包装文字只读 + Logo 不可编辑
+  assert.match(workbench, /PACKAGING_TEXT_READONLY/);
+  assert.match(workbench, /LOGO_USES_ORIGINAL_PIXEL/);
+  // 历史版本行展示版本号、note、created_by、报告 decision
+  assert.match(workbench, /wb-version-row/);
+  assert.match(workbench, /CREATED_BY_LABEL/);
+  // 修改工作台样式与窄屏（≤760px）单列
+  assert.match(workbenchCss, /\.wb-edit-grid\s*\{[^}]*grid-template-columns/);
+  assert.match(workbenchCss, /@media \(max-width: 760px\)/);
+});
+
+test('M06 我的作品页：真实作品区、选用/检查/交付/历史版本标识、下载与水印标注', async () => {
+  const [html, realData, workbenchCss] = await Promise.all([
+    read('index.html'), read('real-data.js'), read('workbench.css'),
+  ]);
+  // 真实作品区容器与演示样例区并存（演示边界保留、真实区在上）
+  assert.ok(html.includes('id="real-works"'), 'index.html 缺少真实作品区 #real-works');
+  assert.ok(html.includes('id="real-works-body"'), 'index.html 缺少 #real-works-body');
+  assert.ok(html.includes('class="asset-layout" hidden'), '演示样例区 .asset-layout 应保持 hidden');
+  // 数据源：按项目列任务 + 版本 + 报告 + 导出，单张下载走 downloadExportUrl
+  assert.match(realData, /api\.listRunsByProject\(/);
+  assert.match(realData, /api\.listRunVersions\(/);
+  assert.match(realData, /api\.listQualityReports\(/);
+  assert.match(realData, /api\.downloadExportUrl\(/);
+  // 标识类名：套图卡片、标识条（选用/检查/交付/历史版本数）
+  for (const cls of ['real-work-group', 'real-work-shots', 'real-shot', 'real-shot-tags']) {
+    assert.match(realData, new RegExp(cls), `real-data.js 缺少作品页标识 ${cls}`);
+  }
+  assert.match(realData, /wb-chip ok">选用</);
+  assert.match(realData, /已交付/);
+  assert.match(realData, /个版本/);
+  // 未结算/待复核的预览如实标注水印
+  assert.match(realData, /未结算\/待复核，预览带水印/);
+  // 每任务最多展示近期 1 个 run，其余可展开
+  assert.match(realData, /默认只展示最近一次/);
+  // 空状态可直接开始 + 错误带重试
+  assert.match(realData, /data-works-start/);
+  assert.match(realData, /data-works-retry/);
+  assert.match(realData, /renderRealWorks/);
+  // 作品页单列（≤760px）与卡片样式
+  assert.match(workbenchCss, /\.real-work-shots/);
+  assert.match(workbenchCss, /repeat\(2, minmax\(0, 1fr\)\)/);
+});
+
+test('M06 一致性：状态组件、长内容省略与断链清扫', async () => {
+  const [style, html, workbench, realData, workbenchCss] = await Promise.all([
+    read('style.css'), read('index.html'), read('workbench.js'), read('real-data.js'), read('workbench.css'),
+  ]);
+  // 模块01 状态组件被复用（style.css 定义 + workbench/real-data 使用）
+  assert.match(style, /\.state-note/);
+  assert.match(style, /\.loading-line/);
+  assert.match(style, /\.empty-state/);
+  assert.match(workbench, /state-note danger/);
+  assert.match(workbench, /loading-line/);
+  assert.match(realData, /empty-state/);
+  // 长内容 ellipsis + title（缩略条、版本行、作品卡）
+  assert.match(workbenchCss, /text-overflow: ellipsis/);
+  // 演示边界文案仍在（r06 契约不被清扫误伤）
+  assert.match(html, /演示项目 · 刷新重置/);
+  assert.match(html, /真实模型生成样例/);
+  // workbench 保留 r05 断言的关键 DOM id 与函数
+  for (const id of ['wb-deliverables', 'wb-canvas', 'wb-qa-checks', 'wb-event-log', 'wb-export-complete']) {
+    assert.ok(html.includes(`id="${id}"`), `r05 关键节点 #${id} 被误删`);
+  }
+});

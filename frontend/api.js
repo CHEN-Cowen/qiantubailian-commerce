@@ -203,6 +203,21 @@ export const api = {
     return call(`/api/billing/orders${suffix}`);
   },
   cancelBillingOrder: orderId => call(`/api/billing/orders/${encodeURIComponent(orderId)}/cancel`, { method: 'POST' }),
+  // M13 / 模块 05：修改工作台（文字排版修改 + 指定图片重生成）
+  /** 只读预览：当前选用版本的可编辑文字层与安全边界（run:read）。 */
+  listTextLayers: (runId, deliverableId) => call(
+    `/api/runs/${encodeURIComponent(runId)}/deliverables/${encodeURIComponent(deliverableId)}/text-layers`),
+  /** 免费文字排版修改：成功返回 {version, previous_version_id, report, issues, activated}。 */
+  applyTextEdits: (runId, deliverableId, body) => call(
+    `/api/runs/${encodeURIComponent(runId)}/deliverables/${encodeURIComponent(deliverableId)}/text-edits`,
+    { method: 'POST', json: body }),
+  /**
+   * 指定图片重生成：必须带 Idempotency-Key（重复点击/刷新不会重复扣费）。
+   * 返回 {run, source_run_id}，run 为子任务，需轮询到终态。
+   */
+  regenerateDeliverable: (runId, body, idempotencyKey) => call(
+    `/api/runs/${encodeURIComponent(runId)}/regenerate`,
+    { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, json: body }),
   // R05 追加：listGenerationRecords / reconcileRun
   /**
    * 下载导出包：走同源直接打开即可，后端已经设置 attachment。
