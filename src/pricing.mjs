@@ -57,10 +57,15 @@ export function quoteFromSpec({
   at = new Date(),
   finishedImages = false,
   includeOptional = false,
+  // 指定图片重生成只对单张报价：交付清单收窄到这一项，避免顺带重做其它图片
+  onlyDeliverableIds = null,
 } = {}) {
   if (!spec || typeof spec !== 'object') throw new Error('报价需要已冻结的 spec');
+  const onlyIds = Array.isArray(onlyDeliverableIds) && onlyDeliverableIds.length > 0
+    ? new Set(onlyDeliverableIds.map(String)) : null;
   const deliverables = (Array.isArray(spec.deliverables) ? spec.deliverables : [])
-    .filter(item => !finishedImages || includeOptional || item.required);
+    .filter(item => !finishedImages || includeOptional || item.required)
+    .filter(item => !onlyIds || onlyIds.has(item.id));
   if (deliverables.length === 0) throw new Error('交付清单为空，无法报价');
 
   const lines = deliverables.map(item => ({

@@ -230,7 +230,7 @@ export function createJobs({
   }
 
   // ---------- 创建任务：先预留，再入队 ----------
-  async function createRun({ ctx, run, project, spec, quote, idempotencyKey, scenario = 'success', fingerprint = null }) {
+  async function createRun({ ctx, run, project, spec, quote, idempotencyKey, scenario = 'success', fingerprint = null, regeneration = null }) {
     const existing = await store.read(data => Object.values(data.runs ?? {})
       .find(item => item.tenant_id === ctx.tenantId && item.idempotency_key === idempotencyKey) ?? null);
     if (existing) {
@@ -290,6 +290,56 @@ export function createJobs({
             '该 Idempotency-Key 已用于另一份不同的请求，请更换后再提交', { run_id: duplicated.id });
         }
         return { run: duplicated, replayed: true };
+      }
+
+      // M13（模块 05）：指定图片重生成。所有校验都在同一原子块内完成，
+      // 与"登记进源 run.regenerations"一起提交，避免并发请求绕过互斥。
+      let regenerationRequest = null;
+      if (regeneration) {
+        if (!regeneration.source_run_id || !regeneration.deliverable_id) {
+          throw new ApiError(422, 'REGENERATION_INVALID', '重生成请求缺少源任务或交付物');
+        }
+        const sourceRun = Object.values(data.runs ?? {})
+          .find(item => item.tenant_id === ctx.tenantId && item.id === regeneration.source_run_id);
+        if (!sourceRun) throw new ApiError(404, 'NOT_FOUND', '源任务不存在');
+        if (sourceRun.status !== 'completed') {
+          throw new ApiError(409, 'RUN_NOT_TERMINAL', '源任务尚未完成，不能对其做指定图片重生成');
+        }
+        if (sourceRun.billing_mode !== 'finished_image') {
+          throw new ApiError(409, 'REGENERATION_UNSUPPORTED',
+            '该任务按旧计价方式生成，没有可复用的底图与检查链路，不支持指定图片重生成');
+        }
+        const sourceDeliverable = sourceRun.deliverables.find(item => item.deliverable_id === regeneration.deliverable_id);
+        if (!sourceDeliverable) throw new ApiError(404, 'NOT_FOUND', '源任务中不存在该交付物');
+        const sourceVersionId = regeneration.source_version_id ?? sourceDeliverable.active_version_id;
+        const sourceVersion = sourceRun.versions.find(item =>
+          item.id === sourceVersionId && item.deliverable_id === regeneration.deliverable_id);
+        if (!sourceVersion) {
+          throw new ApiError(404, 'NOT_FOUND', '指定的源版本不存在或不属于该交付物');
+        }
+        if (quote.billing_mode !== 'finished_image' || quote.lines.length !== 1
+          || quote.lines[0].deliverable_id !== regeneration.deliverable_id) {
+          throw new ApiError(409, 'REGENERATION_QUOTE_MISMATCH',
+            '重生成必须使用仅含该交付物的单张成品报价，请重新发起');
+        }
+        if (quote.spec_ref?.version !== sourceRun.spec_ref?.version
+          || quote.spec_ref?.content_hash !== sourceRun.spec_ref?.content_hash) {
+          throw new ApiError(409, 'REGENERATION_QUOTE_MISMATCH',
+            '报价依据的冻结快照与源任务不一致，不能用于重生成');
+        }
+        const inFlight = (sourceRun.regenerations ?? []).some(item =>
+          item.deliverable_id === regeneration.deliverable_id
+          && !TERMINAL_STATES.has(data.runs[item.run_id]?.status));
+        if (inFlight) {
+          throw new ApiError(409, 'REGENERATION_IN_PROGRESS',
+            '该交付物已有进行中的重生成请求，请等待完成后再试');
+        }
+        regenerationRequest = {
+          source_run_id: sourceRun.id,
+          deliverable_id: regeneration.deliverable_id,
+          source_version_id: sourceVersion.id,
+          quote_id: quote.quote_id,
+        };
       }
 
       const reserve = appendEntry(data, {
@@ -443,6 +493,7 @@ export function createJobs({
         versions: [],
         // M13：指定图片重生成。每次请求单独预留一份额度，成功才结算，其它交付物不受影响
         regenerations: [],
+        regeneration_request: regenerationRequest,
         regeneration: { reserved_credits: 0, captured_credits: 0, released_credits: 0 },
         // M08：自动修订受轮数、预算与"连续无改善"三重限制，绝不自动扩大预算
         revision: {
@@ -463,6 +514,26 @@ export function createJobs({
         pending_confirmation: null,
       };
       data.runs[run.id] = record;
+      if (regenerationRequest) {
+        // 单张重生成：预留与主任务同结构（reserve 上限 → 终态/复核收口），记账独立成字段
+        record.regeneration.reserved_credits = quote.max_credits;
+        const sourceRun = data.runs[regenerationRequest.source_run_id];
+        sourceRun.regenerations.push({
+          run_id: record.id,
+          deliverable_id: regenerationRequest.deliverable_id,
+          status: 'queued',
+          created_at: record.created_at,
+        });
+        pushEvent(data, sourceRun, {
+          stage: 'queued', status: 'regeneration_requested', at: clock(),
+          payload: {
+            child_run_id: record.id,
+            deliverable_id: regenerationRequest.deliverable_id,
+            source_version_id: regenerationRequest.source_version_id,
+            quote_id: quote.quote_id,
+          },
+        });
+      }
       pushEvent(data, record, { stage: 'budget_reserved', status: 'reserved', at: clock(), payload: { amount: quote.max_credits, balance: balanceOf(data, ctx.tenantId, { initialCredits }) } });
       pushEvent(data, record, { stage: 'queued', status: 'queued', at: clock(), payload: { max_attempts: quote.max_attempts } });
       return { run: structuredClone(record), replayed: false, events: eventsOf(data, record.id) };
@@ -970,7 +1041,79 @@ export function createJobs({
         run.revision.stop_reason = 'no_improvement';
       }
     }
+    // M13（模块 05）：指定图片重生成的产物登记回源任务。
+    // sourceVersion 用子 run 刚生成的版本（hash/attempt/文字层都是新图的），
+    // 报告的 asset_version 与 adopted 版本因此哈希一致，validity 判 current 不被 run 维度卡住。
+    if (run.regeneration_request) {
+      adoptRegenerationResult(data, run, { version, report, events, at });
+    }
     refreshRunQuality(data, run);
+  }
+
+  /**
+   * 把重生成结果 adopt 回源任务：只动源 run 中该交付物的版本链，
+   * 其他交付物的版本、文件、选用状态一律不碰（验收硬项）。
+   * publishable 才自动选用；needs_review/blocked 只登记历史（note 注明待人工确认），
+   * 等人工在源任务用 activateVersion 选用——未通过的修改不能被自动放行。
+   */
+  function adoptRegenerationResult(data, run, { version, report, events, at }) {
+    const request = run.regeneration_request;
+    const sourceRun = data.runs?.[request.source_run_id];
+    if (!sourceRun || sourceRun.tenant_id !== run.tenant_id) {
+      events.push(pushEvent(data, run, {
+        stage: 'revision', status: 'regeneration_adopt_failed', at,
+        payload: { reason: 'SOURCE_RUN_MISSING', source_run_id: request.source_run_id },
+      }));
+      return null;
+    }
+    const sourceDeliverable = sourceRun.deliverables.find(item => item.deliverable_id === request.deliverable_id);
+    if (!sourceDeliverable) {
+      events.push(pushEvent(data, run, {
+        stage: 'revision', status: 'regeneration_adopt_failed', at,
+        payload: { reason: 'SOURCE_DELIVERABLE_MISSING', deliverable_id: request.deliverable_id },
+      }));
+      return null;
+    }
+    const publishable = report.decision === 'publishable';
+    const adopted = adoptVersionRecord({
+      sourceRun,
+      sourceDeliverable,
+      sourceVersion: version,
+      report,
+      active: publishable,
+      note: publishable ? '指定图片重生成' : '指定图片重生成（待人工确认）',
+      at,
+    });
+    if (publishable) {
+      for (const previous of sourceRun.versions) {
+        if (previous.deliverable_id !== adopted.deliverable_id || !previous.active) continue;
+        previous.active = false;
+        previous.superseded_at = adopted.created_at;
+      }
+      sourceDeliverable.active_version_id = adopted.id;
+    }
+    sourceRun.versions.push(adopted);
+    refreshRunQuality(data, sourceRun);
+    // 源任务侧登记：这条重生成已到终态（publishable/needs_review），模块 05 的互斥看这个状态
+    const registration = (sourceRun.regenerations ?? []).find(item => item.run_id === run.id);
+    if (registration) {
+      registration.status = report.decision;
+      registration.adopted_version_id = adopted.id;
+      registration.completed_at = new Date(at).toISOString();
+    }
+    events.push(pushEvent(data, sourceRun, {
+      stage: 'revision', status: 'regeneration_adopted', at,
+      payload: {
+        child_run_id: run.id,
+        deliverable_id: adopted.deliverable_id,
+        version_id: adopted.id,
+        report_id: report.id,
+        decision: report.decision,
+        activated: publishable,
+        quality_status: sourceRun.quality_status,
+      },
+    }));
+    return adopted;
   }
 
   // ---------- M07：生成后 Commerce QA 与人工复核 ----------
@@ -1305,6 +1448,9 @@ export function createJobs({
 
   function settleFinishedImages(data, run, at, cancel = false) {
     if (run.billing_mode !== 'finished_image') return;
+    // M13（模块 05）：重生成子任务复用同一条结算路径，只换幂等键——
+    // 终态释放、待复核冻结、复核后收口全部与主任务语义一致，绝不走双路径。
+    const isRegeneration = Boolean(run.regeneration_request);
     for (const item of run.deliverables) {
       if (item.entitlement_settled) continue;
       const version = run.versions.find(v => v.active && v.deliverable_id === item.deliverable_id);
@@ -1313,9 +1459,19 @@ export function createJobs({
       if (!cancel && report?.decision === 'needs_review') continue;
       const type = !cancel && report?.decision === 'publishable' ? 'capture' : 'release';
       const result = appendEntry(data, { type, amount: 1, tenantId: run.tenant_id, jobId: run.id,
-        uniqueOperationKey: `finished-image:${run.id}:${item.deliverable_id}`,
-        actor: 'system', initialCredits, at, memo: type === 'capture' ? '成品交付，仅结算一次' : '未交付，释放成品额度' });
-      if (result.applied) run.budget[type === 'capture' ? 'captured_credits' : 'released_credits'] += 1;
+        uniqueOperationKey: isRegeneration
+          ? `regen:${run.id}:${item.deliverable_id}`
+          : `finished-image:${run.id}:${item.deliverable_id}`,
+        actor: 'system', initialCredits, at,
+        memo: type === 'capture'
+          ? (isRegeneration ? '重生成交付，仅结算一次' : '成品交付，仅结算一次')
+          : (isRegeneration ? '重生成未交付，释放重生成额度' : '未交付，释放成品额度') });
+      if (result.applied) {
+        run.budget[type === 'capture' ? 'captured_credits' : 'released_credits'] += 1;
+        if (isRegeneration) {
+          run.regeneration[type === 'capture' ? 'captured_credits' : 'released_credits'] += 1;
+        }
+      }
       item.entitlement_settled = type;
     }
   }

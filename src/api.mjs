@@ -282,6 +282,7 @@ export function createApi({
         return textEditRoute(ctx, req, rest[1], rest[3], send);
       }
       if (rest.length !== 3) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+      if (rest[2] === 'regenerate') { requireMethod(method, ['POST']); return regenerateRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'cancel') { requireMethod(method, ['POST']); return cancelRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'budget-confirmation') { requireMethod(method, ['POST']); return confirmBudgetRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'reconcile') { requireMethod(method, ['POST']); return reconcileRunRoute(ctx, req, rest[1], send); }
@@ -698,6 +699,7 @@ export function createApi({
       case 'quotes': return write ? 'quote:create' : 'quote:read';
       case 'runs': {
         if (second === undefined) return write ? 'run:create' : 'run:read';
+        if (third === 'regenerate') return write ? 'run:create' : 'run:read';
         if (third === 'cancel') return 'run:cancel';
         if (third === 'budget-confirmation') return 'run:budget';
         if (third === 'reconcile') return 'run:reconcile';
@@ -1917,6 +1919,80 @@ export function createApi({
   function listRunsRoute(ctx, query, send) {
     const projectId = String(query?.get('project_id') ?? '').trim() || null;
     return jobs.listRuns(ctx, projectId).then(result => send(200, result));
+  }
+
+  // M13（模块 05）：指定图片重生成。服务端从源 run 恢复冻结 spec 并自算单张报价，
+  // 客户端不需要（也不允许）先建报价；required 与 optional 交付物都可重生成。
+  async function regenerateRunRoute(ctx, req, runId, send) {
+    const body = await readJson(req);
+    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+    if (idempotencyKey === '') {
+      throw new ApiError(400, 'MISSING_IDEMPOTENCY_KEY', '重生成必须带 Idempotency-Key，避免重复提交产生重复费用');
+    }
+    const deliverableId = String(body?.deliverable_id ?? '').trim();
+    if (deliverableId === '') {
+      throw new ApiError(422, 'DELIVERABLE_REQUIRED', '必须指定要重生成的交付物');
+    }
+    const sourceVersionId = typeof body?.source_version_id === 'string' && body.source_version_id.trim() !== ''
+      ? body.source_version_id.trim() : null;
+    const prepared = await store.read(data => {
+      const sourceRun = Object.values(data.runs ?? {})
+        .find(item => item.tenant_id === ctx.tenantId && item.id === runId);
+      if (!sourceRun) throw new ApiError(404, 'NOT_FOUND', '源任务不存在');
+      const project = data.projects?.[sourceRun.project_id];
+      if (!project || project.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '源任务所属项目不存在');
+      if (!sourceRun.deliverables.some(item => item.deliverable_id === deliverableId)) {
+        throw new ApiError(404, 'NOT_FOUND', '源任务中不存在该交付物');
+      }
+      // 用源任务创建时冻结的 spec 版本，配置不会漂移
+      const spec = resolveSpecRecord(data, project.id, sourceRun.spec_ref?.version);
+      let quote;
+      try {
+        quote = quoteFromSpec({
+          spec,
+          finishedImages: true,
+          includeOptional: true,
+          onlyDeliverableIds: [deliverableId],
+          at: new Date(clock()),
+        });
+      } catch (error) {
+        throw new ApiError(404, 'NOT_FOUND', `该交付物无法单独计价：${error.message}`);
+      }
+      return { project, spec, quote };
+    });
+
+    const childRunId = newId('run');
+    const createdAt = new Date(clock()).toISOString();
+    const scenario = 'success';
+    const created = await jobs.createRun({
+      ctx,
+      run: { id: childRunId, created_at: createdAt },
+      project: prepared.project,
+      spec: prepared.spec,
+      quote: prepared.quote,
+      idempotencyKey,
+      scenario,
+      fingerprint: fingerprintOf({
+        kind: 'regeneration',
+        source_run_id: runId,
+        deliverable_id: deliverableId,
+        source_version_id: sourceVersionId,
+        spec_version: prepared.spec.version,
+        scenario,
+      }),
+      regeneration: {
+        source_run_id: runId,
+        deliverable_id: deliverableId,
+        source_version_id: sourceVersionId,
+      },
+    });
+    send(created.replayed ? 200 : 201, {
+      run: created.run,
+      replayed: created.replayed,
+      source_run_id: runId,
+      quote_id: prepared.quote.quote_id,
+      balance: await store.read(data => balanceOf(data, ctx.tenantId, { initialCredits })),
+    });
   }
 
   async function cancelRunRoute(ctx, req, runId, send) {

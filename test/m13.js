@@ -39,20 +39,22 @@ function createSizeFixture() {
     estimate: () => ({ estimated_credits: 1, max_credits: 1 }),
     submit(request) {
       submitCount += 1;
-      calls.set(request.idempotency_key, request);
+      calls.set(request.idempotency_key, { request, seed: submitCount });
       return { provider_job_id: request.idempotency_key, status: 'queued' };
     },
     poll(handle) {
-      const request = calls.get(handle.provider_job_id);
+      const entry = calls.get(handle.provider_job_id);
+      const request = entry?.request;
+      const seed = entry?.seed ?? 0;
       const width = request?.target_width ?? 1024;
       const height = request?.target_height ?? 1024;
       const rgb = Buffer.alloc(width * height * 3);
       for (let y = 0; y < height; y += 1) {
         for (let x = 0; x < width; x += 1) {
           const index = (y * width + x) * 3;
-          rgb[index] = (x * 3 + y * 2) % 256;
-          rgb[index + 1] = (y * 5 + x) % 256;
-          rgb[index + 2] = (x * 7 + y * 3) % 256;
+          rgb[index] = (x * 3 + y * 2 + seed * 17) % 256;
+          rgb[index + 1] = (y * 5 + x + seed * 29) % 256;
+          rgb[index + 2] = (x * 7 + y * 3 + seed * 53) % 256;
         }
       }
       const bytes = encodeRgbPng(width, height, rgb);
@@ -157,7 +159,7 @@ async function setupSession(t, options = {}) {
   });
   assert.equal(registered.status, 201, JSON.stringify(registered.json));
   return {
-    port, req,
+    port, req, dir,
     snapshot: async () => JSON.parse(await readFile(`${dir}/data.json`, 'utf8')),
     loginAs: async ({ email, password }) => {
       const loggedIn = await req('/api/auth/login', { method: 'POST', body: { email, password } });
@@ -703,5 +705,8 @@ test('M13 legacy 版本：演示计价产物没有文字层，修改被明确拒
   assert.equal(crossEdit.status, 404);
 });
 
-// 供临时探针脚本复用（测试文件本身不导入）
-export { createSizeFixture, setupSession, startFinishedRun, waitTerminal };
+// 供 m14（模块 05）复用的脚手架
+export {
+  createSizeFixture, createDemoFixture, setupSession, startFinishedRun, waitTerminal,
+  setupDemo, demoRequest, as, DEMO_TENANTS,
+};
