@@ -573,8 +573,10 @@ test('M03 前端接线：真实数据脚本引用的元素存在、白名单同�
   const html = await readFile(new URL('../frontend/index.html', import.meta.url), 'utf8');
   const realData = await readFile(new URL('../frontend/real-data.js', import.meta.url), 'utf8');
   const app = await readFile(new URL('../frontend/app.js', import.meta.url), 'utf8');
+  // 模块02：project-dialog 已由 create 向导视图取代，旧弹窗 ID 从 requiredIds 移除；
+  // 断言语义不变：real-data.js 引用的元素必须真实存在于 index.html。
   const requiredIds = [
-    'real-list', 'project-dialog', 'project-dialog-title', 'project-form', 'project-error', 'project-submit',
+    'real-list',
     'upload-dialog', 'upload-form', 'upload-project', 'upload-role', 'upload-file', 'upload-error',
     'upload-result', 'upload-replace', 'upload-submit', 'truth-dialog', 'truth-title', 'truth-body',
   ];

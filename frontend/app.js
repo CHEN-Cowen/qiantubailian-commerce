@@ -203,8 +203,14 @@ document.addEventListener('keydown', event => {
 function restoreRoute() {
   const route = location.hash.slice(1) || new URL(location.href).searchParams.get('view') || 'home';
   if (route === 'project') setView('projects');
-  else setView(['home', 'projects', 'assets', 'library'].includes(route) ? route : 'home');
+  else setView(['home', 'projects', 'create', 'assets', 'library'].includes(route) ? route : 'home');
 }
 window.addEventListener('hashchange', restoreRoute);
 restoreRoute();
 initRealData({ toast });
+
+// 模块02：新建项目入口统一切换到「一页三步向导」视图（create），不再打开旧 project-dialog
+function openCreateWizard() { setView('create'); }
+$$('.js-new-project').forEach(button => button.addEventListener('click', openCreateWizard));
+$('#projects-new')?.addEventListener('click', openCreateWizard);
+$('#import-button')?.addEventListener('click', openCreateWizard);

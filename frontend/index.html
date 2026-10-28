@@ -108,6 +108,110 @@
         <p class="sample-note">封面与素材图片为真实模型生成样例</p>
       </section>
 
+      <!-- 模块02：首次制作一页三步向导（上传商品 → 确认必要信息 → 风格与交付），取代旧 project-dialog 弹窗 -->
+      <section class="view" id="create-view" data-view-panel="create" hidden>
+        <div class="page-heading compact">
+          <div><p class="eyebrow">首次制作</p><h1>三步开始制作</h1><p class="heading-note">上传商品 → 确认必要信息 → 风格与交付；费用在生成前用真实报价说明，不硬编码。</p></div>
+          <button class="secondary" id="wiz-exit">返回</button>
+        </div>
+        <ol class="wiz-steps" id="wiz-steps" aria-label="制作步骤">
+          <li><button type="button" class="wiz-step is-current" data-wiz-goto="1" aria-current="step"><i>1</i><span>上传商品</span></button></li>
+          <li><button type="button" class="wiz-step" data-wiz-goto="2"><i>2</i><span>确认必要信息</span></button></li>
+          <li><button type="button" class="wiz-step" data-wiz-goto="3"><i>3</i><span>风格与交付</span></button></li>
+        </ol>
+        <div class="wiz-resume" id="wiz-resume" hidden>
+          <p><b>检测到上次未完成的向导草稿。</b><span id="wiz-resume-note"></span></p>
+          <div class="wiz-resume-actions">
+            <button class="primary" id="wiz-resume-continue">继续上次</button>
+            <button class="secondary" id="wiz-resume-restart">重新开始</button>
+          </div>
+        </div>
+
+        <!-- 第 1 步 上传商品 -->
+        <section class="wiz-panel" data-wiz-panel="1">
+          <div class="wiz-drop" id="wiz-drop" role="button" tabindex="0" aria-label="拖拽或点击选择商品图片（JPEG / PNG / WebP）">
+            <b>拖拽商品图到这里，或点击选择文件</b>
+            <span>支持 JPEG / PNG / WebP；文件格式、大小与解码限制以服务端实际校验为准</span>
+            <input type="file" id="wiz-file" accept="image/jpeg,image/png,image/webp" hidden>
+          </div>
+          <label class="wiz-field">商品名称<input id="wiz-name" maxlength="80" placeholder="例如：月光舒缓面霜（默认取文件名，可编辑）"></label>
+          <div class="wiz-preview" id="wiz-preview" hidden>
+            <figure class="wiz-preview-thumb"><img id="wiz-preview-img" alt="商品图浏览器预览（尚未上传）"></figure>
+            <div class="wiz-preview-body">
+              <p class="state-note warn">浏览器预览（尚未保存到服务端）· 刷新或关闭页面后不可恢复，保存结果以下方服务端返回为准。</p>
+              <p class="wiz-upload-status" id="wiz-upload-status" hidden></p>
+              <div id="wiz-upload-result" hidden></div>
+              <p class="form-error" id="wiz-upload-error" role="alert"></p>
+              <div class="wiz-upload-retry" id="wiz-upload-retry" hidden>
+                <button class="secondary" id="wiz-retry-replace">替换已有主体素材并上传</button>
+                <button class="secondary" id="wiz-retry-change">换一张文件</button>
+              </div>
+            </div>
+          </div>
+          <div class="wiz-actions">
+            <span class="wiz-hint" id="wiz-step1-hint">选择文件后会自动创建项目草稿并上传，SKU 使用 AUTO- 内部标识，不会伪造商品事实。</span>
+            <button class="primary" id="wiz-next-1" disabled>下一步：确认必要信息</button>
+          </div>
+        </section>
+
+        <!-- 第 2 步 确认必要信息 -->
+        <section class="wiz-panel" data-wiz-panel="2" hidden>
+          <p class="state-note" id="wiz-ocr-note">正在读取文字识别结果…</p>
+          <div class="wiz-form-grid">
+            <label class="wiz-field">商品名称（已随项目草稿保存）<input id="wiz-truth-name" disabled></label>
+          </div>
+          <p class="truth-hint">关键项必须勾选「已确认」才能确认版本；OCR 候选一律待确认，不能凭猜写入容量、尺寸、材质、成分、功效或品牌。卖点仅作信息说明，不会自动写入商品事实。</p>
+          <div class="fact-head"><span>标记</span><span>事实项</span><span>值</span><span>来源</span><span>确认</span><span></span></div>
+          <div id="wiz-facts"></div>
+          <button type="button" class="text-button" id="wiz-add-fact">＋ 添加事实项</button>
+          <label class="wiz-field">卖点（可选 · 仅作信息展示说明，不写入商品事实）<textarea id="wiz-selling-points" rows="2" placeholder="例如：舒缓、维稳屏障；若要作为事实请在上方添加事实行"></textarea></label>
+          <section class="wiz-readiness" id="wiz-readiness" hidden></section>
+          <p class="form-error" id="wiz-truth-error" role="alert"></p>
+          <div class="wiz-actions">
+            <button class="secondary" id="wiz-back-2">返回上传</button>
+            <span class="wiz-actions-main">
+              <button class="secondary" id="wiz-continue-anyway" hidden>仍要继续选择交付</button>
+              <button class="primary" id="wiz-confirm-truth">确认并继续</button>
+            </span>
+          </div>
+        </section>
+
+        <!-- 第 3 步 风格与交付 + 真实报价 + 生成 -->
+        <section class="wiz-panel" data-wiz-panel="3" hidden>
+          <h3 class="wiz-section-title">推荐风格 <span>单选一个模板</span></h3>
+          <div class="wiz-templates" id="wiz-templates"></div>
+          <details class="wiz-more"><summary>更多模板</summary><div class="wiz-templates" id="wiz-templates-more"></div></details>
+          <div class="wiz-row">
+            <label class="wiz-field">品牌配方<select id="wiz-brand"><option value="">不使用品牌套件</option></select></label>
+            <span class="wiz-hint">无品牌也可以直接开始，不强制先建品牌库。</span>
+          </div>
+          <div id="wiz-delivery"></div>
+          <div id="wiz-spec-notes"></div>
+          <details class="wiz-advanced"><summary>高级设置 · 平台、文字排版与主体框</summary>
+            <label class="wiz-field">目标平台<input id="wiz-platform" maxlength="40" placeholder="例如：天猫（可留空）"></label>
+            <label class="wiz-check"><input type="checkbox" id="wiz-custom-layout"> 使用自定义文字排版</label>
+            <div class="wiz-row wiz-row-4">
+              <label>距左侧（%）<input id="wiz-text-x" type="number" min="0" max="95" value="8"></label>
+              <label>首行距顶部（%）<input id="wiz-text-y" type="number" min="0" max="95" value="75"></label>
+              <label>文字区宽度（%）<input id="wiz-text-width" type="number" min="5" max="100" value="84"></label>
+              <label>字号占短边（%）<input id="wiz-text-size" type="number" min="1" max="20" value="4"></label>
+            </div>
+            <div class="wiz-row"><button type="button" class="text-button" id="wiz-subject-link">调整商品主体框 → 前往项目工作台</button></div>
+          </details>
+          <section class="wiz-quote" id="wiz-quote" hidden></section>
+          <p class="form-error" id="wiz-generate-error" role="alert"></p>
+          <div class="wiz-actions">
+            <button class="secondary" id="wiz-back-3">返回确认信息</button>
+            <button class="primary" id="wiz-generate" disabled>生成</button>
+          </div>
+          <section class="wiz-done" id="wiz-done" hidden>
+            <p><b>任务已提交。</b><span id="wiz-done-note"></span></p>
+            <p class="real-note">真实进度以工作台任务状态与事件流为准，这里不虚构进度百分比。</p>
+            <button class="primary" id="wiz-open-workbench">打开工作台查看 →</button>
+          </section>
+        </section>
+      </section>
+
       <section class="view" id="assets-view" data-view-panel="assets">
         <div class="page-heading compact"><div><p class="eyebrow">我的作品</p><h1>我的作品</h1><p class="heading-note">按商品与任务查看生成的图片、当前选用版本和质量检查结果；历史版本不会被覆盖。</p></div><button class="secondary" id="upload-button">↑ 上传素材</button></div>
         <div class="asset-layout" hidden><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
@@ -274,7 +378,6 @@
 
   <aside class="drawer" id="professional-drawer" aria-hidden="true"><div class="drawer-backdrop" data-close-drawer></div><div class="drawer-panel"><div class="drawer-header"><div><p class="eyebrow">专业模式</p><h2>生成记录与费用</h2></div><button class="icon-button" data-close-drawer aria-label="关闭专业模式">×</button></div><div class="drawer-tabs"><button class="selected">生成记录</button><button>Prompt</button><button>模型参数</button></div><div class="drawer-content"><div class="drawer-notice"><span>i</span><p>专业参数仅供查看。手动修改后会创建新版本，并重新执行完整质量检查。</p></div><div class="record"><div class="record-top"><b>第 1 轮生成</b><span>已完成</span></div><div class="record-grid"><span>模型</span><b>Seedream · 演示适配器</b><span>消耗</span><b>8 额度</b><span>耗时</span><b>42 秒</b><span>质量状态</span><b class="review-text">待复核</b></div></div><div class="record"><div class="record-top"><b>Prompt 快照</b><button class="tiny-link">复制</button></div><p class="prompt-preview">象牙白护肤霜罐置于晨间窗边，保留包装文字与主体形态，柔和自然光，浅色石材台面，绿叶点缀，留出右侧文案空间。</p></div><div class="cost-summary"><span>本次任务累计</span><strong>8 <small>额度</small></strong><p>演示数据 · 未产生真实费用</p></div></div></div></aside>
   <div class="toast" id="toast" role="status"></div>
-  <dialog id="project-dialog" class="real-dialog" aria-labelledby="project-dialog-title"><button class="dialog-close" data-close-dialog="project-dialog" aria-label="关闭">×</button><p class="eyebrow">新建</p><h2 id="project-dialog-title">创建商品项目</h2><p class="real-note">项目会自动保存；SKU 重复会被拒绝且不覆盖原项目。</p><form id="project-form" class="real-form"><label>商品名称<input name="name" required maxlength="80" placeholder="例如：月光舒缓面霜"></label><label>SKU<input name="sku" required maxlength="64" placeholder="例如：MC-50"></label><label>品类<input name="category" required maxlength="40" placeholder="例如：面霜"></label><label>目标平台（可选）<input name="platform" maxlength="40" placeholder="例如：天猫旗舰店"></label><p class="form-error" id="project-error" role="alert"></p><div class="real-actions"><button type="button" class="secondary" data-close-dialog="project-dialog">取消</button><button type="submit" class="primary" id="project-submit">创建项目</button></div></form></dialog>
   <dialog id="upload-dialog" class="real-dialog" aria-labelledby="upload-dialog-title"><button class="dialog-close" data-close-dialog="upload-dialog" aria-label="关闭">×</button><p class="eyebrow">上传素材</p><h2 id="upload-dialog-title">上传真实商品素材</h2><p class="real-note">服务端校验真实文件类型、体积、哈希与项目归属；每个项目最多 6 张生效素材。</p><form id="upload-form" class="real-form"><label>归属项目<select id="upload-project" aria-label="归属项目"></select></label><label>参考职责<select id="upload-role" aria-label="参考职责"><option value="subject">主体（可作为事实来源）</option><option value="packaging">包装（可作为事实来源）</option><option value="detail">细节（可作为事实来源）</option><option value="style">风格（不作为事实来源）</option></select></label><label>图片文件<input type="file" id="upload-file" accept="image/jpeg,image/png,image/webp" required></label><p class="real-note">主体与包装为单槽职责：已有素材时会要求显式选择保留哪一张，不会静默覆盖。最短边低于 1024px 可保存但会提示补图。</p><p class="form-error" id="upload-error" role="alert"></p><div id="upload-result" hidden></div><div class="real-actions"><button type="button" class="secondary" id="upload-replace" hidden>替换现有素材并上传</button><button type="button" class="secondary" data-close-dialog="upload-dialog">关闭</button><button type="submit" class="primary" id="upload-submit">上传</button></div></form></dialog>
   <dialog id="truth-dialog" class="real-dialog real-dialog-wide" aria-labelledby="truth-title"><button class="dialog-close" data-close-dialog="truth-dialog" aria-label="关闭">×</button><p class="eyebrow">商品事实</p><h2 id="truth-title">商品事实</h2><div id="truth-body"></div></dialog>
   <dialog id="help-dialog"><button class="dialog-close" id="close-help">×</button><p class="eyebrow">关于数据</p><h2>真实数据与演示数据是分开的</h2><p>你的项目、素材、任务与导出记录会自动保存；带「演示数据」标记的区域仅用于功能展示，刷新即重置，不会写入你的真实数据。</p><button class="primary" id="help-ok">知道了</button></dialog>
@@ -360,11 +463,13 @@
     </div>
   </dialog>
 
+  <!-- 模块02：旧 project-dialog 已由 create-view 一页三步向导取代；truth/spec/upload 弹窗保留给既有项目页 -->
   <script type="module" src="auth.js"></script>
   <script type="module" src="app.js"></script>
   <script type="module" src="m04.js"></script>
   <script type="module" src="m05.js"></script>
   <script type="module" src="workbench.js"></script>
   <script type="module" src="pricing.js"></script>
+  <script type="module" src="wizard.js"></script>
 </body>
 </html>

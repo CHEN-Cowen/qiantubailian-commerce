@@ -39,6 +39,51 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   assert.match(html, /真实模型生成样例/);
 });
 
+// 模块02：首次制作一页三步向导（create 视图）契约
+test('M02-wizard create 视图存在、脚本接线、三步步骤条与诚实边界文案', async () => {
+  const [html, app, style, wizard, server] = await Promise.all([
+    read('index.html'), read('app.js'), read('style.css'), read('wizard.js'),
+    readFile(`${root}src/server.mjs`, 'utf8'),
+  ]);
+  // create 视图作为独立 view 面板接入 setView 机制
+  assert.match(html, /id="create-view" data-view-panel="create"/);
+  assert.match(app, /setView\('create'\)/, '旧新建入口必须切换到 create 视图');
+  assert.match(app, /'home', 'projects', 'create', 'assets', 'library'/, 'create 必须是合法路由');
+  // 旧 project-dialog 弹窗下线，truth/spec/upload 弹窗保留
+  assert.ok(!html.includes('id="project-dialog"'), 'project-dialog 应已由 create 向导取代');
+  for (const id of ['truth-dialog', 'spec-dialog', 'upload-dialog']) {
+    assert.ok(html.includes(`id="${id}"`), `既有项目页弹窗 #${id} 应保留`);
+  }
+  // 向导脚本在 real-data 之后以 module 方式加载，且进入静态白名单可被服务
+  const scripts = [...html.matchAll(/<script type="module" src="([^"]+)"><\/script>/g)].map(m => m[1]);
+  assert.ok(scripts.indexOf('wizard.js') > scripts.indexOf('real-data.js'), 'wizard.js 必须在 real-data.js 之后加载');
+  assert.ok(STATIC_FILES.includes('wizard.js'), 'STATIC_FILES 缺少 wizard.js');
+  assert.match(server, /'wizard\.js'/);
+  assert.match(wizard, /if \(typeof document !== 'undefined'\) initWizard\(\)/, 'wizard.js 需自启动');
+  // 步骤条三步文案
+  for (const text of ['上传商品', '确认必要信息', '风格与交付']) {
+    assert.ok(html.includes(text), `步骤条缺少「${text}」`);
+  }
+  // 浏览器预览与「已保存到服务端」两类状态明确区分，并写明刷新不可恢复
+  assert.match(html, /浏览器预览（尚未保存到服务端）/);
+  assert.match(wizard, /已保存到服务端/);
+  assert.match(wizard, /刷新|不可恢复/);
+  // 报价摘要容器存在；报价数值必须来自服务端响应，禁止硬编码
+  assert.match(html, /id="wiz-quote"/);
+  assert.match(wizard, /生成 \$\{imageCount\} 张图片 · 最多使用 \$\{quote\.max_credits\} 点/);
+  assert.match(wizard, /api\.createQuote\(/);
+  assert.match(wizard, /api\.createRun\(/);
+  assert.match(wizard, /randomUUID|Idempotency/i, '生成必须携带 Idempotency-Key');
+  assert.match(wizard, /qb:open-workbench/, '生成成功后必须跳转工作台');
+  // OCR 诚实边界：未配置要明说，候选一律待确认
+  assert.match(wizard, /未配置文字识别，可手动填写/);
+  assert.match(wizard, /来源：OCR，待确认/);
+  // 向导样式使用现有绿色设计系统变量，不引入新调色板
+  assert.match(style, /\.wiz-drop[^{]*\{[^}]*--brand/);
+  assert.match(style, /\.wiz-template-card\.selected\{[^}]*var\(--brand\)/);
+  assert.match(style, /\.wiz-quote-bar\{[^}]*--brand-line/);
+});
+
 test('M02 向导真实函数分支：确认拦截、失败重试、成功进入项目', async () => {
   const app = await read('app.js');
   const nodes = new Map();
@@ -85,7 +130,7 @@ test('M02 项目搜索无结果与分类筛选执行真实函数', async () => {
 
 test('前端脚本不得引用已被删除的 DOM 节点（防止首屏 addEventListener 崩溃）', async () => {
   const html = await read('index.html');
-  const files = ['app.js', 'real-data.js', 'workbench.js', 'm04.js', 'm05.js'];
+  const files = ['app.js', 'real-data.js', 'workbench.js', 'm04.js', 'm05.js', 'wizard.js'];
   for (const file of files) {
     const src = await read(file);
     // 直接链式调用（无 ?. 保护）会在节点缺失时抛错，必须存在于 index.html

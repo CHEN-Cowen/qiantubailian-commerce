@@ -42,11 +42,9 @@ function renderBlockers(blockers = []) {
 
 export function initRealData({ toast } = {}) {
   if (typeof toast === 'function') state.toast = toast;
-  $('#import-button')?.addEventListener('click', () => openCreateDialog('导入商品资料'));
-  $$('.js-new-project').forEach(button => button.addEventListener('click', () => openCreateDialog('创建商品项目')));
-  $('#projects-new')?.addEventListener('click', () => openCreateDialog('创建商品项目'));
+  // 模块02：新建项目入口（.js-new-project / #projects-new / #import-button）已统一改由 app.js 切换到 create 向导视图，
+  // 这里不再绑定 openCreateDialog，避免双重处理；truth/spec/upload 弹窗仍保留给既有项目页。
   $('#upload-button')?.addEventListener('click', () => openUploadDialog());
-  $('#project-form')?.addEventListener('submit', submitCreate);
   $('#upload-form')?.addEventListener('submit', event => { event.preventDefault(); void submitUpload(false); });
   $('#upload-replace')?.addEventListener('click', () => void submitUpload(true));
   $('#real-list')?.addEventListener('click', onRealListClick);
@@ -166,34 +164,8 @@ function renderUploadOptions() {
   if (previous && state.projects.some(project => project.id === previous)) select.value = previous;
 }
 
-function openCreateDialog(title) {
-  $('#project-dialog-title').textContent = title;
-  $('#project-error').textContent = '';
-  $('#project-form').reset();
-  $('#project-dialog').showModal();
-  $('#project-form [name="name"]')?.focus();
-}
-
-async function submitCreate(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const submit = $('#project-submit');
-  const data = Object.fromEntries(new FormData(form));
-  $('#project-error').textContent = '';
-  submit.disabled = true;
-  try {
-    const payload = await api.createProject(data);
-    form.reset();
-    $('#project-dialog').close();
-    state.toast(`已创建真实项目：${payload.project.name}（${payload.project.sku}），请上传素材并确认事实`);
-    await refresh();
-    openUploadDialog(payload.project.id);
-  } catch (error) {
-    $('#project-error').textContent = errorText(error);
-  } finally {
-    submit.disabled = false;
-  }
-}
+// 模块02：openCreateDialog / submitCreate 已随 project-dialog 一并下线；
+// 创建项目改走 create 视图的一页三步向导（见 wizard.js）。
 
 function openUploadDialog(projectId) {
   $('#upload-form').reset();
