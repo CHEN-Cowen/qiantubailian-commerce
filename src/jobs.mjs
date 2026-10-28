@@ -30,8 +30,8 @@ import {
 } from './m07.mjs';
 import {
   EXPORT_SCHEMA_VERSION, PACKAGE_FORMAT_VERSION, REVISION_MAX_NO_IMPROVEMENT, REVISION_MAX_ROUNDS,
-  buildManifest, buildQaSummary, buildZip, compareRevisionOutcome, exportBundleName, exportRecordId,
-  makeVersionRecord, planExport, planRevision, zipSha256,
+  adoptVersionRecord, buildManifest, buildQaSummary, buildZip, compareRevisionOutcome, exportBundleName,
+  exportRecordId, makeVersionRecord, planExport, planRevision, zipSha256,
 } from './m08.mjs';
 import {
   buildJointManifest, checkDetailPageValidity, evaluateVideoFrames, planPlatformDelivery, planVideo,
@@ -39,6 +39,9 @@ import {
 import {
   buildOverlaySvg, compileExecutionPlan, compileRevisionInstruction, executionForDeliverable,
 } from './execution.mjs';
+import {
+  TEXT_EDIT_VERSION, applyTextEdits, describeTextEdits, presentTextLayers, textEditLimits,
+} from './text-edits.mjs';
 
 export const RUN_SCHEMA_VERSION = 1;
 export const EVENT_SCHEMA_VERSION = 1;
@@ -438,6 +441,9 @@ export function createJobs({
         attempts: [],
         // M08：版本只增不改；active 标记决定当前选用版，回退只切标记
         versions: [],
+        // M13：指定图片重生成。每次请求单独预留一份额度，成功才结算，其它交付物不受影响
+        regenerations: [],
+        regeneration: { reserved_credits: 0, captured_credits: 0, released_credits: 0 },
         // M08：自动修订受轮数、预算与"连续无改善"三重限制，绝不自动扩大预算
         revision: {
           enabled: capabilities.supports_revision === true,
@@ -789,9 +795,11 @@ export function createJobs({
     let finalFormat = null;
     let overlayBaseHash = null;
     let losslessOutput = null;
+    let compiledTextLayers = null; // M13：仅 finished_image 本地合成路径把文字层随版本冻结
     if (run.billing_mode === 'finished_image') {
       const compiled = executionForDeliverable(run.execution?.plan, { deliverableId: target.deliverable_id });
       const layers = compiled?.text_layers ?? [];
+      compiledTextLayers = layers;
       const logoLayer = layers.find(l => l.logo);
       const logoAsset = logoLayer && data.assets[logoLayer.asset_ref];
       const logoBytes = logoAsset?.tenant_id === run.tenant_id ? await store.readBlob(logoAsset.sha256, logoAsset.ext) : null;
@@ -885,6 +893,7 @@ export function createJobs({
     }, events, at);
 
     // M08：每个成功产物都留版本；同交付物的旧版本转为历史，不删除、不覆盖
+    // M13：finished_image 本地合成路径把文字层与底图哈希随版本冻结，文字排版修改只认版本里的这份
     const version = makeVersionRecord({
       run, attempt, deliverable: target, report,
       output: {
@@ -892,9 +901,10 @@ export function createJobs({
         width: result.output?.width ?? null, height: result.output?.height ?? null,
         bytes: outputBytes.length,
       },
+      textLayers: compiledTextLayers,
+      overlayBaseHash: overlayBaseHash,
       at,
     });
-    if (overlayBaseHash) version.overlay_base_hash = overlayBaseHash;
     for (const previous of run.versions) {
       if (previous.deliverable_id !== version.deliverable_id || !previous.active) continue;
       previous.active = false;
@@ -2084,6 +2094,11 @@ export function createJobs({
       if (!version) throw new ApiError(404, 'NOT_FOUND', '版本不存在');
       const target = run.deliverables.find(item => item.deliverable_id === version.deliverable_id);
       if (!target) throw new ApiError(404, 'NOT_FOUND', '版本对应的交付物不存在');
+      // M13：没有报告的版本不能被选用——否则会绕过"导出必须引用已检查版本"的闸口
+      const report = version.report_id ? data.quality_reports?.[version.report_id] ?? null : null;
+      if (!report) {
+        throw new ApiError(409, 'VERSION_REPORT_MISSING', '该版本没有关联的质量报告，不能选用；请先重新检查');
+      }
       const previousId = target.active_version_id;
       if (previousId === version.id) {
         throw new ApiError(409, 'VERSION_ALREADY_ACTIVE', '该版本已经是当前选用版本');
@@ -2111,6 +2126,190 @@ export function createJobs({
       return { version: version.id, deliverable_id: version.deliverable_id };
     });
     return getRun(ctx, runId).then(run => ({ run, activated: outcome }));
+  }
+
+  // ---------- M13：免费文字排版修改 ----------
+  // 边界（体验优化 D1/D3）：
+  // 1. 只用版本里冻结的 text_layers 在本地重新合成，绝不调用 Provider、不产生额度流水；
+  // 2. 底图 hash 沿用原版本的 overlay_base_hash，底图来源不变，只有文字层重画；
+  // 3. 每次修改都必须重新质检：未通过的版本只登记为历史，绝不会被自动选用，
+  //    也不能用"满意/保留"盖过硬失败（导出闸口按版本报告逐张判定）。
+
+  function deliverableTextContext(data, run, deliverableId) {
+    const target = run.deliverables.find(item => item.deliverable_id === deliverableId);
+    if (!target) throw new ApiError(404, 'NOT_FOUND', '交付物不存在');
+    const version = (run.versions ?? []).find(item => item.id === target.active_version_id);
+    if (!version) throw new ApiError(404, 'NOT_FOUND', '交付物当前没有选用的版本');
+    return { target, version };
+  }
+
+  /** 只读预览：当前选用版本的可编辑文字层与安全边界，前端据此渲染编辑面板。 */
+  async function textLayersOfDeliverable(ctx, runId, deliverableId) {
+    return store.read(data => {
+      const run = findRun(data, ctx, runId);
+      if (run.status !== 'completed') {
+        throw new ApiError(409, 'RUN_NOT_TERMINAL', '任务尚未完成，暂不能读取文字层');
+      }
+      const { version } = deliverableTextContext(data, run, deliverableId);
+      return {
+        version_id: version.id,
+        overlay_base_hash: version.overlay_base_hash ?? null,
+        layers: presentTextLayers(Array.isArray(version.text_layers) ? version.text_layers : []),
+        limits: textEditLimits(),
+        text_edit_version: TEXT_EDIT_VERSION,
+      };
+    });
+  }
+
+  /**
+   * 免费文字排版修改：合并编辑 → 本地重合成 → 重跑质检 → 登记新版本。
+   * 通过检查才自动选用；否则新版本只进历史并明确返回 needs_review/blocked。
+   * 全程不调用 Provider、不写额度流水（免费），底图 blob 与权益结算保持原样。
+   */
+  async function editDeliverableText({ ctx, runId, deliverableId, baseVersionId = null, edits = [] }) {
+    if (edits !== undefined && !Array.isArray(edits)) {
+      throw new ApiError(422, 'INVALID_TEXT_EDITS', 'edits 必须是数组');
+    }
+    const result = await store.mutate(async data => {
+      const run = findRun(data, ctx, runId);
+      if (run.status !== 'completed') {
+        throw new ApiError(409, 'RUN_NOT_TERMINAL', '只有已完成的任务才能修改文字排版');
+      }
+      // M13（模块 05 前置）：指定图片重生成进行中时不允许并发改文字，避免互相覆盖选用结果
+      if (run.regeneration_request) {
+        throw new ApiError(409, 'TEXT_EDIT_CONFLICT', '该任务存在指定图片重生成请求，暂不能修改文字排版');
+      }
+      const { target, version } = deliverableTextContext(data, run, deliverableId);
+      if (baseVersionId != null && String(baseVersionId) !== version.id) {
+        throw new ApiError(409, 'VERSION_CONFLICT', '当前选用版本已变化，请刷新后基于最新版本重试',
+          { active_version_id: version.id, provided_version_id: String(baseVersionId) });
+      }
+      if (!Array.isArray(version.text_layers) || !version.overlay_base_hash) {
+        throw new ApiError(409, 'TEXT_LAYER_MISSING',
+          '该版本来自不支持文字层的生成路径，没有可编辑的文字层或底图来源，不能做文字排版修改');
+      }
+
+      const applied = applyTextEdits({ layers: version.text_layers, edits });
+      if (applied.issues.length > 0) {
+        throw new ApiError(422, 'TEXT_EDIT_INVALID', '部分文字修改无法受理，请按问题逐项调整', { issues: applied.issues });
+      }
+      if (!applied.changed) {
+        throw new ApiError(409, 'NO_CHANGES', '本次没有实际变化，未生成新版本');
+      }
+
+      // 本地重合成：底图仍是原版本的 overlay_base_hash，来源不变；不调用 Provider
+      const finalFormat = version.format === 'jpg' ? 'jpg' : 'png';
+      const baseBytes = await store.readBlob(version.overlay_base_hash, 'png');
+      if (!baseBytes) {
+        throw new ApiError(409, 'TEXT_LAYER_MISSING', '底图来源文件不可读取，无法重新合成文字层');
+      }
+      const logoLayer = applied.layers.find(layer => layer.logo === true);
+      let logoBytes = null;
+      if (logoLayer) {
+        const asset = data.assets[logoLayer.asset_ref];
+        if (asset?.tenant_id === run.tenant_id) logoBytes = await store.readBlob(asset.sha256, asset.ext);
+        if (!logoBytes) {
+          throw new ApiError(409, 'TEXT_EDIT_RENDER_FAILED', '品牌 Logo 原图不可读取，无法重新合成；请先恢复品牌素材');
+        }
+      }
+      let rendered;
+      try {
+        rendered = await renderLayers({
+          bytes: baseBytes, width: version.width, height: version.height, layers: applied.layers,
+          logoBytes: logoBytes ? await decodeToPng(logoBytes) : null, format: finalFormat,
+        });
+      } catch (error) {
+        throw new ApiError(409, 'TEXT_EDIT_RENDER_FAILED', `文字层重新合成失败：${error.message}`);
+      }
+      const outputBytes = rendered.bytes;
+      const outputHash = createHash('sha256').update(outputBytes).digest('hex');
+      await store.putBlob(outputBytes, outputHash, finalFormat);
+
+      // 重跑质检：attempt 形状按原 attempt 恢复（来源绑定）。composite 声明 applied=true——
+      // 本次仍是本地合成，主体区域像素未动（底图不变、只重画文字层），
+      // evaluateGenerationQuality 会重跑掩码内逐像素核对；若文字被拖进主体区域会如实 fail。
+      const sourceAttempt = run.attempts.find(item => item.id === version.attempt_id) ?? null;
+      const pseudoAttempt = {
+        id: sourceAttempt?.id ?? version.attempt_id ?? null,
+        run_id: run.id,
+        deliverable_id: deliverableId,
+        iteration: sourceAttempt?.iteration ?? 1,
+        provider_meta: sourceAttempt?.provider_meta ?? {
+          id: 'local_text_edit', version: TEXT_EDIT_VERSION, simulated: true, acceptance: 'local_recompose',
+        },
+        subject_protection: sourceAttempt?.subject_protection
+          ?? { mode: run.subject_context?.mode ?? 'not_required' },
+        result: {
+          output: { width: version.width, height: version.height, format: finalFormat, sha256: outputHash },
+          format_contract: sourceAttempt?.result?.format_contract ?? null,
+        },
+        composite: { applied: true, available: true, reason: null, sha256: outputHash, lossy_encoding: finalFormat === 'jpg' },
+      };
+      const report = await evaluateAttemptQuality(data, run, pseudoAttempt, target, {
+        outputBytes, ext: finalFormat, outputHash, composite: pseudoAttempt.composite, losslessOutput: rendered.losslessBytes,
+        recordId: null,
+      }, [], clock());
+
+      const previousVersionId = version.id;
+      const nextVersion = makeVersionRecord({
+        run, attempt: pseudoAttempt, deliverable: target, report,
+        output: {
+          sha256: outputHash, format: finalFormat,
+          width: version.width, height: version.height, bytes: outputBytes.length,
+        },
+        textLayers: applied.layers,
+        overlayBaseHash: version.overlay_base_hash,
+        at: clock(),
+      });
+      nextVersion.note = '文字排版修改';
+      nextVersion.created_by = 'user_text_edit';
+      nextVersion.adopted_from = null;
+
+      const publishable = report.decision === 'publishable';
+      if (publishable) {
+        for (const previous of run.versions) {
+          if (previous.deliverable_id !== deliverableId || !previous.active) continue;
+          previous.active = false;
+          previous.superseded_at = nextVersion.created_at;
+        }
+        nextVersion.active = true;
+        target.active_version_id = nextVersion.id;
+      } else {
+        // 未通过的修改不能被自动放行：只登记为历史，当前选用版本保持不变
+        nextVersion.active = false;
+        nextVersion.superseded_at = nextVersion.created_at;
+      }
+      run.versions.push(nextVersion);
+      const activeVersion = run.versions.find(item => item.active && item.deliverable_id === deliverableId) ?? null;
+      target.quality_report_id = activeVersion?.report_id ?? target.quality_report_id;
+      refreshRunQuality(data, run);
+
+      pushEvent(data, run, {
+        stage: 'revision', status: 'text_edit_applied', at: clock(),
+        payload: {
+          deliverable_id: deliverableId,
+          from_version: previousVersionId,
+          to_version: nextVersion.id,
+          changed: true,
+          issues: applied.issues,
+          report_decision: report.decision,
+          report_id: report.id,
+          activated: publishable,
+          changes: describeTextEdits({ before: version.text_layers, after: applied.layers }),
+          quality_status: run.quality_status,
+        },
+      });
+
+      const validity = await reportValidityIn(data, report);
+      return {
+        version: structuredClone(nextVersion),
+        previous_version_id: previousVersionId,
+        report: presentReport(report, validity),
+        issues: applied.issues,
+        activated: publishable,
+      };
+    });
+    return result;
   }
 
   async function createExport(ctx, runId, { scope = 'complete' } = {}) {
@@ -2166,7 +2365,11 @@ export function createJobs({
         }
         entries.push({ name: `images/${deliverable.deliverable_id}.${version.format ?? 'png'}`, bytes });
         const compiled = executionForDeliverable(run.execution?.plan, { deliverableId: deliverable.deliverable_id });
-        let layers = compiled?.text_layers ?? [];
+        // M13：优先用当前选用版本冻结的 text_layers（与实际渲染产物一致）；
+        // 旧版本没有文字层时回退现算（legacy 兼容），哈希与打包逻辑不变
+        let layers = Array.isArray(version.text_layers) && version.text_layers.length > 0
+          ? version.text_layers.map(layer => ({ ...layer }))
+          : (compiled?.text_layers ?? []).map(layer => ({ ...layer }));
         for (const layer of layers.filter(l => l.logo)) {
           const asset = data.assets[layer.asset_ref];
           if (asset?.tenant_id === run.tenant_id) {
@@ -2898,6 +3101,7 @@ export function createJobs({
     listGenerationRecords, getGenerationRecord,
     listQualityReports, getQualityReport, reviewQualityReport,
     listRunVersions, readVersionContent, activateVersion, createExport, listExports, getExport, readExportPackage,
+    textLayersOfDeliverable, editDeliverableText,
     createVideoPlan, listVideoPlans, getVideoPlan, evaluateVideoPlanFrames, generateVideo,
     createJointExport, createBatchExport,
     get activeSubscriptions() { return listeners.size; },

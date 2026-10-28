@@ -272,6 +272,15 @@ export function createApi({
         requireMethod(method, ['POST']);
         return activateVersionRoute(ctx, rest[1], rest[3], send);
       }
+      // M13：文字排版修改（免费）与文字层只读预览
+      if (rest.length === 5 && rest[2] === 'deliverables' && rest[4] === 'text-layers') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.textLayersOfDeliverable(ctx, rest[1], rest[3]).then(result => send(200, result));
+      }
+      if (rest.length === 5 && rest[2] === 'deliverables' && rest[4] === 'text-edits') {
+        requireMethod(method, ['POST']);
+        return textEditRoute(ctx, req, rest[1], rest[3], send);
+      }
       if (rest.length !== 3) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
       if (rest[2] === 'cancel') { requireMethod(method, ['POST']); return cancelRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'budget-confirmation') { requireMethod(method, ['POST']); return confirmBudgetRoute(ctx, req, rest[1], send); }
@@ -682,7 +691,7 @@ export function createApi({
    * 路由到权限动作的集中映射。处理函数内的细粒度检查继续保留，
    * 这里保证主链路没有“漏挂权限”的接口。
    */
-  function actionForRoute([resource, second, third, fourth], method) {
+  function actionForRoute([resource, second, third, fourth, fifth], method) {
     const write = STATE_CHANGING.has(method);
     switch (resource) {
       case 'credits': return 'credits:read';
@@ -694,6 +703,9 @@ export function createApi({
         if (third === 'reconcile') return 'run:reconcile';
         if (third === 'exports' && write) return 'export:create';
         if (third === 'versions' && fourth === 'activate' && write) return 'version:activate';
+        // M13：文字层预览是读动作；提交文字修改是内容写动作，复核/只读角色不可用
+        if (third === 'deliverables' && fifth === 'text-layers') return 'run:read';
+        if (third === 'deliverables' && fifth === 'text-edits') return write ? 'run:create' : 'run:read';
         return 'run:read';
       }
       case 'exports': return second !== undefined && third === 'download' ? 'export:download' : 'export:read';
@@ -1776,6 +1788,19 @@ export function createApi({
   // M08：版本回退与正式导出。导出资格（完整性、可发布、stale）全部由 jobs 在锁内重算。
   function activateVersionRoute(ctx, runId, versionId, send) {
     return jobs.activateVersion(ctx, runId, versionId).then(result => send(200, result));
+  }
+
+  // M13：免费文字排版修改。权限走 run:create（owner/editor），复核者与只读角色不能改内容。
+  async function textEditRoute(ctx, req, runId, deliverableId, send) {
+    const body = await readJson(req);
+    const result = await jobs.editDeliverableText({
+      ctx,
+      runId,
+      deliverableId,
+      baseVersionId: typeof body?.base_version_id === 'string' ? body.base_version_id.trim() || null : null,
+      edits: Array.isArray(body?.edits) ? body.edits : [],
+    });
+    send(200, result);
   }
 
   async function createExportRoute(ctx, req, runId, send) {

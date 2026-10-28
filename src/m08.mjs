@@ -94,6 +94,8 @@ export function compareRevisionOutcome({ beforeReport, afterReport, actions = []
 
 export function makeVersionRecord({
   run, attempt, deliverable, report, output = {}, at = new Date(),
+  // M13：本地合成路径把文字层与底图哈希随版本冻结，后续文字排版修改只认版本里的这份
+  textLayers = null, overlayBaseHash = null,
 } = {}) {
   const sameDeliverable = (run?.versions ?? []).filter(item => item.deliverable_id === attempt.deliverable_id);
   return {
@@ -122,6 +124,51 @@ export function makeVersionRecord({
       ? `第 ${attempt.revision.round} 轮自动修订：${(attempt.revision.actions ?? []).map(item => item.code).join(', ')}`
       : `第 ${attempt.iteration} 轮生成`,
     deliverable_label: deliverable?.label ?? null,
+    // M13：默认 null 向后兼容旧版本记录；只有本地合成（finished_image）路径会带上
+    text_layers: Array.isArray(textLayers) ? structuredClone(textLayers) : null,
+    overlay_base_hash: overlayBaseHash ?? null,
+  };
+}
+
+/**
+ * M13：把"指定图片重生成"的产物登记回源任务。
+ * 只新增一张交付物的版本：其他交付物的活动版本、历史版本与导出资格都不动。
+ * 新版本是否自动选用由调用方决定（只有检查通过才自动选用，其余保留为历史待人工确认）。
+ */
+export function adoptVersionRecord({
+  sourceRun, sourceDeliverable, sourceVersion, report, active = false, note = null, at = new Date(),
+} = {}) {
+  const sameDeliverable = (sourceRun?.versions ?? []).filter(item => item.deliverable_id === sourceDeliverable?.deliverable_id);
+  return {
+    id: versionId(),
+    schema_version: 1,
+    tenant_id: sourceRun.tenant_id,
+    project_id: sourceRun.project_id,
+    run_id: sourceRun.id,
+    deliverable_id: sourceDeliverable.deliverable_id,
+    number: sameDeliverable.length + 1,
+    attempt_id: sourceVersion.attempt_id ?? null,
+    generation_record_id: sourceVersion.generation_record_id ?? null,
+    report_id: report?.id ?? null,
+    iteration: sourceVersion.iteration ?? 1,
+    revision_round: sourceVersion.revision_round ?? 0,
+    hash: sourceVersion.hash,
+    format: sourceVersion.format,
+    width: sourceVersion.width,
+    height: sourceVersion.height,
+    bytes: sourceVersion.bytes,
+    active: active === true,
+    superseded_at: active === true ? null : iso(at),
+    created_at: iso(at),
+    created_by: 'system',
+    note: note ?? '指定图片重生成',
+    deliverable_label: sourceDeliverable.label ?? null,
+    adopted_from: {
+      run_id: sourceVersion.run_id ?? null,
+      version_id: sourceVersion.id ?? null,
+    },
+    text_layers: Array.isArray(sourceVersion.text_layers) ? sourceVersion.text_layers : null,
+    overlay_base_hash: sourceVersion.overlay_base_hash ?? null,
   };
 }
 
