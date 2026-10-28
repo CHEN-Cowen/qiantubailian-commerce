@@ -1,0 +1,83 @@
+# 实施记录：商品内容维护扩展（E00—E08）
+
+分支：`feat/commerce-commercialization`
+记录规则：每个模块记录目标、实际实现、真实测试、失败修复、外部未验收项与提交/推送状态。提交号在下一条记录补入。
+
+## 模块 E00：最新基线、原任务验收衔接与接口契约
+
+### 基线事实（2026-10-28 实测）
+
+- 本地与远端 `origin/feat/commerce-commercialization` 均为 `48642e9`（pull 后工作区干净，无未提交文件）。
+- 原体验优化模块 00—07 已有提交与记录（`d54946d` 阻断修复 → `0a51042` 实施记录），本轮在此基础上增量扩展，不重做。
+- 运行环境：Windows，Node.js 22.22.2（`C:\Users\cchen\AppData\Local\Temp\node22\node-v22.22.2-win-x64\node.exe`；PATH 上的 v24 与 `engines` 声明 `>=22.22.2 <23` 不符，本轮所有测试显式使用 Node 22）。
+- 外部能力边界保持原状：真实生图模型未配置（`QTB_PROVIDER=mock`）、OCR 未配置端点、真实收款关闭（`QTB_ENABLE_REAL_PAYMENTS=0`，无商户号）。本轮不因扩展而改变这些边界。
+
+### 基线实测证据（本轮亲自执行，非沿用历史数字）
+
+- `npm run check`：语法检查 75 个文件通过。
+- `npm test`（Node 22.22.2）：247 项，246 通过 / 0 失败 / 1 跳过（符号链接权限），退出码 0，约 140 秒。
+- `npm run smoke`：真实子进程启动 + HTTP 健康探测 + SIGTERM 退出通过。
+- `npm run e2e`：13 个步骤全部通过（注册/额度/CSRF/幂等/文字修改免费/单张重生成 1 点/导出勾稽/跨租户 404/绿色设计系统）。
+
+结论：首次制作、商品品牌复用、文字排版修改、单张重生成、权益与导出链路当前可用，可作为本轮复用基础。
+
+### 需求映射（本轮扩展 → 复用基础）
+
+| 本轮需求 | 复用的既有能力 | 缺口 |
+| --- | --- | --- |
+| 商品/SKU/包含物档案（E01） | `projects` + `truth_versions`（版本化事实、乐观锁） | 项目当前只有单一 `sku` 字符串；无 SKU 实体、差异属性、包装包含物结构 |
+| 图片依赖与导出追踪（E02） | `runs.versions[]`、`generation_records`、`exports`、`quality_reports` | 无图片版本→事实字段/素材/SKU 的依赖记录；导出无渠道标签与替换待办 |
+| 变更更新助手（E03） | 文字排版修改（免费重合成）、单张重生成（按张计价）、版本只增 | 无变更单、影响清单、分类处理、批量部分失败重试、替换待办 |
+| SKU 防串图（E04） | QA 报告结构（检查项/证据/人工复核）、素材归属 | 无三层核对（归属/结构/视觉候选）与按 SKU 导出 |
+| 售前问题与补图（E05/E06） | 事实编译文字层、本地合成、导出 | 无问题组、分流、三种说明图模板、采用反馈 |
+| 费用与幂等（E07） | 额度预留/结算/释放、幂等键、乐观锁、租户隔离、CSRF | 新动作需沿用同一账本与幂等机制；免费排版不扣额度 |
+
+### 共用对象与接口契约（本轮统一口径）
+
+新增存储表（追加，不改 `schema_version`，旧数据缺表按空表处理）：
+
+| 表 | 内容 |
+| --- | --- |
+| `sku_profiles` | SKU 档案：稳定内部 ID、所属项目、商家编号、差异属性、包含物、确认状态、版本、乐观锁 `base_version` |
+| `image_dependencies` | 图片版本依赖：对象（run+deliverable+version）、依赖项（事实字段 key/素材/品牌/SKU）、证据类型（`deterministic`/`ocr_candidate`/`manual`/`unknown`）、版本快照 |
+| `change_orders` | 变更单：项目、基准事实版本、新事实版本、逐字段差异、状态机、影响清单快照、逐项任务、费用 |
+| `check_issues` | SKU 核对问题：层级（ownership/structure/visual）、证据、严重度、状态、人工复核记录（绑定版本） |
+| `question_groups` | 售前问题组：脱敏输入、归类、适用 SKU、人工来源/频次（可选）、匹配结论、缺口清单 |
+| `explainer_plans` | 补图方案：问题组、图种（packing_list/size/sku_compare）、事实依据快照、排版提纲、报价、结果版本、采用反馈 |
+| `replacement_todos` | 旧导出替换待办：导出记录、渠道标签、状态、用户确认者与时间（无平台回执语义） |
+
+接口语义（名称可微调，语义不变；全部租户隔离 + 会话/CSRF；写操作幂等键）：
+
+| 操作 | 路径 | 要点 |
+| --- | --- | --- |
+| SKU 档案读写 | `GET/PUT /api/projects/:id/skus` | 版本化、乐观锁；单规格简化返回 |
+| 变更预览 | `POST /api/projects/:id/changes/preview` | 只算差异与候选影响，不触发生成 |
+| 确认变更单 | `POST /api/projects/:id/changes` | base_version 冲突 409；生成影响清单 |
+| 变更单查询/执行/重试 | `GET /api/changes/:id`、`POST .../execute`、`POST .../retry` | 逐项状态；成功项不重试不重复扣费 |
+| 替换待办 | `GET /api/replacement-todos`、`POST /api/replacement-todos/:id/confirm` | 只记录“商家确认已替换”，不写平台同步 |
+| SKU 核对 | `POST /api/projects/:id/sku-checks` | 三层结果分列；视觉服务缺失标 `unavailable` |
+| 核对问题处理 | `POST /api/check-issues/:id/resolve` | 有范围的人工复核，绑定版本 |
+| 问题分析 | `POST /api/projects/:id/questions/analyze` | 归类建议+已有图+缺口；不编造事实 |
+| 补图方案/执行 | `POST /api/question-groups/:id/explainer-plans`、`POST /api/explainer-plans/:id/execute` | 确定性排版免费；需生图先报价 |
+| 采用反馈 | `POST /api/explainer-plans/:id/feedback` | 记录采用/未采用原因，不声称经营收益 |
+| 按 SKU 导出 | `POST /api/projects/:id/sku-exports` | 按 SKU 目录+清单；不混入其他 SKU/失效版本 |
+
+### 兼容旧数据策略
+
+- 旧项目没有 SKU 档案：读取时按“单规格、未建档”处理，提供建档入口；不批量伪造档案。
+- 旧图片没有依赖记录：`image_dependencies` 查无记录时返回 `evidence: "unknown"`，进入“待核对”，不显示“无需更新”。
+- 旧导出记录无渠道标签：`channel: null`，可补登记；不产生替换待办的回填伪造。
+- 新表全部为追加式；所有版本对象只增不改，沿用 `base_version` 乐观锁。
+
+### 状态口径（互不替代）
+
+事实确认、变更处理、图片质量、用户选用、付费权益、外部替换是六个独立状态维度；任一维度通过不推导其他维度通过。前端展示不合并。
+
+### 未验证 / 边界
+
+- 真实模型、OCR、视觉检查、真实收款：未授权/未配置，本轮保持关闭；相应代码路径以契约测试覆盖，效果单列未验收。
+
+### 提交与推送
+
+- 提交：见下一条记录（E00 契约与基线记录）。
+- 推送：推送后核对远端 HEAD。
