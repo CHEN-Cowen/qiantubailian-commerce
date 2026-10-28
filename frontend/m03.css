@@ -74,6 +74,20 @@
 .truth-history li b{color:var(--ink)}
 .truth-history li code{font-size:11px;color:var(--faint)}
 
+/* E01：SKU 档案板块 */
+.sku-card{border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:8px;display:grid;gap:6px}
+.sku-card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:13px}
+.sku-card-head b{color:var(--ink)}
+.sku-card-head span{color:var(--muted);font-size:12px}
+.sku-line{margin:0;font-size:12px;color:var(--muted)}
+.sku-contents{list-style:none;margin:0;padding:0;display:grid;gap:4px}
+.sku-contents li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--ink)}
+.sku-note{color:var(--faint);font-size:11px}
+.sku-edit{border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:10px;display:grid;gap:6px}
+.sku-edit-row{display:grid;grid-template-columns:1fr 1fr auto 32px;gap:6px;align-items:center}
+.sku-edit-content{grid-template-columns:1.2fr 72px 88px 110px 1.2fr 1fr 32px}
+.sku-edit-row input,.sku-edit-row select{padding:7px 8px;border:1px solid #DFE5DC;border-radius:6px;font-size:12px;font-family:inherit;color:var(--ink);background:var(--surface);min-width:0;width:100%}
+
 @media(max-width:760px){
   .real-card{align-items:flex-start}
   .real-card-side{width:100%}
@@ -82,4 +96,6 @@
   .fact-row .fact-flag:first-child{grid-column:1}
   .fact-row input[data-fact=key],.fact-row input[data-fact=value],.fact-row select{grid-column:1 / -1}
   #truth-dialog{width:96vw;padding:20px}
+  .sku-edit-row,.sku-edit-content{grid-template-columns:1fr 1fr;gap:6px}
+  .sku-edit-row .icon-button{justify-self:end}
 }

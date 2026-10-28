@@ -79,5 +79,30 @@
 
 ### 提交与推送
 
-- 提交：见下一条记录（E00 契约与基线记录）。
-- 推送：推送后核对远端 HEAD。
+- 提交：`d59e549`（docs(e00): 商品内容维护扩展基线核验、需求映射与接口契约）
+- 推送：`origin/feat/commerce-commercialization` 已核对包含 `d59e549`（ls-remote 确认）。
+- 备注：仓库本地配置 `http.proxy` 为空导致直连 github 失败；推送用命令级 `-c http.proxy=http://127.0.0.1:10808` 覆盖，未改任何 git 配置。
+
+## 模块 E01：共用商品、SKU与包装包含物服务
+
+### 实际实现
+
+1. 新表 `sku_profiles`（`src/store.mjs`，追加式，旧数据缺表按空表迁移）。
+2. 新文件 `src/sku.mjs`（纯函数）：`validateSkuProfilesInput`（商家编号同项目内大小写不敏感去重、差异属性值禁止留空、包含物 quantity>0 + 单位必填 + included 布尔 + source∈user_input/asset 且 asset 来源必须指向该项目生效中且非 style 素材）；显式单位换算表（体积 ml/L、质量 g/kg/mg、长度 mm/cm/m 换算到基准；计数单位只做别名归一「个≡件」，不同计数单位互不等价；表外单位 422 UNKNOWN_UNIT）；`normalizeQuantity`/`unitsEquivalent`（500ml≡0.5L、1kg≡1000g）；`diffSkuProfiles`（按稳定内部 ID 对齐的逐 SKU 字段级差异，供 E03 复用）；`simplifiedSkuView`（无档案项目返回 derived 视图，不伪造已确认档案）。
+3. `src/api.mjs` 路由：`GET/PUT /api/projects/:id/skus`、`GET .../skus/versions[/:version]`；全部走 `findProject` 租户隔离（跨租户 404）；PUT 乐观锁（base_version≠project.sku_head_version → 409 VERSION_CONFLICT）；confirm=true 时存在未确认 SKU → 409 CONFIRMATION_BLOCKED；版本只增、稳定内部 ID `sku_xxx` 与商家编号分离；权限沿用 projects 默认 project:read/write。
+4. 前端：商品事实弹窗新增「SKU 档案」板块（`frontend/real-data.js` + `frontend/api.js` + `frontend/m03.css`）：列表/建档入口/编辑表单（可加删 SKU、属性行、包含物行，来源可选生效素材）/保存草稿与全部确认/版本历史/409 中文提示；沿用绿色设计系统，移动端两列降列不溢出。
+
+### 测试证据（Node 22.22.2）
+
+- `npm run check`：77 个文件通过；`node --test test/e01.js`：12/12 通过（纯函数 7 + HTTP 集成 4 + 旧数据兼容 1）。
+- 全量 `npm test`：259 项，258 通过 / 0 失败 / 1 跳过（既有符号链接项），连续两次通过。
+
+### 未验证 / 边界
+
+- E01 不消耗生图额度（建档与查询为免费操作）；未涉及计费路径。
+- 前端表单为手工 DOM 实现，真实浏览器截图验收统一在 E07/E08。
+- 历史版本中引用的素材后续被替换的失效检测属 E02 依赖记录范围，本模块不回填。
+
+### 提交与推送
+
+- 提交：见 E02 记录开头补入。

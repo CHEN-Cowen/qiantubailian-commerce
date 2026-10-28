@@ -116,6 +116,10 @@ export const api = {
   updateSubjectBox: (project, asset, subject_box) => call(`/api/projects/${encodeURIComponent(project)}/assets/${encodeURIComponent(asset)}/subject-box`, { method: 'PUT', json: { subject_box } }),
   createTruthVersion: (id, body) => call(`/api/projects/${encodeURIComponent(id)}/truth-versions`, { method: 'POST', json: body }),
   readiness: id => call(`/api/projects/${encodeURIComponent(id)}/readiness`),
+  // E01：SKU 档案与包装包含物（版本化 + 乐观锁）
+  getSkus: id => call(`/api/projects/${encodeURIComponent(id)}/skus`),
+  putSkus: (id, body) => call(`/api/projects/${encodeURIComponent(id)}/skus`, { method: 'PUT', json: body }),
+  listSkuVersions: id => call(`/api/projects/${encodeURIComponent(id)}/skus/versions`),
   // M04：目录、品牌套件与生产配置
   listTemplates: () => call('/api/catalog/templates'),
   getTemplate: id => call(`/api/catalog/templates/${encodeURIComponent(id)}`),

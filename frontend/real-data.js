@@ -16,7 +16,7 @@ const ROLE_OPTIONS = [
 ];
 const ROLE_LABELS = Object.fromEntries(ROLE_OPTIONS.map(([value, label]) => [value, label]));
 
-const state = { toast: () => {}, projects: [], detail: null, regions: new Map(), pendingProjectId: null };
+const state = { toast: () => {}, projects: [], detail: null, regions: new Map(), pendingProjectId: null, skuEditing: null };
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -251,7 +251,9 @@ async function openTruthDialog(projectId) {
   try {
     const detail = await api.getProject(projectId);
     const versions = await api.listTruthVersions(projectId);
-    state.detail = { ...detail, versions: versions.versions };
+    const skuData = await api.getSkus(projectId);
+    state.detail = { ...detail, versions: versions.versions, skuData };
+    state.skuEditing = null;
     state.regions = new Map((detail.truth_head?.facts ?? [])
       .filter(fact => fact.region)
       .map(fact => [fact.key, fact.region]));
@@ -345,16 +347,234 @@ function renderTruth() {
       <button type="button" class="secondary" data-action="save-draft">保存草稿</button>
       <button type="button" class="primary" data-action="confirm">确认事实并生成新版本</button>
     </div>
+    <section class="truth-section" id="sku-section">
+      ${renderSkuSection()}
+    </section>
     <section class="truth-section">
       <h3>版本历史</h3>
       ${history ? `<ul class="truth-history">${history}</ul>` : '<p class="truth-empty">尚无事实版本。</p>'}
     </section>`;
 }
 
+// ---------- E01：SKU 档案板块 ----------
+
+function renderSkuSection() {
+  const { skuData } = state.detail;
+  if (state.skuEditing) return renderSkuEditor();
+  const head = skuData?.profile ?? null;
+  if (!head) {
+    const derived = skuData?.view?.skus?.[0];
+    return `<h3>SKU 档案</h3>
+      <p class="truth-hint">当前为「单规格（未建档）」：${escapeHtml(derived?.sku_code ?? '')} · 派生自商品信息，尚未确认。多规格商品请先建档。</p>
+      <button type="button" class="text-button" data-action="sku-edit">建立 SKU 档案</button>`;
+  }
+  const cards = head.skus.map(sku => `<div class="sku-card">
+    <div class="sku-card-head">
+      <b>${escapeHtml(sku.sku_code)}</b><span>${escapeHtml(sku.label)}</span>
+      <span class="real-state ${sku.confirmed ? 'ok' : 'muted'}">${sku.confirmed ? '已确认' : '未确认'}</span>
+    </div>
+    ${(sku.attributes ?? []).length ? `<p class="sku-line">差异属性：${sku.attributes.map(attr => `${escapeHtml(attr.key)} ${escapeHtml(attr.value)}${attr.unit ? escapeHtml(attr.unit) : ''}`).join('；')}</p>` : ''}
+    ${(sku.contents ?? []).length ? `<ul class="sku-contents">${sku.contents.map(item => `<li>
+      ${escapeHtml(item.item)} ×${item.quantity}${escapeHtml(item.unit)}
+      <span class="real-state ${item.included ? 'ok' : 'muted'}">${item.included ? '包含' : '不包含（展示道具）'}</span>
+      ${item.note ? `<span class="sku-note">${escapeHtml(item.note)}</span>` : ''}
+    </li>`).join('')}</ul>` : ''}
+  </div>`).join('');
+  return `<h3>SKU 档案</h3>
+    <p class="truth-meta">档案版本 v${head.version} · ${head.confirmation_status === 'confirmed' ? '已确认' : '草稿'} · ${escapeHtml(head.created_by)} · ${escapeHtml(formatTime(head.created_at))}</p>
+    ${cards}
+    <div class="truth-actions">
+      <button type="button" class="text-button" data-action="sku-edit">编辑档案</button>
+      <button type="button" class="text-button" data-action="sku-history">版本历史</button>
+    </div>
+    <div id="sku-history"></div>`;
+}
+
+function skuAttrRow(attr = {}) {
+  return `<div class="sku-edit-row">
+    <input data-attr="key" placeholder="属性，如 颜色" value="${escapeHtml(attr.key ?? '')}" maxlength="60">
+    <input data-attr="value" placeholder="值（必填）" value="${escapeHtml(attr.value ?? '')}" maxlength="200">
+    <input data-attr="unit" placeholder="单位（可选）" value="${escapeHtml(attr.unit ?? '')}" maxlength="20">
+    <button type="button" class="icon-button" data-action="sku-remove-row" aria-label="删除该行">×</button>
+  </div>`;
+}
+
+function skuContentRow(item = {}) {
+  const activeAssets = (state.detail?.assets ?? []).filter(asset => asset.role_status === 'active' && asset.role !== 'style');
+  const options = ['<option value="user_input">用户输入</option>']
+    .concat(activeAssets.map(asset => `<option value="${escapeHtml(asset.id)}"${item.source_asset_id === asset.id ? ' selected' : ''}>素材：${escapeHtml(asset.filename)}</option>`));
+  return `<div class="sku-edit-row sku-edit-content">
+    <input data-ct="item" placeholder="物件，如 面霜瓶" value="${escapeHtml(item.item ?? '')}" maxlength="80">
+    <input data-ct="quantity" type="number" min="0" step="any" placeholder="数量" value="${item.quantity ?? ''}">
+    <input data-ct="unit" placeholder="单位，如 瓶/ml" value="${escapeHtml(item.unit ?? '')}" maxlength="20">
+    <select data-ct="included" aria-label="是否包含">
+      <option value="true"${item.included !== false ? ' selected' : ''}>包含</option>
+      <option value="false"${item.included === false ? ' selected' : ''}>不包含（道具）</option>
+    </select>
+    <select data-ct="source" aria-label="来源">${options.join('')}</select>
+    <input data-ct="note" placeholder="备注（可选）" value="${escapeHtml(item.note ?? '')}" maxlength="300">
+    <button type="button" class="icon-button" data-action="sku-remove-row" aria-label="删除该行">×</button>
+  </div>`;
+}
+
+function skuEditBlock(sku, index) {
+  return `<div class="sku-edit" data-sku-index="${index}">
+    <div class="sku-edit-row">
+      <input data-sku="sku_code" placeholder="商家编号（必填）" value="${escapeHtml(sku.sku_code ?? '')}" maxlength="64">
+      <input data-sku="label" placeholder="展示名（必填）" value="${escapeHtml(sku.label ?? '')}" maxlength="80">
+      <label class="fact-flag"><input type="checkbox" data-sku="confirmed"${sku.confirmed ? ' checked' : ''}> 商家已确认</label>
+      <button type="button" class="icon-button" data-action="sku-remove" aria-label="删除该 SKU">×</button>
+    </div>
+    <p class="truth-hint">差异属性（值不能为空；不确定的属性请删除该行）</p>
+    <div data-sku-attrs>${(sku.attributes ?? []).map(skuAttrRow).join('')}</div>
+    <button type="button" class="text-button" data-action="sku-add-attr">＋ 属性</button>
+    <p class="truth-hint">包装包含物（数量与单位必填；单位仅支持 ml/L/g/kg/mg/mm/cm/m 与 件/个/条/包/瓶/盒/套 等标准计数单位）</p>
+    <div data-sku-contents>${(sku.contents ?? []).map(skuContentRow).join('')}</div>
+    <button type="button" class="text-button" data-action="sku-add-content">＋ 包含物</button>
+  </div>`;
+}
+
+function renderSkuEditor() {
+  const { skus, base_version: baseVersion } = state.skuEditing;
+  return `<h3>SKU 档案 · 编辑中</h3>
+    <p class="truth-meta">基于档案版本 v${baseVersion} 编辑；保存时若他人已更新会提示刷新。</p>
+    ${skus.map((sku, index) => skuEditBlock(sku, index)).join('')}
+    <button type="button" class="text-button" data-action="sku-add">＋ 添加 SKU</button>
+    <p class="truth-error" id="sku-block-error" role="alert"></p>
+    <div class="truth-actions">
+      <button type="button" class="secondary" data-action="sku-cancel">取消</button>
+      <button type="button" class="secondary" data-action="sku-save" data-confirm="false">保存草稿</button>
+      <button type="button" class="primary" data-action="sku-save" data-confirm="true">全部确认并保存</button>
+    </div>`;
+}
+
+function rerenderSkuSection() {
+  const node = $('#sku-section');
+  if (node) node.innerHTML = renderSkuSection();
+}
+
+/** 把当前编辑表单的 DOM 值收回到 state.skuEditing（加/删行前先收集，避免丢输入）。 */
+function collectSkuEditor() {
+  if (!state.skuEditing) return;
+  const blocks = $$('#sku-section [data-sku-index]');
+  state.skuEditing.skus = blocks.map((block, index) => {
+    const previous = state.skuEditing.skus[index] ?? {};
+    const read = selector => block.querySelector(selector)?.value.trim() ?? '';
+    return {
+      id: previous.id,
+      sku_code: read('[data-sku="sku_code"]'),
+      label: read('[data-sku="label"]'),
+      confirmed: block.querySelector('[data-sku="confirmed"]')?.checked ?? false,
+      attributes: $$('[data-sku-attrs] .sku-edit-row', block).map(row => ({
+        key: row.querySelector('[data-attr="key"]').value.trim(),
+        value: row.querySelector('[data-attr="value"]').value.trim(),
+        unit: row.querySelector('[data-attr="unit"]').value.trim(),
+      })).filter(attr => attr.key || attr.value),
+      contents: $$('[data-sku-contents] .sku-edit-row', block).map(row => {
+        const source = row.querySelector('[data-ct="source"]').value;
+        const item = {
+          item: row.querySelector('[data-ct="item"]').value.trim(),
+          quantity: Number(row.querySelector('[data-ct="quantity"]').value),
+          unit: row.querySelector('[data-ct="unit"]').value.trim(),
+          included: row.querySelector('[data-ct="included"]').value === 'true',
+          source: source === 'user_input' ? 'user_input' : 'asset',
+        };
+        if (item.source === 'asset') item.source_asset_id = source;
+        const note = row.querySelector('[data-ct="note"]').value.trim();
+        if (note) item.note = note;
+        return item;
+      }).filter(item => item.item),
+    };
+  });
+}
+
+async function saveSkus(confirm) {
+  const errorNode = $('#sku-block-error');
+  errorNode.textContent = '';
+  collectSkuEditor();
+  const { skus, base_version: baseVersion } = state.skuEditing;
+  // 客户端先做一次基本检查，把明显的漏填拦截在请求之前
+  if (skus.length === 0 || skus.some(sku => !sku.sku_code || !sku.label)) {
+    errorNode.textContent = '每个 SKU 都需要填写商家编号与展示名。';
+    return;
+  }
+  if (skus.some(sku => sku.contents.some(item => !Number.isFinite(item.quantity) || item.quantity <= 0 || !item.unit))) {
+    errorNode.textContent = '包含物的数量必须大于 0，单位必填。';
+    return;
+  }
+  try {
+    const payload = await api.putSkus(state.detail.project.id, { base_version: baseVersion, confirm, skus });
+    state.toast(`SKU 档案已保存 v${payload.sku_profile.version}${confirm ? '（已确认）' : '（草稿）'}`);
+    state.skuEditing = null;
+    await openTruthDialog(state.detail.project.id);
+  } catch (error) {
+    if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') {
+      errorNode.textContent = '档案已被他人更新，请取消后重新打开编辑。';
+      return;
+    }
+    if (error instanceof ApiFailure && error.code === 'CONFIRMATION_BLOCKED') {
+      errorNode.textContent = `${error.message}（${(error.details?.unconfirmed ?? []).join('、')}）`;
+      return;
+    }
+    errorNode.textContent = errorText(error);
+  }
+}
+
+async function onSkuClick(action, trigger) {
+  const { skuData } = state.detail;
+  if (action === 'sku-edit') {
+    const head = skuData?.profile ?? null;
+    state.skuEditing = {
+      base_version: head?.version ?? 0,
+      skus: head
+        ? head.skus.map(sku => ({ ...sku, attributes: [...(sku.attributes ?? [])], contents: [...(sku.contents ?? [])] }))
+        : [{ sku_code: skuData?.view?.skus?.[0]?.sku_code ?? '', label: state.detail.project.name, attributes: [], contents: [], confirmed: false }],
+    };
+    rerenderSkuSection();
+    return;
+  }
+  if (action === 'sku-cancel') { state.skuEditing = null; rerenderSkuSection(); return; }
+  if (action === 'sku-save') { await saveSkus(trigger.dataset.confirm === 'true'); return; }
+  if (action === 'sku-history') {
+    const holder = $('#sku-history');
+    if (holder.dataset.loaded) { holder.innerHTML = ''; delete holder.dataset.loaded; return; }
+    const versions = await api.listSkuVersions(state.detail.project.id);
+    holder.dataset.loaded = '1';
+    holder.innerHTML = versions.versions.length
+      ? `<ul class="truth-history">${versions.versions.map(item => `<li><b>v${item.version}</b><span>${item.confirmation_status === 'confirmed' ? '已确认' : '草稿'} · ${item.sku_count} 个 SKU · ${escapeHtml(item.created_by)} · ${escapeHtml(formatTime(item.created_at))}</span><code>${escapeHtml(shortHash(item.content_hash))}</code></li>`).join('')}</ul>`
+      : '<p class="truth-empty">尚无档案版本。</p>';
+    return;
+  }
+  if (!state.skuEditing) return;
+  collectSkuEditor();
+  const block = trigger.closest('[data-sku-index]');
+  const index = block ? Number(block.dataset.skuIndex) : -1;
+  if (action === 'sku-add') state.skuEditing.skus.push({ sku_code: '', label: '', attributes: [], contents: [], confirmed: false });
+  if (action === 'sku-remove' && index >= 0) {
+    if (state.skuEditing.skus.length <= 1) { state.skuEditing.skus[0] = { sku_code: '', label: '', attributes: [], contents: [], confirmed: false }; }
+    else state.skuEditing.skus.splice(index, 1);
+  }
+  if (action === 'sku-add-attr' && index >= 0) state.skuEditing.skus[index].attributes.push({ key: '', value: '', unit: '' });
+  if (action === 'sku-add-content' && index >= 0) state.skuEditing.skus[index].contents.push({ item: '', quantity: 1, unit: '', included: true, source: 'user_input' });
+  if (action === 'sku-remove-row' && index >= 0) {
+    const row = trigger.closest('.sku-edit-row');
+    const inAttrs = row.parentElement.hasAttribute('data-sku-attrs');
+    const rows = [...row.parentElement.children];
+    const rowIndex = rows.indexOf(row);
+    if (inAttrs) state.skuEditing.skus[index].attributes.splice(rowIndex, 1);
+    else state.skuEditing.skus[index].contents.splice(rowIndex, 1);
+  }
+  rerenderSkuSection();
+}
+
 function onTruthClick(event) {
   const trigger = event.target.closest('[data-action]');
   if (!trigger) return;
   const action = trigger.dataset.action;
+  if (action.startsWith('sku-')) {
+    void onSkuClick(action, trigger);
+    return;
+  }
   if (action === 'extract-facts' || action === 'save-subject-box') {
     void handleAssetAction(trigger, action);
     return;

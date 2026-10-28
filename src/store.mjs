@@ -30,6 +30,8 @@ const TABLES = Object.freeze([
   'accounts', 'tenants', 'sessions', 'auth_throttle',
   // R03：成品额度批次与按任务预留记录（旧数据缺表时按空表迁移，并在首次访问时补一个遗留批次）
   'credit_lots', 'credit_reservations',
+  // E01：SKU 档案版本（差异属性与包装包含物，只增不改；旧数据缺表时按空表迁移）
+  'sku_profiles',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -42,6 +44,7 @@ const EMPTY_DATA = () => ({
   feedback: {}, outcome_imports: {}, experiments: {}, billing_orders: {}, payment_events: {}, backups: {},
   accounts: {}, tenants: {}, sessions: {}, auth_throttle: {},
   credit_lots: {}, credit_reservations: {},
+  sku_profiles: {},
 });
 
 function normalize(raw) {

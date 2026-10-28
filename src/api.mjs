@@ -18,6 +18,9 @@ import {
 } from './domain.mjs';
 import { getTemplate, listChannelRules, listTemplates, matchChannelRule } from './catalog.mjs';
 import {
+  simplifiedSkuView, skuProfileContentHash, validateSkuProfilesInput,
+} from './sku.mjs';
+import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
 import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
@@ -542,6 +545,20 @@ export function createApi({
       if (method === 'POST') return createTruthVersion(ctx, req, projectId, send);
       requireMethod(method, ['GET', 'HEAD', 'POST']);
       return listTruthVersions(ctx, projectId, send);
+    }
+    // E01：SKU 档案与包装包含物（版本化 + 乐观锁；权限走 projects 默认 project:read/write）
+    if (rest.length === 3 && section === 'skus') {
+      if (method === 'PUT') return putSkuProfiles(ctx, req, projectId, send);
+      requireMethod(method, ['GET', 'HEAD', 'PUT']);
+      return getSkuProfiles(ctx, projectId, send);
+    }
+    if (rest.length === 4 && section === 'skus' && third === 'versions') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return listSkuVersions(ctx, projectId, send);
+    }
+    if (rest.length === 5 && section === 'skus' && third === 'versions') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return getSkuVersion(ctx, projectId, rest[4], send);
     }
     if (rest.length === 3 && section === 'readiness') {
       requireMethod(method, ['GET', 'HEAD']);
@@ -1382,6 +1399,107 @@ export function createApi({
     });
     if (!found) throw new ApiError(404, 'NOT_FOUND', '事实版本不存在');
     send(200, { truth_version: found });
+  }
+
+  // ---------- E01：SKU 档案与包装包含物 ----------
+
+  function skuProfilesOf(data, project) {
+    return Object.values(data.sku_profiles ?? {})
+      .filter(item => item.project_id === project.id && item.tenant_id === project.tenant_id)
+      .sort((left, right) => left.version - right.version);
+  }
+
+  async function getSkuProfiles(ctx, projectId, send) {
+    const result = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const versions = skuProfilesOf(data, project);
+      const head = versions[versions.length - 1] ?? null;
+      if (!head) {
+        // 单规格简化入口：无档案时返回派生视图，不伪造已确认档案
+        return {
+          project_id: project.id,
+          head_version: 0,
+          profile: null,
+          view: simplifiedSkuView(project),
+        };
+      }
+      return { project_id: project.id, head_version: head.version, profile: head, view: null };
+    });
+    send(200, result);
+  }
+
+  async function putSkuProfiles(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const record = await store.mutate(data => {
+      const project = findProject(data, ctx, projectId);
+      const assets = Object.values(data.assets)
+        .filter(asset => asset.project_id === project.id && asset.tenant_id === ctx.tenantId);
+      const payload = validateSkuProfilesInput(body, { project, assets });
+      const head = project.sku_head_version ?? 0;
+      if (payload.base_version !== head) {
+        throw new ApiError(409, 'VERSION_CONFLICT', `SKU 档案已更新到 v${head}，请刷新后基于最新版本重新提交`, {
+          current_version: head,
+        });
+      }
+      if (payload.confirm && (payload.skus.length === 0 || payload.skus.some(sku => !sku.confirmed))) {
+        throw new ApiError(409, 'CONFIRMATION_BLOCKED', '存在未确认的 SKU，无法确认档案：请逐项确认后再提交', {
+          unconfirmed: payload.skus.filter(sku => !sku.confirmed).map(sku => sku.sku_code),
+        });
+      }
+      const timestamp = now();
+      const skus = payload.skus.map(sku => ({
+        ...sku,
+        id: sku.id ?? newId('sku'),
+        confirmed_by: sku.confirmed ? ctx.actorId : null,
+        confirmed_at: sku.confirmed ? timestamp : null,
+      }));
+      const version = head + 1;
+      const entry = {
+        id: newId('sp'),
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        version,
+        base_version: payload.base_version,
+        skus,
+        confirmation_status: payload.confirm ? 'confirmed' : 'draft',
+        content_hash: skuProfileContentHash({ skus }),
+        created_by: ctx.actorId,
+        created_at: timestamp,
+      };
+      data.sku_profiles[entry.id] = entry;
+      project.sku_head_version = version;
+      project.updated_at = timestamp;
+      return entry;
+    });
+    send(201, { sku_profile: record });
+  }
+
+  async function listSkuVersions(ctx, projectId, send) {
+    const result = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const versions = skuProfilesOf(data, project).map(item => ({
+        version: item.version,
+        base_version: item.base_version,
+        confirmation_status: item.confirmation_status,
+        sku_count: item.skus.length,
+        content_hash: item.content_hash,
+        created_by: item.created_by,
+        created_at: item.created_at,
+      }));
+      return { project_id: project.id, head_version: project.sku_head_version ?? 0, versions };
+    });
+    send(200, result);
+  }
+
+  async function getSkuVersion(ctx, projectId, rawVersion, send) {
+    const version = Number(rawVersion);
+    if (!Number.isInteger(version) || version < 1) throw new ApiError(404, 'NOT_FOUND', 'SKU 档案版本不存在');
+    const found = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      return skuProfilesOf(data, project).find(item => item.version === version) ?? null;
+    });
+    if (!found) throw new ApiError(404, 'NOT_FOUND', 'SKU 档案版本不存在');
+    send(200, { sku_profile: found });
   }
 
   async function getReadiness(ctx, projectId, send) {
