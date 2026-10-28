@@ -42,6 +42,7 @@ import {
 import {
   TEXT_EDIT_VERSION, applyTextEdits, describeTextEdits, presentTextLayers, textEditLimits,
 } from './text-edits.mjs';
+import { compileDependencies } from './depgraph.mjs';
 
 export const RUN_SCHEMA_VERSION = 1;
 export const EVENT_SCHEMA_VERSION = 1;
@@ -982,6 +983,7 @@ export function createJobs({
       previous.superseded_at = version.created_at;
     }
     run.versions.push(version);
+    recordImageDependencies(data, run, version);
     if (target) {
       target.active_version_id = version.id;
       target.revision = null;
@@ -1093,6 +1095,7 @@ export function createJobs({
       sourceDeliverable.active_version_id = adopted.id;
     }
     sourceRun.versions.push(adopted);
+    recordImageDependencies(data, sourceRun, adopted);
     refreshRunQuality(data, sourceRun);
     // 源任务侧登记：这条重生成已到终态（publishable/needs_review），模块 05 的互斥看这个状态
     const registration = (sourceRun.regenerations ?? []).find(item => item.run_id === run.id);
@@ -1125,6 +1128,46 @@ export function createJobs({
       item.tenant_id === run.tenant_id && item.project_id === run.project_id
       && item.version === run.spec_ref?.version) ?? null;
   }
+
+  // ---------- E02：版本落库时编译确定依赖（无编译依据则跳过，查询侧按 unknown 处理） ----------
+  function recordImageDependencies(data, run, version) {
+    if (!run || !version || !data.image_dependencies) return;
+    if (Object.values(data.image_dependencies).some(item =>
+      item.run_id === run.id && item.deliverable_id === version.deliverable_id && item.version_id === version.id)) return;
+    const spec = specOfRun(data, run);
+    if (!spec) return; // legacy 版本：没有冻结快照，不伪造依赖
+    const truth = truthOfRun(data, run, spec);
+    const compiled = executionForDeliverable(run.execution?.plan, { deliverableId: version.deliverable_id });
+    // 文字修改版本以随版本冻结的 text_layers 为准（与实际渲染产物一致），否则用编译计划
+    const deliverable = compiled || Array.isArray(version.text_layers)
+      ? { ...(compiled ?? {}), text_layers: Array.isArray(version.text_layers) && version.text_layers.length > 0 ? version.text_layers : compiled?.text_layers ?? [] }
+      : null;
+    const skuProfile = Object.values(data.sku_profiles ?? {})
+      .filter(item => item.tenant_id === run.tenant_id && item.project_id === run.project_id)
+      .sort((left, right) => left.version - right.version)
+      .at(-1) ?? null;
+    const entries = compileDependencies({
+      spec, truth, deliverable,
+      references: run.subject_context?.references ?? [],
+      skuProfile,
+    });
+    if (!entries) return;
+    const at = clock();
+    const id = newId('dep');
+    data.image_dependencies[id] = {
+      id,
+      tenant_id: run.tenant_id,
+      project_id: run.project_id,
+      run_id: run.id,
+      deliverable_id: version.deliverable_id,
+      version_id: version.id,
+      entries,
+      status: 'active',
+      created_by: 'system',
+      created_at: new Date(at).toISOString(),
+    };
+  }
+
 
   function truthOfRun(data, run, spec) {
     if (!run) return null;
@@ -2078,7 +2121,9 @@ export function createJobs({
       spec,
       truth,
       channel,
-      brandKitVersion: kit?.version ?? null,
+      // E02 修复：brand_kits 记录的当前版本字段是 head_version；原 `kit.version` 恒为 undefined，
+      // 导致所有带品牌套件的报告被判 stale（品牌套件已有新版本），永远无法复核/导出
+      brandKitVersion: kit?.head_version ?? null,
       run: data.runs?.[report.run_id] ?? null,
     };
   }
@@ -2436,6 +2481,7 @@ export function createJobs({
         nextVersion.superseded_at = nextVersion.created_at;
       }
       run.versions.push(nextVersion);
+      recordImageDependencies(data, run, nextVersion);
       const activeVersion = run.versions.find(item => item.active && item.deliverable_id === deliverableId) ?? null;
       target.quality_report_id = activeVersion?.report_id ?? target.quality_report_id;
       refreshRunQuality(data, run);

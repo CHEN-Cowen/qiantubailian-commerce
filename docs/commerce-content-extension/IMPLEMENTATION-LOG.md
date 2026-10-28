@@ -105,4 +105,33 @@
 
 ### 提交与推送
 
-- 提交：见 E02 记录开头补入。
+- 提交：`10f9eac`（feat(sku): E01 商品SKU档案与包装包含物服务）
+- 推送：已核对远端包含 `10f9eac`。
+
+## 模块 E02：图片依赖、版本与导出追踪服务
+
+### 实际实现
+
+1. 新表 `image_dependencies`（一个 run+deliverable+version 一条记录，entries 含 kind∈fact/asset/brand/sku/text_layer、evidence∈deterministic/ocr_candidate/manual、deterministic 带 source_version 快照）与 `export_channels`（渠道标签 + history）。
+2. 新文件 `src/depgraph.mjs`：`compileDependencies` 从冻结 spec 快照/事实版本/SKU 档案编译确定依赖；`mergeManualEntries` 按 kind:ref 去重；无编译依据返回 null（不伪造依赖）。
+3. `src/jobs.mjs` 三个挂钩点：生成成功版本、文字修改新版本、单张重生成新版本落库时编译写入；无 spec 快照的 legacy 版本跳过（查询侧按 unknown）。**附带修复既有 bug**：`reportSnapshotContext` 原用 `kit?.version`，而 brand_kits 实际字段为 `head_version`，导致带品牌套件的 QA 报告恒 stale、无法复核/导出；已改 `kit?.head_version ?? null`。
+4. 路由：`GET /api/runs/:id/dependencies`（无记录版本标 unknown，不显示「无需更新」）、`GET/POST /api/runs/:id/deliverables/:did/dependencies`（人工关联必填 reason、ref 范围校验）、`DELETE .../dependencies/:entryRef`（deterministic 拒绝 409 DEPENDENCY_LOCKED，manual 可删并留 removals 审计）、`PUT/GET /api/exports/:id/channels`（标签去重 ≤8 个）、`GET /api/projects/:id/assets/:aid/dependents`。全部租户隔离。
+
+### 测试证据（Node 22.22.2）
+
+- `node --test test/e02.js`：3/3 通过（纯函数编译、真实 HTTP 集成全链路、旧数据 unknown 兼容）。
+- `npm run check`：79 个文件；全量 `npm test`：262 项，261 通过 / 0 失败 / 1 跳过（既有符号链接项）。
+
+### 本轮调试修复
+
+1. 人工关联测试断言修正：同 ref 已被编译为 deterministic 时 manual 去重跳过（设计如此），改用全新 ref 断言。
+2. DELETE 无 body 时 readJson 先抛 400：改为仅 content-length>0 才读 body，缺 reason 正确返回 422。
+
+### 未验证 / 边界
+
+- `ocr_candidate` 档位结构与呈现已支持，但 OCR 未配置时无产生路径，仅有结构测试。
+- 依赖记录的前端展示在 E07 统一联调；`export_channels` history 仅断言 labels 更新行为。
+
+### 提交与推送
+
+- 提交：见 E03 记录开头补入。

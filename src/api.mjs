@@ -20,6 +20,7 @@ import { getTemplate, listChannelRules, listTemplates, matchChannelRule } from '
 import {
   simplifiedSkuView, skuProfileContentHash, validateSkuProfilesInput,
 } from './sku.mjs';
+import { DEPENDENCY_KINDS, mergeManualEntries, presentDependency } from './depgraph.mjs';
 import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
@@ -284,7 +285,21 @@ export function createApi({
         requireMethod(method, ['POST']);
         return textEditRoute(ctx, req, rest[1], rest[3], send);
       }
+      // E02：图片版本依赖（deterministic 由系统编译写入，manual 由商家补关联）
+      if (rest.length === 5 && rest[2] === 'deliverables' && rest[4] === 'dependencies') {
+        if (method === 'POST') return postManualDependency(ctx, req, rest[1], rest[3], send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return getDeliverableDependencies(ctx, rest[1], rest[3], send);
+      }
+      if (rest.length === 6 && rest[2] === 'deliverables' && rest[4] === 'dependencies') {
+        requireMethod(method, ['DELETE']);
+        return deleteManualDependency(ctx, req, rest[1], rest[3], rest[5], query, send);
+      }
       if (rest.length !== 3) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+      if (rest[2] === 'dependencies') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getRunDependencies(ctx, rest[1], send);
+      }
       if (rest[2] === 'regenerate') { requireMethod(method, ['POST']); return regenerateRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'cancel') { requireMethod(method, ['POST']); return cancelRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'budget-confirmation') { requireMethod(method, ['POST']); return confirmBudgetRoute(ctx, req, rest[1], send); }
@@ -325,6 +340,12 @@ export function createApi({
         return jobs.getExport(ctx, rest[1]).then(result => send(200, result));
       }
       if (rest.length === 3 && rest[2] === 'download') return downloadExportRoute(ctx, rest[1], res, send);
+      // E02：导出渠道标签（可更新，保留历史）
+      if (rest.length === 3 && rest[2] === 'channels') {
+        if (method === 'PUT') return putExportChannels(ctx, req, rest[1], send);
+        requireMethod(method, ['GET', 'HEAD', 'PUT']);
+        return getExportChannels(ctx, rest[1], send);
+      }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
     if (resource === 'quality-reports') {
@@ -597,6 +618,11 @@ export function createApi({
       requireMethod(method, ['POST']);
       return extractAssetFacts(ctx, req, projectId, third, send);
     }
+    // E02：素材被哪些图片版本依赖（替换/删除前的影响可见性；空数组也要明确返回）
+    if (rest.length === 5 && section === 'assets' && rest[4] === 'dependents') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return getAssetDependents(ctx, projectId, third, send);
+    }
     if (rest.length === 3 && section === 'detail-pages') {
       if (method === 'POST') return createDetailPage(ctx, req, projectId, send);
       requireMethod(method, ['GET', 'HEAD', 'POST']);
@@ -725,9 +751,15 @@ export function createApi({
         // M13：文字层预览是读动作；提交文字修改是内容写动作，复核/只读角色不可用
         if (third === 'deliverables' && fifth === 'text-layers') return 'run:read';
         if (third === 'deliverables' && fifth === 'text-edits') return write ? 'run:create' : 'run:read';
+        // E02：依赖查询走 run:read；人工关联/删除是内容写操作
+        if (third === 'dependencies') return write ? 'project:write' : 'run:read';
+        if (third === 'deliverables' && fifth === 'dependencies') return write ? 'project:write' : 'run:read';
         return 'run:read';
       }
-      case 'exports': return second !== undefined && third === 'download' ? 'export:download' : 'export:read';
+      case 'exports':
+        // E02：渠道标签：写走 export:create，读走 export:read
+        if (second !== undefined && third === 'channels') return write ? 'export:create' : 'export:read';
+        return second !== undefined && third === 'download' ? 'export:download' : 'export:read';
       case 'quality-reports': return third === 'reviews' && write ? 'quality:review' : 'quality:read';
       case 'detail-pages':
       case 'video-plans':
@@ -1500,6 +1532,287 @@ export function createApi({
     });
     if (!found) throw new ApiError(404, 'NOT_FOUND', 'SKU 档案版本不存在');
     send(200, { sku_profile: found });
+  }
+
+  // ---------- E02：图片版本依赖与导出渠道 ----------
+
+  function findRun(data, ctx, runId) {
+    const run = data.runs?.[runId] ?? null;
+    if (!run || run.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '任务不存在');
+    return run;
+  }
+
+  function dependencyRecordsOf(data, run) {
+    return Object.values(data.image_dependencies ?? {})
+      .filter(item => item.run_id === run.id && item.tenant_id === run.tenant_id);
+  }
+
+  /** 版本依赖的证据档位：无记录 = unknown（前端只能提示"关联信息不足，待人工关联"，不得显示"无需更新"）。 */
+  function recordEvidence(record) {
+    if (!record || (record.entries ?? []).length === 0) return 'unknown';
+    if (record.entries.some(item => item.evidence === 'deterministic')) return 'deterministic';
+    return 'manual';
+  }
+
+  async function getRunDependencies(ctx, runId, send) {
+    const result = await store.read(data => {
+      const run = findRun(data, ctx, runId);
+      const byVersion = new Map(dependencyRecordsOf(data, run).map(item => [item.version_id, item]));
+      return {
+        run_id: run.id,
+        project_id: run.project_id,
+        deliverables: (run.deliverables ?? []).map(target => {
+          const versionId = target.active_version_id ?? null;
+          const record = versionId ? byVersion.get(versionId) ?? null : null;
+          return {
+            deliverable_id: target.deliverable_id,
+            label: target.label ?? target.deliverable_id,
+            version_id: versionId,
+            evidence: recordEvidence(record),
+            entries: record ? record.entries.map(item => ({ ...item })) : [],
+          };
+        }),
+      };
+    });
+    send(200, result);
+  }
+
+  async function getDeliverableDependencies(ctx, runId, deliverableId, send) {
+    const result = await store.read(data => {
+      const run = findRun(data, ctx, runId);
+      const target = (run.deliverables ?? []).find(item => item.deliverable_id === deliverableId);
+      if (!target) throw new ApiError(404, 'NOT_FOUND', '交付物不存在');
+      const byVersion = new Map(
+        dependencyRecordsOf(data, run)
+          .filter(item => item.deliverable_id === deliverableId)
+          .map(item => [item.version_id, item]),
+      );
+      return {
+        run_id: run.id,
+        deliverable_id: deliverableId,
+        active_version_id: target.active_version_id ?? null,
+        versions: (run.versions ?? [])
+          .filter(item => item.deliverable_id === deliverableId)
+          .map(version => {
+            const record = byVersion.get(version.id) ?? null;
+            return {
+              version_id: version.id,
+              number: version.number,
+              active: version.active === true,
+              created_at: version.created_at,
+              evidence: recordEvidence(record),
+              record_id: record?.id ?? null,
+              entries: record ? record.entries.map(item => ({ ...item })) : [],
+            };
+          }),
+      };
+    });
+    send(200, result);
+  }
+
+  async function postManualDependency(ctx, req, runId, deliverableId, send) {
+    const body = await readJson(req);
+    const record = await store.mutate(data => {
+      const run = findRun(data, ctx, runId);
+      const target = (run.deliverables ?? []).find(item => item.deliverable_id === deliverableId);
+      if (!target) throw new ApiError(404, 'NOT_FOUND', '交付物不存在');
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new ApiError(400, 'INVALID_BODY', '请求体必须为 JSON 对象');
+      }
+      const versionId = typeof body.version_id === 'string' ? body.version_id.trim() : '';
+      const version = (run.versions ?? []).find(item => item.id === versionId && item.deliverable_id === deliverableId);
+      if (!version) throw new ApiError(404, 'NOT_FOUND', '指定的图片版本不存在或不属于该交付物');
+      const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
+      if (!reason || reason.length > 300) {
+        throw new ApiError(422, 'INVALID_FIELD', 'reason 必填且不超过 300 字符：人工关联必须留下依据');
+      }
+      if (!Array.isArray(body.entries) || body.entries.length < 1 || body.entries.length > 20) {
+        throw new ApiError(422, 'INVALID_FIELD', 'entries 必须为 1—20 项的数组');
+      }
+      // ref 范围校验：fact 在当前事实版本内；asset/sku 属于该项目；brand 属于该租户；text_layer 真实存在
+      const truthHead = Object.values(data.truth_versions ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === run.project_id)
+        .sort((left, right) => left.version - right.version).at(-1) ?? null;
+      const skuHead = Object.values(data.sku_profiles ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === run.project_id)
+        .sort((left, right) => left.version - right.version).at(-1) ?? null;
+      const knownLayerIds = new Set();
+      for (const item of run.versions ?? []) for (const layer of item.text_layers ?? []) knownLayerIds.add(layer.id);
+      for (const item of run.execution?.plan?.deliverables ?? []) for (const layer of item.text_layers ?? []) knownLayerIds.add(layer.id);
+      const timestamp = now();
+      const manual = body.entries.map((item, index) => {
+        const at = `entries[${index}]`;
+        const kind = item?.kind;
+        if (!DEPENDENCY_KINDS.includes(kind)) {
+          throw new ApiError(422, 'INVALID_FIELD', `${at}.kind 必须是 ${DEPENDENCY_KINDS.join(' / ')} 之一`);
+        }
+        const ref = typeof item?.ref === 'string' ? item.ref.trim() : '';
+        if (!ref) throw new ApiError(422, 'INVALID_FIELD', `${at}.ref 必填`);
+        const note = item?.note === undefined || item?.note === null || item?.note === '' ? null : String(item.note).trim();
+        if (note && note.length > 300) throw new ApiError(422, 'INVALID_FIELD', `${at}.note 不能超过 300 字符`);
+        if (kind === 'fact') {
+          const ok = ref === 'critical_text' || (truthHead?.facts ?? []).some(fact => fact.key === ref);
+          if (!ok) throw new ApiError(422, 'INVALID_FIELD', `${at}.ref「${ref}」不在该项目当前事实版本内`);
+        }
+        if (kind === 'asset') {
+          const asset = data.assets?.[ref];
+          if (!asset || asset.tenant_id !== ctx.tenantId || asset.project_id !== run.project_id) {
+            throw new ApiError(422, 'INVALID_FIELD', `${at}.ref 指向的素材不属于该项目`);
+          }
+        }
+        if (kind === 'brand') {
+          const kit = data.brand_kits?.[ref];
+          if (!kit || kit.tenant_id !== ctx.tenantId) {
+            throw new ApiError(422, 'INVALID_FIELD', `${at}.ref 指向的品牌套件不存在`);
+          }
+        }
+        if (kind === 'sku') {
+          const ok = (skuHead?.skus ?? []).some(sku => sku.id === ref);
+          if (!ok) throw new ApiError(422, 'INVALID_FIELD', `${at}.ref 指向的 SKU 不在该项目当前档案内`);
+        }
+        if (kind === 'text_layer' && !knownLayerIds.has(ref)) {
+          throw new ApiError(422, 'INVALID_FIELD', `${at}.ref 指向的文字层不存在`);
+        }
+        return { kind, ref, evidence: 'manual', note, reason, actor: ctx.actorId, at: timestamp };
+      });
+      const existing = Object.values(data.image_dependencies ?? {}).find(item =>
+        item.run_id === run.id && item.deliverable_id === deliverableId && item.version_id === version.id) ?? null;
+      if (existing) {
+        existing.entries = mergeManualEntries(existing.entries, manual);
+        return existing;
+      }
+      const id = newId('dep');
+      const created = {
+        id, tenant_id: ctx.tenantId, project_id: run.project_id,
+        run_id: run.id, deliverable_id: deliverableId, version_id: version.id,
+        entries: manual, status: 'active', created_by: ctx.actorId, created_at: timestamp,
+      };
+      data.image_dependencies[id] = created;
+      return created;
+    });
+    send(201, { dependency: presentDependency(record) });
+  }
+
+  async function deleteManualDependency(ctx, req, runId, deliverableId, rawRef, query, send) {
+    const decoded = decodeURIComponent(String(rawRef ?? ''));
+    const sep = decoded.indexOf(':');
+    const kind = sep >= 0 ? decoded.slice(0, sep) : decoded;
+    const ref = sep >= 0 ? decoded.slice(sep + 1) : '';
+    let reason = String(query?.get('reason') ?? '').trim();
+    if (!reason && Number(req.headers['content-length'] ?? 0) > 0) {
+      const body = await readJson(req);
+      reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+    }
+    if (!reason || reason.length > 300) {
+      throw new ApiError(422, 'INVALID_FIELD', '删除人工关联必须带 reason（query 或请求体），且不超过 300 字符');
+    }
+    const record = await store.mutate(data => {
+      const run = findRun(data, ctx, runId);
+      const target = (run.deliverables ?? []).find(item => item.deliverable_id === deliverableId);
+      if (!target) throw new ApiError(404, 'NOT_FOUND', '交付物不存在');
+      const holders = dependencyRecordsOf(data, run).filter(item => item.deliverable_id === deliverableId);
+      const holder = holders.find(item => (item.entries ?? []).some(entry => entry.kind === kind && entry.ref === ref)) ?? null;
+      if (!holder) throw new ApiError(404, 'NOT_FOUND', '该依赖条目不存在');
+      const entry = holder.entries.find(item => item.kind === kind && item.ref === ref);
+      if (entry.evidence !== 'manual') {
+        throw new ApiError(409, 'DEPENDENCY_LOCKED', '系统编译的确定依赖不可删除；如有异议请修正事实或素材后重新生成版本');
+      }
+      holder.entries = holder.entries.filter(item => !(item.kind === kind && item.ref === ref));
+      // 删除也留痕：谁、何时、为什么移除了这条人工关联
+      (holder.removals ??= []).push({ kind, ref, actor: ctx.actorId, at: now(), reason });
+      return holder;
+    });
+    send(200, { dependency: presentDependency(record) });
+  }
+
+  function findExportRecord(data, ctx, exportId) {
+    const found = data.exports?.[exportId] ?? null;
+    if (!found || found.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '导出记录不存在');
+    return found;
+  }
+
+  function presentChannels(record, exportId) {
+    return {
+      export_id: exportId,
+      labels: record?.labels ?? [],
+      note: record?.note ?? null,
+      updated_by: record?.updated_by ?? null,
+      updated_at: record?.updated_at ?? null,
+    };
+  }
+
+  async function putExportChannels(ctx, req, exportId, send) {
+    const body = await readJson(req);
+    const record = await store.mutate(data => {
+      findExportRecord(data, ctx, exportId);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new ApiError(400, 'INVALID_BODY', '请求体必须为 JSON 对象');
+      }
+      if (!Array.isArray(body.labels) || body.labels.length > 8) {
+        throw new ApiError(422, 'INVALID_FIELD', 'labels 必须为不超过 8 个的数组');
+      }
+      const labels = [...new Set(body.labels.map((label, index) => {
+        if (typeof label !== 'string' || label.trim() === '') {
+          throw new ApiError(422, 'INVALID_FIELD', `labels[${index}] 不能为空`);
+        }
+        const trimmed = label.trim();
+        if (trimmed.length > 40) throw new ApiError(422, 'INVALID_FIELD', `labels[${index}] 不能超过 40 个字符`);
+        return trimmed;
+      }))];
+      const note = body.note === undefined || body.note === null || body.note === '' ? null : String(body.note).trim();
+      if (note && note.length > 300) throw new ApiError(422, 'INVALID_FIELD', 'note 不能超过 300 字符');
+      const timestamp = now();
+      const existing = data.export_channels?.[exportId] ?? null;
+      const record = existing ?? {
+        id: newId('exc'), tenant_id: ctx.tenantId, export_id: exportId, history: [],
+      };
+      if (existing) {
+        // 保留更新历史：labels/note/updated_by/at 每次都进 history
+        record.history.push({
+          labels: existing.labels, note: existing.note,
+          updated_by: existing.updated_by, updated_at: existing.updated_at,
+        });
+      }
+      record.labels = labels;
+      record.note = note;
+      record.updated_by = ctx.actorId;
+      record.updated_at = timestamp;
+      data.export_channels[exportId] = record;
+      return record;
+    });
+    send(200, { channels: presentChannels(record, exportId) });
+  }
+
+  async function getExportChannels(ctx, exportId, send) {
+    const result = await store.read(data => {
+      findExportRecord(data, ctx, exportId);
+      return presentChannels(data.export_channels?.[exportId] ?? null, exportId);
+    });
+    send(200, { channels: result });
+  }
+
+  async function getAssetDependents(ctx, projectId, assetId, send) {
+    const result = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const asset = data.assets?.[assetId] ?? null;
+      if (!asset || asset.tenant_id !== ctx.tenantId || asset.project_id !== project.id) {
+        throw new ApiError(404, 'NOT_FOUND', '素材不存在');
+      }
+      const dependents = Object.values(data.image_dependencies ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === project.id
+          && (item.entries ?? []).some(entry => entry.kind === 'asset' && entry.ref === assetId))
+        .map(item => ({
+          run_id: item.run_id,
+          deliverable_id: item.deliverable_id,
+          version_id: item.version_id,
+          evidence: item.entries.find(entry => entry.kind === 'asset' && entry.ref === assetId)?.evidence ?? 'unknown',
+          status: item.status,
+          created_at: item.created_at,
+        }));
+      // 空数组也明确返回：由前端区分"无依赖"与"未检查"
+      return { asset_id: assetId, project_id: project.id, dependents };
+    });
+    send(200, result);
   }
 
   async function getReadiness(ctx, projectId, send) {

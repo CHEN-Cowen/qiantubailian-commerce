@@ -32,6 +32,8 @@ const TABLES = Object.freeze([
   'credit_lots', 'credit_reservations',
   // E01：SKU 档案版本（差异属性与包装包含物，只增不改；旧数据缺表时按空表迁移）
   'sku_profiles',
+  // E02：图片版本依赖记录与导出渠道标签（只增不改 / 更新保留历史；旧数据按空表迁移）
+  'image_dependencies', 'export_channels',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -45,6 +47,7 @@ const EMPTY_DATA = () => ({
   accounts: {}, tenants: {}, sessions: {}, auth_throttle: {},
   credit_lots: {}, credit_reservations: {},
   sku_profiles: {},
+  image_dependencies: {}, export_channels: {},
 });
 
 function normalize(raw) {
