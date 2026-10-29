@@ -16,7 +16,7 @@ const ROLE_OPTIONS = [
 ];
 const ROLE_LABELS = Object.fromEntries(ROLE_OPTIONS.map(([value, label]) => [value, label]));
 
-const state = { toast: () => {}, projects: [], detail: null, regions: new Map(), pendingProjectId: null, skuEditing: null, change: null, check: null };
+const state = { toast: () => {}, projects: [], detail: null, regions: new Map(), pendingProjectId: null, skuEditing: null, change: null, check: null, explainers: null };
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -49,6 +49,10 @@ export function initRealData({ toast } = {}) {
   $('#upload-replace')?.addEventListener('click', () => void submitUpload(true));
   $('#real-list')?.addEventListener('click', onRealListClick);
   $('#truth-body')?.addEventListener('click', onTruthClick);
+  // E06：切换说明图类型时重建表单（对比图才显示「对比 SKU」）
+  $('#truth-body')?.addEventListener('change', event => {
+    if (event.target?.id === 'ex-kind') rerenderExplainerSection();
+  });
   $$('[data-close-dialog]').forEach(button => {
     button.addEventListener('click', () => document.getElementById(button.dataset.closeDialog)?.close());
   });
@@ -359,6 +363,9 @@ function renderTruth() {
     <section class="truth-section" id="question-section">
       ${renderQuestionSection()}
     </section>
+    <section class="truth-section" id="explainer-section">
+      ${renderExplainerSection()}
+    </section>
     <section class="truth-section">
       <h3>版本历史</h3>
       ${history ? `<ul class="truth-history">${history}</ul>` : '<p class="truth-empty">尚无事实版本。</p>'}
@@ -366,6 +373,7 @@ function renderTruth() {
   void loadChanges(project.id);
   void loadSkuChecks(project.id);
   void loadQuestions(project.id);
+  void loadExplainers(project.id);
 }
 
 // ---------- E01：SKU 档案板块 ----------
@@ -1771,6 +1779,10 @@ function onTruthClick(event) {
     void onQuestionClick(action, trigger);
     return;
   }
+  if (action.startsWith('ex-')) {
+    void onExplainerClick(action, trigger);
+    return;
+  }
   if (action.startsWith('sku-')) {
     void onSkuClick(action, trigger);
     return;
@@ -1888,6 +1900,360 @@ async function saveTruth(confirm) {
     }
     errorNode.textContent = errorText(error);
   }
+}
+
+// ---------- E06：说明图（包装内容清单 / 尺寸说明 / SKU 对比） ----------
+
+const EXPLAINER_KIND_OPTIONS = [
+  ['packing_list', '包装内容清单图'],
+  ['size', '尺寸说明图'],
+  ['sku_compare', 'SKU 对比图'],
+];
+const EXPLAINER_STATUS_META = {
+  draft: { label: '草稿', tone: 'neutral' },
+  needs_review: { label: '待人工核对', tone: 'bad' },
+  awaiting_review: { label: '待复核', tone: 'amber' },
+  checked: { label: '已复核（未选版）', tone: 'neutral' },
+  active: { label: '已选版', tone: 'ok' },
+  stale: { label: '已过期', tone: 'bad' },
+};
+const EXPLAINER_REVIEW_LABELS = { pending: '待复核', confirmed: '已复核通过', rejected: '已退回' };
+
+function emptyExplainerState(projectId) {
+  return {
+    projectId, loading: true, error: '', notice: '', items: [], summary: {},
+    previewing: false, creating: false, busyId: '', preview: null, packages: {},
+    draft: { kind: 'packing_list', skuId: '', peerSkuId: '', baseMode: 'none', baseAssetId: '' },
+  };
+}
+
+function newExplainerIdempotencyKey() {
+  return `ex-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+async function loadExplainers(projectId) {
+  if (!state.explainers || state.explainers.projectId !== projectId) {
+    state.explainers = emptyExplainerState(projectId);
+  }
+  const area = state.explainers;
+  area.loading = true;
+  area.error = '';
+  rerenderExplainerSection();
+  try {
+    const result = await api.listExplainers(projectId);
+    if (state.explainers !== area) return; // 已切换项目，丢弃过期结果
+    area.items = result.explainers ?? [];
+    area.summary = result.summary ?? {};
+    area.loading = false;
+  } catch (error) {
+    if (state.explainers !== area) return;
+    area.loading = false;
+    area.error = errorText(error);
+  }
+  rerenderExplainerSection();
+}
+
+/** 重渲染前把表单里正在选的内容收回草稿，避免刷新列表时丢掉选择。 */
+function collectExplainerDraft() {
+  const area = state.explainers;
+  if (!area) return;
+  const kind = $('#ex-kind');
+  if (kind) area.draft.kind = kind.value;
+  const sku = $('#ex-sku');
+  if (sku) area.draft.skuId = sku.value;
+  const peer = $('#ex-peer');
+  if (peer) area.draft.peerSkuId = peer.value;
+  const base = $('#ex-base');
+  if (base) {
+    // 下拉值形如 none / asset:<id>，避免再维护一个隐藏字段
+    const [mode, id = ''] = String(base.value).split(':');
+    area.draft.baseMode = mode;
+    area.draft.baseAssetId = id;
+  }
+}
+
+function rerenderExplainerSection() {
+  const node = $('#explainer-section');
+  if (!node) return;
+  collectExplainerDraft();
+  node.innerHTML = renderExplainerSection();
+}
+
+function renderExplainerSection() {
+  const area = state.explainers;
+  if (!area || area.projectId !== state.detail?.project?.id) {
+    return '<h3>说明图</h3><p class="truth-hint">正在读取说明图…</p>';
+  }
+  const parts = ['<h3>说明图（包装内容清单 / 尺寸说明 / SKU 对比）</h3>'];
+  parts.push('<p class="truth-hint">说明图是可编辑的确定性排版：文字、数量、单位逐行取自 SKU 档案与已确认事实，排版免费、不调用生图模型。缺依据时只列出缺什么，不替你推测尺寸或适配结论。底图只复用你已上传且生效的素材，或已通过导出闸口的图片版本；没付费/没过闸口的图不能免费当底图。系统不会自动同步店铺，替换清单需你手工替换。</p>');
+  if (area.error) parts.push(`<p class="truth-error" role="alert">${escapeHtml(area.error)}</p>`);
+  if (area.notice) parts.push(`<p class="truth-hint ex-notice">${escapeHtml(area.notice)}</p>`);
+  parts.push(renderExplainerForm(area));
+  if (area.preview) parts.push(renderExplainerPreview(area));
+  if (area.loading) parts.push('<div class="loading-line"></div>');
+  else parts.push(renderExplainerList(area));
+  return parts.join('');
+}
+
+function renderExplainerForm(area) {
+  const skus = state.detail?.skuData?.profile?.skus ?? [];
+  const assets = (state.detail?.assets ?? []).filter(asset => asset.role_status === 'active' && asset.role !== 'style');
+  const draft = area.draft ?? {};
+  const kindOptions = EXPLAINER_KIND_OPTIONS.map(([value, label]) =>
+    `<option value="${value}"${draft.kind === value ? ' selected' : ''}>${label}</option>`).join('');
+  const skuOptions = ['<option value="">选择 SKU（必选）</option>']
+    .concat(skus.map(sku => `<option value="${escapeHtml(sku.id)}"${draft.skuId === sku.id ? ' selected' : ''}>${escapeHtml(sku.sku_code)} ${escapeHtml(sku.label)}</option>`));
+  const peerOptions = ['<option value="">选择对比 SKU（必选）</option>']
+    .concat(skus.map(sku => `<option value="${escapeHtml(sku.id)}"${draft.peerSkuId === sku.id ? ' selected' : ''}>${escapeHtml(sku.sku_code)} ${escapeHtml(sku.label)}</option>`));
+  const baseValue = draft.baseMode === 'asset' && draft.baseAssetId ? `asset:${draft.baseAssetId}` : 'none';
+  const baseOptions = ['<option value="none">不带底图（纯排版）</option>']
+    .concat(assets.map(asset => `<option value="asset:${escapeHtml(asset.id)}"${baseValue === `asset:${asset.id}` ? ' selected' : ''}>底图：${escapeHtml(asset.filename)}（${ROLE_LABELS[asset.role] ?? asset.role}）</option>`));
+  return `<div class="ex-form">
+    <select id="ex-kind" aria-label="说明图类型">${kindOptions.join('')}</select>
+    <select id="ex-sku" aria-label="项目 SKU">${skuOptions.join('')}</select>
+    ${draft.kind === 'sku_compare' ? `<select id="ex-peer" aria-label="对比 SKU">${peerOptions.join('')}</select>` : ''}
+    <select id="ex-base" aria-label="底图">${baseOptions.join('')}</select>
+    <button type="button" class="text-button" data-action="ex-preview"${area.previewing ? ' disabled' : ''}>${area.previewing ? '预览中…' : '预览排版（不落库）'}</button>
+    <button type="button" class="text-button" data-action="ex-refresh">刷新列表</button>
+  </div>`;
+}
+
+function renderExplainerPreview(area) {
+  const preview = area.preview;
+  const plan = preview.plan ?? null;
+  const parts = ['<div class="ex-preview">'];
+  if (!plan || plan.ok !== true) {
+    parts.push('<p class="truth-error" role="alert">这份内容还不够出图，未生成任何图片。</p>');
+    parts.push(`<ul class="ex-issues">${(preview.issues ?? []).length === 0 && plan?.message
+      ? `<li><b>${escapeHtml(plan.code ?? '')}</b>${escapeHtml(plan.message)}</li>`
+      : (preview.issues ?? []).map(issue => `<li><b>${escapeHtml(issue.code ?? '')}</b>${escapeHtml(issue.message ?? '')}</li>`).join('')}</ul>`);
+    if (plan?.missing?.length) {
+      parts.push(`<p class="chg-meta">缺少：${plan.missing.map(item => escapeHtml(item)).join('；')}</p>`);
+    }
+    parts.push('</div>');
+    return parts.join('');
+  }
+  parts.push(`<p class="chg-meta">基于 SKU 档案 v${escapeHtml(String(plan.sources?.sku_profile_version ?? '—'))} · 事实 v${escapeHtml(String(plan.sources?.truth_version ?? '—'))} · 排版免费（0 额度）</p>`);
+  parts.push(`<table class="ex-rows"><thead><tr><th>条目</th><th colspan="2">内容（逐行取自档案/事实）</th></tr></thead><tbody>`);
+  for (const row of plan.rows ?? []) {
+    if (plan.kind === 'sku_compare') {
+      parts.push(`<tr${row.diff ? ' class="is-diff"' : ''}><td>${escapeHtml(row.label)}</td><td>${escapeHtml(row.a)}</td><td>${escapeHtml(row.b)}</td></tr>`);
+    } else {
+      const excluded = row.section === 'excluded';
+      parts.push(`<tr${excluded ? ' class="is-excluded"' : ''}><td>${escapeHtml(row.label)}</td><td colspan="2">${escapeHtml(row.value)}${excluded ? '（不随包装交付）' : ''}</td></tr>`);
+    }
+  }
+  parts.push('</tbody></table>');
+  if (plan.disclaimer) parts.push(`<p class="chg-meta">${escapeHtml(plan.disclaimer)}</p>`);
+  if (preview.duplicate) parts.push(`<p class="truth-hint">${escapeHtml(preview.duplicate.message ?? '')}</p>`);
+  if (preview.audit && preview.audit.ok !== true) {
+    const mismatches = (preview.audit.mismatches ?? []).map(item =>
+      `<li>${escapeHtml(item.field)}：应为 ${escapeHtml(item.expected)}，计划里是 ${escapeHtml(item.actual)}</li>`).join('');
+    parts.push(`<ul class="ex-issues"><li><b>事实一致性审计未通过</b>（${escapeHtml('FACT_CONFLICT')}）</li>${mismatches}</ul>`);
+  }
+  if (preview.photo_quote) {
+    parts.push(`<p class="truth-hint">需要新底图时才生图：预计 ${escapeHtml(String(preview.photo_quote.estimated_credits))} 额度，本步不会自动扣费。</p>`);
+  }
+  parts.push(`<div class="ex-actions">
+    <button type="button" class="text-button" data-action="ex-create"${area.creating ? ' disabled' : ''}>${area.creating ? '生成中…' : '按此排版生成说明图'}</button>
+  </div>`);
+  parts.push('</div>');
+  return parts.join('');
+}
+
+function renderExplainerList(area) {
+  if (area.items.length === 0) return '<p class="truth-empty">尚无说明图。先选类型与 SKU 预览排版，再生成；数量/单位以档案与已确认事实为准。</p>';
+  const summary = area.summary ?? {};
+  const summaryLine = `<div class="skc-summary">
+    <span class="wb-status neutral">共 ${summary.total ?? 0} 张</span>
+    <span class="wb-status ok">已选版：${summary.active ?? 0}</span>
+    <span class="wb-status amber">待复核：${summary.awaiting_review ?? 0}</span>
+    <span class="wb-status bad">已过期：${summary.stale ?? 0}</span>
+  </div>`;
+  return `${summaryLine}<ul class="chg-items ex-list">${area.items.map(item => renderExplainerItem(area, item)).join('')}</ul>`;
+}
+
+function renderExplainerItem(area, item) {
+  const meta = EXPLAINER_STATUS_META[item.status] ?? { label: item.status, tone: 'neutral' };
+  const version = item.active_version;
+  const peer = item.peer_sku ? ` ⇄ ${escapeHtml(item.peer_sku.sku_code)}` : '';
+  const baseLabel = version?.base_photo?.type === 'asset' ? '商家素材'
+    : (version?.base_photo?.type === 'version' ? '已过闸口版本' : '无底图');
+  const rows = (version?.plan?.rows ?? []).slice(0, 6).map(row => (item.kind === 'sku_compare'
+    ? `<li><b>${escapeHtml(row.label)}</b>${escapeHtml(row.a)} ⇄ ${escapeHtml(row.b)}${row.diff ? '（差异）' : ''}</li>`
+    : `<li><b>${escapeHtml(row.label)}</b>${escapeHtml(row.value)}${row.section === 'excluded' ? '（不随包装交付）' : ''}</li>`)).join('');
+  const stale = item.stale
+    ? `<p class="truth-error">已过期：${(item.stale_reasons ?? []).map(reason => escapeHtml(reason.message ?? reason.code)).join('；')}。导出前需按最新档案/事实重排（可在变更单里免费重排）。</p>`
+    : '';
+  const reviewLabel = version ? (EXPLAINER_REVIEW_LABELS[version.review?.decision] ?? '待复核') : '—';
+  const replacement = (item.replacement_list ?? []).map(row => `<li><code>${escapeHtml(row.path)}</code>
+    <span class="chg-meta">新 ${escapeHtml(shortHash(row.new_sha256))} · 上一版 ${escapeHtml(row.previous_sha256 ? shortHash(row.previous_sha256) : '无')}${row.change_note?.length ? ` · 改动 ${row.change_note.map(change => escapeHtml(change.field)).join('/')}` : ''}</span></li>`).join('');
+  const adoption = (item.adoption ?? []).slice(-3).map(entry =>
+    `<li class="chg-meta">${entry.used ? '已采用' : '未采用'}${entry.channel ? ` · ${escapeHtml(entry.channel)}` : ''}${entry.reason ? ` · ${escapeHtml(entry.reason)}` : ''} · ${escapeHtml(formatTime(entry.at))}</li>`).join('');
+  const pkg = area.packages[item.id];
+  const downloadUrl = version ? api.explainerContentUrl(item.id, version.id) : null;
+  const downloadName = `explainer-${item.kind}-v${version?.number ?? 1}.png`;
+  return `<li class="chg-item ex-item" data-explainer-id="${escapeHtml(item.id)}">
+    <div class="ex-head">
+      <span class="wb-status ${meta.tone}">${escapeHtml(meta.label)}</span>
+      <span class="wb-status neutral">${escapeHtml(item.kind_label)}</span>
+      <span class="chg-meta">SKU ${escapeHtml(item.sku?.sku_code ?? '')}${peer} · v${version?.number ?? 0}（共 ${item.version_count ?? 0} 版） · 复核：${reviewLabel} · 底图：${baseLabel} · ${escapeHtml(formatTime(item.updated_at))}</span>
+    </div>
+    ${stale}
+    ${rows ? `<ul class="ex-lines">${rows}</ul>` : ''}
+    <div class="ex-actions">
+      ${downloadUrl ? `<a class="text-button" href="${escapeHtml(downloadUrl)}" download="${escapeHtml(downloadName)}">下载 PNG（v${version.number}）</a>` : ''}
+      <button type="button" class="text-button" data-action="ex-select" data-version-id="${escapeHtml(version?.id ?? '')}"${version ? '' : ' disabled'}>选为采用版</button>
+      <button type="button" class="text-button" data-action="ex-package">生成替换包（需已复核）</button>
+      ${pkg ? `<a class="text-button" href="${escapeHtml(api.downloadExportUrl(pkg.export_id))}" download="${escapeHtml(pkg.filename)}">下载替换包</a>` : ''}
+    </div>
+    <details class="ex-ops"><summary>复核 / 文案微调 / 采用反馈</summary>
+      <p class="chg-meta">复核必须留下依据；只允许改标题、副标题、脚注，数量/单位/条目名不可改。新版本需重新复核。</p>
+      <div class="ex-op-row">
+        <input class="ex-reason" maxlength="300" placeholder="复核依据（必填）：核对过哪些行与来源">
+        <button type="button" class="text-button" data-action="ex-confirm">复核通过</button>
+        <button type="button" class="text-button" data-action="ex-reject">退回</button>
+      </div>
+      <div class="ex-op-row">
+        <input class="ex-title" maxlength="40" placeholder="新的标题（只改文案，不改事实值）">
+        <input class="ex-footnote" maxlength="80" placeholder="新的脚注（可选）">
+        <button type="button" class="text-button" data-action="ex-edit">生成新版本</button>
+      </div>
+      <div class="ex-op-row">
+        <input class="ex-channel" maxlength="40" placeholder="用在哪个渠道/页面（可选）">
+        <button type="button" class="text-button" data-action="ex-used">已采用</button>
+        <button type="button" class="text-button" data-action="ex-unused">未采用</button>
+      </div>
+      <p class="chg-meta">采用反馈只记录你的自述，不代表店铺曝光、点击或转化收益；未付费/未过闸口的版本不能免费导出。</p>
+    </details>
+    ${replacement ? `<details class="ex-replace"><summary>旧文件替换清单</summary><ul>${replacement}</ul>
+      <p class="chg-meta">${escapeHtml('系统不会自动同步平台，请手工替换并自行核对。')}</p></details>` : ''}
+    ${adoption ? `<ul class="ex-adoption">${adoption}</ul>` : ''}
+  </li>`;
+}
+
+async function submitExplainerPreview(area) {
+  collectExplainerDraft();
+  if (!area.draft.skuId) { area.error = '请先选择 SKU。'; rerenderExplainerSection(); return; }
+  if (area.draft.kind === 'sku_compare' && !area.draft.peerSkuId) {
+    area.error = 'SKU 对比图必须选择对比 SKU。'; rerenderExplainerSection(); return;
+  }
+  const body = explainerDraftBody(area);
+  area.previewing = true;
+  area.error = '';
+  area.notice = '';
+  rerenderExplainerSection();
+  try {
+    const result = await api.previewExplainer(area.projectId, body);
+    if (state.explainers !== area) return;
+    area.preview = { ...result, body };
+  } catch (error) {
+    if (state.explainers !== area) return;
+    area.error = explainerErrorText(error); // 如实展示 NO_SKU_PROFILE / PEER_* / FACT_CONFLICT 等
+    area.preview = null;
+  }
+  if (state.explainers !== area) return;
+  area.previewing = false;
+  rerenderExplainerSection();
+}
+
+async function createExplainerFromPreview(area) {
+  if (!area.preview?.body) return;
+  area.creating = true;
+  area.error = '';
+  rerenderExplainerSection();
+  try {
+    const result = await api.createExplainer(area.projectId, area.preview.body, newExplainerIdempotencyKey());
+    if (state.explainers !== area) return;
+    const number = result.explainer?.active_version?.number ?? 1;
+    area.notice = result.duplicate
+      ? (result.message ?? '已有同排版说明图，未重复制作')
+      : `已生成说明图 v${number}（排版免费；请复核后再选版/导出）`;
+    area.preview = null;
+    await loadExplainers(area.projectId);
+  } catch (error) {
+    if (state.explainers !== area) return;
+    area.error = explainerErrorText(error);
+  }
+  if (state.explainers !== area) return;
+  area.creating = false;
+  rerenderExplainerSection();
+}
+
+/** 说明图错误码→可执行提示：不把闸口拒绝显示成成功。 */
+function explainerErrorText(error) {
+  if (!(error instanceof ApiFailure)) return errorText(error);
+  if (error.code === 'FACT_CONFLICT') return `SKU 档案与已确认事实存在矛盾：先更新档案或人工核对后再重排。${errorText(error)}`;
+  if (error.code === 'SOURCE_NOT_ENTITLED') return `这张底图还没通过导出闸口/未付费，不能免费当底图。${errorText(error)}`;
+  if (error.code === 'PHOTO_SOURCE_REQUIRED') {
+    const quote = error.details?.quote;
+    return `${errorText(error)}${quote ? `（预计 ${quote.estimated_credits} 额度，未自动扣费）` : ''}`;
+  }
+  if (error.code === 'REVIEW_REQUIRED') return `${errorText(error)}：先复核通过，再选版或导出。`;
+  if (error.code === 'EXPLAINER_STALE') return `${errorText(error)}：基于旧档案/事实，请先重排。`;
+  if (error.code === 'AUDIT_FAILED') return `${errorText(error)}：逐行核对数量/单位/对照值后再试。`;
+  if (error.code === 'MISSING_IDEMPOTENCY_KEY') return '创建请求缺少幂等键，已阻止重复制作，请重试。';
+  return errorText(error);
+}
+
+function explainerDraftBody(area) {
+  const draft = area.draft;
+  const body = { kind: draft.kind, sku_id: draft.skuId };
+  if (draft.kind === 'sku_compare' && draft.peerSkuId) body.peer_sku_id = draft.peerSkuId;
+  if (draft.baseMode === 'asset' && draft.baseAssetId) body.base_photo = { type: 'asset', asset_id: draft.baseAssetId };
+  return body;
+}
+
+async function onExplainerClick(action, trigger) {
+  const area = state.explainers;
+  if (!area) return;
+  if (action === 'ex-preview') { await submitExplainerPreview(area); return; }
+  if (action === 'ex-refresh') { await loadExplainers(area.projectId); return; }
+  if (action === 'ex-create') { await createExplainerFromPreview(area); return; }
+  const item = trigger.closest('.ex-item');
+  const explainerId = item?.dataset.explainerId ?? '';
+  if (!explainerId) return;
+  const reason = item.querySelector('.ex-reason')?.value?.trim() ?? '';
+  area.error = '';
+  area.notice = '';
+  area.busyId = explainerId;
+  try {
+    if (action === 'ex-confirm' || action === 'ex-reject') {
+      if (!reason) throw new ApiFailure(0, 'CLIENT_INVALID', '复核必须填写依据，不能空着点通过');
+      await api.reviewExplainer(explainerId, { action: action === 'ex-confirm' ? 'confirm' : 'reject', reason });
+      state.toast(action === 'ex-confirm' ? '已复核通过' : '已退回该版本');
+    } else if (action === 'ex-select') {
+      const versionId = trigger.dataset.versionId ?? '';
+      await api.selectExplainer(explainerId, { version_id: versionId });
+      state.toast('已选为采用版本');
+    } else if (action === 'ex-package') {
+      const result = await api.explainerPackage(explainerId);
+      area.packages = { ...area.packages, [explainerId]: result };
+      state.toast('替换包已生成，需你手工替换到店铺');
+    } else if (action === 'ex-edit') {
+      const title = item.querySelector('.ex-title')?.value?.trim() ?? '';
+      const footnote = item.querySelector('.ex-footnote')?.value?.trim() ?? '';
+      const versionId = item.querySelector('[data-action="ex-select"]')?.dataset.versionId ?? '';
+      if (!title && !footnote) throw new ApiFailure(0, 'CLIENT_INVALID', '请先填写新的标题或脚注');
+      const edits = {};
+      if (title) edits.title = title;
+      if (footnote) edits.footnote = footnote;
+      const result = await api.editExplainer(explainerId, { base_version_id: versionId, edits });
+      area.notice = `已生成新版本 v${result.number}，需重新复核后才可导出`;
+    } else if (action === 'ex-used' || action === 'ex-unused') {
+      const channel = item.querySelector('.ex-channel')?.value?.trim() ?? '';
+      const body = { used: action === 'ex-used' };
+      if (channel) body.channel = channel;
+      await api.explainerFeedback(explainerId, body);
+      state.toast('已记录采用反馈（仅你的自述，不换算成收益）');
+    }
+    await loadExplainers(area.projectId);
+  } catch (error) {
+    if (state.explainers !== area) return;
+    area.error = explainerErrorText(error);
+    rerenderExplainerSection();
+  }
+  if (state.explainers === area) area.busyId = '';
 }
 
 async function renderAccountData() {

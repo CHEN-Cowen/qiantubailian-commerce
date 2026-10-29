@@ -11,7 +11,7 @@ import {
 import { IMAGE_TYPES, inspectImage } from './images.mjs';
 import { createSubjectMask, normalizeSubjectBox } from './m06.mjs';
 import { createOcrFromEnv, extractionCandidates } from './ocr.mjs';
-import { prepareSubjectMask } from './raster.mjs';
+import { prepareSubjectMask, renderSvgPng } from './raster.mjs';
 import {
   ASSET_ROLES, LIMITS, activeAssets, computeReadiness, sha256,
   truthContentHash, validateFilename, validateProjectInput, validateRole, validateTruthInput,
@@ -32,6 +32,12 @@ import {
   OUT_OF_SCOPE_CATEGORIES, QUESTION_CATEGORIES, QUESTION_RESULTS, QUESTION_LIMITS,
   analyzeQuestion, presentQuestionGroup, suggestCategory, validateQuestionInput,
 } from './question.mjs';
+import {
+  EXPLAINER_KINDS, EXPLAINER_KIND_LABELS, applyExplainerEdits, auditExplainerPlan, buildExplainerPlan,
+  dependencyEntriesFor, explainerPath, explainerStale, planFingerprint, presentExplainer,
+  renderExplainerSvg, replacementListFor, validateExplainerFeedback, validateExplainerReview,
+} from './explainer.mjs';
+import { EXPORT_SCHEMA_VERSION, buildZip, exportRecordId, zipSha256 } from './m08.mjs';
 import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
@@ -215,6 +221,11 @@ export function createApi({
   // E04：一次核对最多识别的版本数。OCR/视觉是有成本服务，超出预算的版本保持未知。
   // 声明必须位于上方提前 return publish 之前，否则处理器执行时处于暂时性死区。
   const SKU_CHECK_OCR_BUDGET = 8;
+  // E06：说明图本身是免费确定性排版；没有合法照片而要照片时只报价，不自动生成、不扣费。
+  const EXPLAINER_PHOTO_QUOTE = Object.freeze({
+    price_version: 'finished-image.1', estimated_credits: 1, max_credits: 1, regenerate_count: 1,
+    note: '说明图为免费排版；需要新照片时按单张成品计价，请先确认报价再另行发起生成。',
+  });
 
   return publish;
 
@@ -627,6 +638,38 @@ export function createApi({
       }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
+    // E06：说明图（详情/改版/复核/选版/下载/采用反馈/内容）
+    if (resource === 'explainers') {
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getExplainer(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'content') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return sendExplainerContent(ctx, rest[1], query, send);
+      }
+      if (rest.length === 3 && rest[2] === 'edits') {
+        requireMethod(method, ['POST']);
+        return editExplainer(ctx, req, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'review') {
+        requireMethod(method, ['POST']);
+        return reviewExplainer(ctx, req, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'select') {
+        requireMethod(method, ['POST']);
+        return selectExplainerVersion(ctx, req, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'feedback') {
+        requireMethod(method, ['POST']);
+        return addExplainerFeedback(ctx, req, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'package') {
+        requireMethod(method, ['POST']);
+        return createExplainerPackage(ctx, req, rest[1], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
     if (resource !== 'projects') throw new ApiError(404, 'NOT_FOUND', '接口不存在');
 
     if (rest.length === 1) {
@@ -691,6 +734,16 @@ export function createApi({
     if (rest.length === 3 && section === 'question-groups') {
       requireMethod(method, ['GET', 'HEAD']);
       return listQuestionGroups(ctx, projectId, query, send);
+    }
+    // E06：说明图（预览不落库；创建幂等，免费排版，不调用生图模型）
+    if (rest.length === 4 && section === 'explainers' && third === 'plan') {
+      requireMethod(method, ['POST']);
+      return previewExplainerRoute(ctx, req, projectId, send);
+    }
+    if (rest.length === 3 && section === 'explainers') {
+      if (method === 'POST') return createExplainerRoute(ctx, req, projectId, send);
+      requireMethod(method, ['GET', 'HEAD', 'POST']);
+      return listExplainers(ctx, projectId, send);
     }
     if (rest.length === 3 && section === 'readiness') {
       requireMethod(method, ['GET', 'HEAD']);
@@ -897,6 +950,8 @@ export function createApi({
       case 'check-issues': return write ? 'project:write' : 'project:read';
       // E05：售前问题组查询走 project:read；分析入库/归类改正/确认是内容写操作
       case 'question-groups': return write ? 'project:write' : 'project:read';
+      // E06：说明图查询走 project:read；生成/改版/复核/选版/反馈是内容写操作
+      case 'explainers': return write ? 'project:write' : 'project:read';
       case 'projects': {
         if (second === undefined) return write ? 'project:create' : 'project:read';
         if (third === 'assets') return write ? 'asset:write' : 'project:read';
@@ -2132,6 +2187,653 @@ export function createApi({
     send(200, { group: presentQuestionGroup(outcome.group), facts_stale: outcome.stale });
   }
 
+  // ---------- E06：三种说明图（确定性排版 / 事实审计 / 复核选版 / 替换清单 / 采用反馈） ----------
+
+  function explainerRecordsOf(data, project) {
+    return Object.values(data.explainers ?? {})
+      .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+  }
+
+  function findExplainer(data, ctx, explainerId) {
+    const record = data.explainers?.[explainerId] ?? null;
+    if (!record || record.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '说明图不存在');
+    const project = data.projects?.[record.project_id] ?? null;
+    if (!project) throw new ApiError(404, 'NOT_FOUND', '说明图所属项目不存在');
+    return { record, project };
+  }
+
+  function activeExplainerVersion(record) {
+    const versions = record?.versions ?? [];
+    return versions.find(item => item.active === true) ?? versions[versions.length - 1] ?? null;
+  }
+
+  function explainerInputOf(body) {
+    const kind = String(body?.kind ?? '').trim();
+    if (!EXPLAINER_KINDS.includes(kind)) {
+      throw new ApiError(422, 'INVALID_FIELD', `kind 必须为 ${EXPLAINER_KINDS.join(' / ')}`);
+    }
+    return {
+      kind,
+      skuId: String(body?.sku_id ?? '').trim() || null,
+      peerSkuId: body?.peer_sku_id ? String(body.peer_sku_id).trim() : null,
+      edits: body?.edits && typeof body.edits === 'object' && !Array.isArray(body.edits) ? body.edits : {},
+      basePhoto: body?.base_photo && typeof body.base_photo === 'object' && !Array.isArray(body.base_photo) ? body.base_photo : null,
+      requirePhoto: body?.require_photo === true,
+      force: body?.force === true,
+    };
+  }
+
+  function buildExplainerPlanIn(data, ctx, projectId, input) {
+    const project = findProject(data, ctx, projectId);
+    const skuProfile = headSkuProfileOf(data, project);
+    const truth = headTruthOf(data, project);
+    const built = buildExplainerPlan({
+      kind: input.kind, skuProfile, skuId: input.skuId, peerSkuId: input.peerSkuId, truth,
+    });
+    if (!built.ok) return { project, skuProfile, truth, plan: built, issues: [] };
+    const applied = applyExplainerEdits({ plan: built, edits: input.edits });
+    return { project, skuProfile, truth, plan: applied.plan, issues: applied.issues };
+  }
+
+  /** 说明图身份：以商家编号为准（档案重写可能换内部 ID，编号才是稳定标识）。 */
+  function explainerIdentityOf(kind, sku, peer = null) {
+    const key = value => String(value?.sku_code ?? value?.id ?? '');
+    return `${kind}|${key(sku)}|${key(peer)}`;
+  }
+
+  /** 底图身份：同一张底图才算同一张成品图；换底图是另一次制作。 */
+  function basePhotoKey(basePhoto) {
+    if (!basePhoto) return 'none';
+    const type = String(basePhoto.type ?? '').trim();
+    if (type === 'asset') return `asset:${String(basePhoto.asset_id ?? '').trim()}`;
+    if (type === 'version') {
+      return `version:${String(basePhoto.run_id ?? '').trim()}:${String(basePhoto.deliverable_id ?? '').trim()}:${String(basePhoto.version_id ?? '').trim()}`;
+    }
+    return `invalid:${type}`;
+  }
+
+  /** 同一 SKU、同一档案版本、同一排版 = 同一张图：不重复制作。 */
+  function findDuplicateExplainer(data, project, plan, skuProfile, truth) {
+    const identity = explainerIdentityOf(plan.kind, plan.sku, plan.peer_sku);
+    const same = explainerRecordsOf(data, project).filter(item =>
+      explainerIdentityOf(item.kind, item.sku, item.peer_sku) === identity);
+    for (const record of same) {
+      const active = activeExplainerVersion(record);
+      if (!active || active.plan?.plan_hash !== plan.plan_hash) continue;
+      if (explainerStale({ version: active, skuProfile, truth }).stale) continue;
+      return { record, version: active };
+    }
+    return null;
+  }
+
+  /**
+   * 底图来源只接受两种合法来源：
+   * - 商家自己上传且生效中的素材（免费复用）；
+   * - 已通过按 SKU 导出闸口的图片版本（等于继承该版本权益，未付费/未通过检查的版本一律拒绝）。
+   */
+  async function resolveExplainerBasePhoto(ctx, projectId, skuId, basePhoto) {
+    if (!basePhoto) return { source: null, dataUri: null };
+    const type = String(basePhoto.type ?? '').trim();
+    if (type === 'asset') {
+      const assetId = String(basePhoto.asset_id ?? '').trim();
+      if (!assetId) throw new ApiError(422, 'INVALID_FIELD', 'base_photo.asset_id 必填');
+      const asset = await store.read(data => {
+        const project = findProject(data, ctx, projectId);
+        const found = data.assets?.[assetId] ?? null;
+        if (!found || found.tenant_id !== ctx.tenantId || found.project_id !== project.id) {
+          throw new ApiError(404, 'NOT_FOUND', '底图素材不存在');
+        }
+        return { ...found };
+      });
+      if (asset.role_status !== 'active') {
+        throw new ApiError(409, 'BASE_PHOTO_INACTIVE', '底图素材已失效，请改用生效中的素材');
+      }
+      if (asset.role === 'style') {
+        throw new ApiError(422, 'BASE_PHOTO_INVALID', '风格参考图只用于氛围参考，不能作为说明图底图');
+      }
+      const bytes = await store.readBlob(asset.sha256, asset.ext);
+      if (!bytes) throw new ApiError(409, 'BASE_PHOTO_MISSING', '底图素材文件已不可读取');
+      return {
+        source: { type: 'asset', asset_id: asset.id, sha256: asset.sha256 },
+        dataUri: `data:${asset.mime};base64,${bytes.toString('base64')}`,
+      };
+    }
+    if (type !== 'version') {
+      throw new ApiError(422, 'INVALID_FIELD', 'base_photo.type 必须为 asset（商家素材）或 version（已过闸口的图片版本）');
+    }
+    const runId = String(basePhoto.run_id ?? '').trim();
+    const deliverableId = String(basePhoto.deliverable_id ?? '').trim();
+    const versionId = String(basePhoto.version_id ?? '').trim();
+    if (!runId || !deliverableId || !versionId) {
+      throw new ApiError(422, 'INVALID_FIELD', '选择图片版本作底图时必须提供 run_id / deliverable_id / version_id');
+    }
+    const found = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const run = data.runs?.[runId] ?? null;
+      if (!run || run.tenant_id !== ctx.tenantId || run.project_id !== project.id) {
+        throw new ApiError(404, 'NOT_FOUND', '底图任务不存在');
+      }
+      const version = (run.versions ?? []).find(item => item.id === versionId && item.deliverable_id === deliverableId) ?? null;
+      if (!version) throw new ApiError(404, 'NOT_FOUND', '底图版本不存在');
+      return { hash: version.hash, format: version.format ?? 'png' };
+    });
+    const availability = await jobs.planSkuAvailability(ctx, projectId, skuId);
+    const included = (availability.included ?? []).some(item => item.version_id === versionId);
+    if (!included) {
+      const excluded = (availability.excluded ?? []).find(item => item.version_id === versionId) ?? null;
+      throw new ApiError(422, 'SOURCE_NOT_ENTITLED',
+        excluded?.reason === 'ENTITLEMENT_NOT_SETTLED'
+          ? '该底图版本的成品额度尚未结算：未付费底图不能免费用于说明图导出'
+          : '该底图版本未通过导出闸口（归属/检查/权益），不能作为说明图底图；免费排版只继承合法可导出版本的权益',
+        { version_id: versionId, reason: excluded?.reason ?? availability.code ?? 'NOT_INCLUDED' });
+    }
+    const bytes = await store.readBlob(found.hash, found.format);
+    if (!bytes) throw new ApiError(409, 'BASE_PHOTO_MISSING', '底图版本文件已不可读取');
+    return {
+      source: { type: 'version', run_id: runId, deliverable_id: deliverableId, version_id: versionId, sha256: found.hash },
+      dataUri: `data:image/${found.format === 'jpg' ? 'jpeg' : 'png'};base64,${bytes.toString('base64')}`,
+    };
+  }
+
+  async function renderExplainer(plan, base) {
+    const svg = renderExplainerSvg(plan, { baseDataUri: base?.dataUri ?? null });
+    const png = await renderSvgPng(svg, plan.canvas);
+    const hash = sha256(png);
+    await store.putBlob(png, hash, 'png');
+    return { svg, hash, bytes: png };
+  }
+
+  function makeExplainerVersion({ record, plan, base, rendered, ctx, truth, at, edits = null }) {
+    const audit = auditExplainerPlan(plan, { truth });
+    const version = {
+      id: newId('exv'),
+      number: ((record.versions ?? []).at(-1)?.number ?? 0) + 1,
+      active: true,
+      superseded_at: null,
+      plan,
+      svg_hash: sha256(Buffer.from(rendered.svg)),
+      hash: rendered.hash,
+      format: 'png',
+      width: plan.canvas.width,
+      height: plan.canvas.height,
+      checks: { audit, claims: audit.claims, source_photo: base.source ?? null },
+      review: { decision: 'pending', reason: null, by: null, at: null },
+      dependencies: dependencyEntriesFor({ plan, truth, basePhoto: base.source }),
+      base_photo: base.source ?? null,
+      edits: edits ?? { from_version_id: null, changes: [] },
+      created_by: ctx.actorId,
+      created_at: at,
+    };
+    for (const previous of record.versions ?? []) {
+      if (previous.active !== true) continue;
+      previous.active = false;
+      previous.superseded_at = at;
+    }
+    record.versions = [...(record.versions ?? []), version];
+    record.status = audit.ok ? 'checked' : 'needs_review';
+    record.updated_at = at;
+    return version;
+  }
+
+  function presentExplainerIn(data, ctx, record) {
+    const project = data.projects?.[record.project_id] ?? null;
+    return presentExplainer({
+      record,
+      skuProfile: project ? headSkuProfileOf(data, project) : null,
+      truth: project ? headTruthOf(data, project) : null,
+    });
+  }
+
+  async function listExplainers(ctx, projectId, send) {
+    const result = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const skuProfile = headSkuProfileOf(data, project);
+      const truth = headTruthOf(data, project);
+      const items = explainerRecordsOf(data, project)
+        .sort((left, right) => String(right.created_at ?? '').localeCompare(String(left.created_at ?? '')))
+        .map(record => presentExplainer({ record, skuProfile, truth }));
+      return {
+        project_id: project.id,
+        explainers: items,
+        summary: {
+          total: items.length,
+          active: items.filter(item => item.status === 'active').length,
+          awaiting_review: items.filter(item => item.status === 'awaiting_review').length,
+          stale: items.filter(item => item.status === 'stale').length,
+        },
+      };
+    });
+    send(200, result);
+  }
+
+  /** 预览：只计算排版与重复项，不落库、不渲染、不生图。 */
+  async function previewExplainerRoute(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const input = explainerInputOf(body);
+    const result = await store.read(data => {
+      const { project, skuProfile, truth, plan, issues } = buildExplainerPlanIn(data, ctx, projectId, input);
+      if (!plan.ok) {
+        return { project_id: project.id, plan, issues, duplicate: null, photo_quote: input.requirePhoto ? EXPLAINER_PHOTO_QUOTE : null };
+      }
+      const duplicate = findDuplicateExplainer(data, project, plan, skuProfile, truth);
+      const audit = plan.ok ? auditExplainerPlan(plan, { truth }) : null;
+      return {
+        project_id: project.id,
+        plan,
+        issues,
+        audit,
+        ready: Boolean(plan.ok && audit?.ok && issues.length === 0),
+        duplicate: duplicate ? {
+          explainer_id: duplicate.record.id,
+          version_id: duplicate.version.id,
+          version_number: duplicate.version.number,
+          message: `同一档案版本已有同排版说明图（v${duplicate.version.number}）：可直接下载/微调，确需重做请显式重做`,
+        } : null,
+        needs_photo: input.requirePhoto && !input.basePhoto,
+        photo_quote: input.requirePhoto && !input.basePhoto ? EXPLAINER_PHOTO_QUOTE : null,
+        credit_cost: 0,
+      };
+    });
+    send(200, result);
+  }
+
+  async function createExplainerRoute(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+    if (idempotencyKey === '') {
+      throw new ApiError(400, 'MISSING_IDEMPOTENCY_KEY', '创建说明图必须带 Idempotency-Key，避免重复制作与重复版本');
+    }
+    const input = explainerInputOf(body);
+    const fingerprint = fingerprintOf({ project_id: projectId, body });
+
+    const replay = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const existing = explainerRecordsOf(data, project).find(item => item.idempotency_key === idempotencyKey) ?? null;
+      if (!existing) return null;
+      if (existing.idempotency_fingerprint && existing.idempotency_fingerprint !== fingerprint) {
+        throw new ApiError(409, 'IDEMPOTENCY_KEY_CONFLICT',
+          '该 Idempotency-Key 已用于另一份不同的说明图请求，请更换后再提交', { explainer_id: existing.id });
+      }
+      return { explainer: presentExplainerIn(data, ctx, existing), replayed: true };
+    });
+    if (replay) return send(200, replay);
+
+    const prepared = await store.read(data => {
+      const { project, skuProfile, truth, plan, issues } = buildExplainerPlanIn(data, ctx, projectId, input);
+      if (!plan.ok) throw new ApiError(422, plan.code, plan.message, { missing: plan.missing ?? [] });
+      if (issues.length > 0) {
+        throw new ApiError(422, issues[0].code ?? 'INVALID_FIELD', issues[0].message, { issues });
+      }
+      if (plan.claims?.blocked?.length > 0) {
+        throw new ApiError(422, 'CLAIM_NOT_ALLOWED', '文案含未经验证的承诺表达，说明图不能替商家下结论', { blocked: plan.claims.blocked });
+      }
+      const audit = auditExplainerPlan(plan, { truth });
+      if (!audit.ok) {
+        throw new ApiError(409, 'FACT_CONFLICT', 'SKU 档案与已确认事实存在矛盾，不能生成说明图', { mismatches: audit.mismatches });
+      }
+      const found = input.force ? null : findDuplicateExplainer(data, project, plan, skuProfile, truth);
+      // 底图不同就是另一次制作：不能把旧底图成品当作本次结果返回
+      const duplicate = found && basePhotoKey(found.version.base_photo) === basePhotoKey(input.basePhoto)
+        ? found : null;
+      return {
+        project_id: project.id,
+        plan,
+        duplicate: duplicate ? { record_id: duplicate.record.id, version_id: duplicate.version.id, number: duplicate.version.number } : null,
+      };
+    });
+    if (prepared.duplicate) {
+      const result = await store.read(data => {
+        const record = data.explainers[prepared.duplicate.record_id] ?? null;
+        if (!record) throw new ApiError(404, 'NOT_FOUND', '说明图不存在');
+        return {
+          explainer: presentExplainerIn(data, ctx, record),
+          duplicate: true,
+          message: `已有同排版说明图 v${prepared.duplicate.number}，未重复制作；如需重做请显式传 force=true`,
+        };
+      });
+      return send(200, result);
+    }
+    if (input.requirePhoto && !input.basePhoto) {
+      throw new ApiError(409, 'PHOTO_SOURCE_REQUIRED',
+        '没有可用的合法底图：说明图排版免费，但新照片需要先确认报价并单独发起生成',
+        { quote: EXPLAINER_PHOTO_QUOTE });
+    }
+    const base = await resolveExplainerBasePhoto(ctx, projectId, prepared.plan.sku?.id ?? input.skuId, input.basePhoto);
+    const rendered = await renderExplainer(prepared.plan, base);
+
+    const outcome = await store.mutate(data => {
+      const project = findProject(data, ctx, projectId);
+      const existing = explainerRecordsOf(data, project).find(item => item.idempotency_key === idempotencyKey) ?? null;
+      if (existing) {
+        if (existing.idempotency_fingerprint && existing.idempotency_fingerprint !== fingerprint) {
+          throw new ApiError(409, 'IDEMPOTENCY_KEY_CONFLICT', '该 Idempotency-Key 已用于另一份不同的说明图请求，请更换后再提交', { explainer_id: existing.id });
+        }
+        return { explainer: presentExplainerIn(data, ctx, existing), replayed: true };
+      }
+      const truth = headTruthOf(data, project);
+      const timestamp = now();
+      const sameIdentity = explainerRecordsOf(data, project).find(item =>
+        explainerIdentityOf(item.kind, item.sku, item.peer_sku)
+        === explainerIdentityOf(prepared.plan.kind, prepared.plan.sku, prepared.plan.peer_sku)) ?? null;
+      const record = sameIdentity ?? {
+        id: newId('ex'),
+        schema_version: 1,
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        kind: prepared.plan.kind,
+        kind_label: EXPLAINER_KIND_LABELS[prepared.plan.kind],
+        sku: prepared.plan.sku,
+        peer_sku: prepared.plan.peer_sku,
+        status: 'checked',
+        versions: [],
+        selected_version_id: null,
+        adoption: [],
+        idempotency_key: idempotencyKey,
+        idempotency_fingerprint: fingerprint,
+        created_by: ctx.actorId,
+        created_at: timestamp,
+        updated_at: timestamp,
+      };
+      // 复用时同步当前档案里的 SKU 快照（内部 ID 可能已变，商家编号不变）
+      record.sku = prepared.plan.sku;
+      record.peer_sku = prepared.plan.peer_sku;
+      record.kind_label = EXPLAINER_KIND_LABELS[prepared.plan.kind];
+      const version = makeExplainerVersion({ record, plan: prepared.plan, base, rendered, ctx, truth, at: timestamp });
+      data.explainers[record.id] = record;
+      return { explainer: presentExplainerIn(data, ctx, record), version_id: version.id, replayed: false };
+    });
+    send(201, outcome);
+  }
+
+  async function getExplainer(ctx, explainerId, send) {
+    const result = await store.read(data => {
+      const { record } = findExplainer(data, ctx, explainerId);
+      return { explainer: presentExplainerIn(data, ctx, record) };
+    });
+    send(200, result);
+  }
+
+  async function sendExplainerContent(ctx, explainerId, query, send) {
+    const found = await store.read(data => {
+      const { record } = findExplainer(data, ctx, explainerId);
+      const versionId = typeof query?.get === 'function' ? query.get('version_id') : null;
+      const version = versionId
+        ? (record.versions ?? []).find(item => item.id === versionId) ?? null
+        : activeExplainerVersion(record);
+      if (!version) throw new ApiError(404, 'VERSION_NOT_FOUND', '说明图版本不存在');
+      return { hash: version.hash, format: version.format ?? 'png' };
+    });
+    const bytes = await store.readBlob(found.hash, found.format);
+    if (!bytes) throw new ApiError(409, 'FILE_MISSING', '说明图文件已不可读取');
+    send(200, bytes, 'image/png', { 'X-Content-SHA256': found.hash });
+  }
+
+  /** 改版：只允许改标题/副标题/脚注，生成新版本并保留旧版。 */
+  async function editExplainer(ctx, req, explainerId, send) {
+    const body = await readJson(req);
+    const baseVersionId = String(body?.base_version_id ?? '').trim();
+    const prepared = await store.read(data => {
+      const { record, project } = findExplainer(data, ctx, explainerId);
+      const baseVersion = (record.versions ?? []).find(item => item.id === baseVersionId) ?? null;
+      if (!baseVersion) throw new ApiError(404, 'VERSION_NOT_FOUND', '改版基准版本不存在');
+      const applied = applyExplainerEdits({ plan: baseVersion.plan, edits: body?.edits ?? {} });
+      if (applied.issues.length > 0) {
+        throw new ApiError(422, applied.issues[0].code ?? 'INVALID_FIELD', applied.issues[0].message, { issues: applied.issues });
+      }
+      if (!applied.changed) throw new ApiError(409, 'NO_CHANGES', '标题/副标题/脚注没有变化，未生成新版本');
+      const changes = ['title', 'subtitle', 'footnote']
+        .filter(key => applied.plan[key] !== baseVersion.plan[key])
+        .map(key => ({ field: key, from: baseVersion.plan[key], to: applied.plan[key] }));
+      return {
+        projectId: project.id,
+        plan: applied.plan,
+        basePhoto: baseVersion.base_photo ?? null,
+        baseVersionId: baseVersion.id,
+        changes,
+      };
+    });
+    const base = prepared.basePhoto
+      ? await resolveExplainerBasePhoto(ctx, prepared.projectId, prepared.plan.sku?.id ?? null, prepared.basePhoto)
+      : { source: null, dataUri: null };
+    const rendered = await renderExplainer(prepared.plan, base);
+    const outcome = await store.mutate(data => {
+      const { record, project } = findExplainer(data, ctx, explainerId);
+      const timestamp = now();
+      const version = makeExplainerVersion({
+        record, plan: prepared.plan, base, rendered, ctx, truth: headTruthOf(data, project), at: timestamp,
+        edits: { from_version_id: prepared.baseVersionId, changes: prepared.changes },
+      });
+      return { explainer: presentExplainerIn(data, ctx, record), version_id: version.id, number: version.number };
+    });
+    send(200, outcome);
+  }
+
+  async function reviewExplainer(ctx, req, explainerId, send) {
+    const body = await readJson(req);
+    const outcome = await store.mutate(data => {
+      const { record } = findExplainer(data, ctx, explainerId);
+      const versionId = String(body?.version_id ?? '').trim() || activeExplainerVersion(record)?.id;
+      const version = (record.versions ?? []).find(item => item.id === versionId) ?? null;
+      if (!version) throw new ApiError(404, 'VERSION_NOT_FOUND', '说明图版本不存在');
+      const validated = validateExplainerReview(body, version);
+      version.review = {
+        decision: validated.action === 'confirm' ? 'confirmed' : 'rejected',
+        reason: validated.reason,
+        by: ctx.actorId,
+        at: now(),
+      };
+      record.updated_at = version.review.at;
+      return { explainer: presentExplainerIn(data, ctx, record), version_id: version.id };
+    });
+    send(200, outcome);
+  }
+
+  async function selectExplainerVersion(ctx, req, explainerId, send) {
+    const body = await readJson(req);
+    const versionId = String(body?.version_id ?? '').trim();
+    const outcome = await store.mutate(data => {
+      const { record, project } = findExplainer(data, ctx, explainerId);
+      const version = (record.versions ?? []).find(item => item.id === versionId) ?? null;
+      if (!version) throw new ApiError(404, 'VERSION_NOT_FOUND', '说明图版本不存在');
+      if (version.review?.decision !== 'confirmed') {
+        throw new ApiError(409, 'REVIEW_REQUIRED', '选版前需人工复核确认该说明图');
+      }
+      const audit = auditExplainerPlan(version.plan, { truth: headTruthOf(data, project) });
+      if (!audit.ok) {
+        throw new ApiError(409, 'AUDIT_FAILED', '事实一致性审计未通过，不能选用该版本', { mismatches: audit.mismatches });
+      }
+      const stale = explainerStale({ version, skuProfile: headSkuProfileOf(data, project), truth: headTruthOf(data, project) });
+      if (stale.stale) {
+        throw new ApiError(409, 'EXPLAINER_STALE', '说明图基于旧的档案/事实版本，请先按最新事实重排', { reasons: stale.reasons });
+      }
+      const timestamp = now();
+      for (const item of record.versions) {
+        if (item.id === version.id) { item.active = true; item.superseded_at = null; continue; }
+        if (item.active === true) { item.active = false; item.superseded_at = timestamp; }
+      }
+      record.selected_version_id = version.id;
+      record.updated_at = timestamp;
+      return { explainer: presentExplainerIn(data, ctx, record), version_id: version.id };
+    });
+    send(200, outcome);
+  }
+
+  async function addExplainerFeedback(ctx, req, explainerId, send) {
+    const body = await readJson(req);
+    const validated = validateExplainerFeedback(body);
+    const outcome = await store.mutate(data => {
+      const { record } = findExplainer(data, ctx, explainerId);
+      const timestamp = now();
+      const entry = {
+        id: newId('exf'),
+        version_id: activeExplainerVersion(record)?.id ?? null,
+        used: validated.used,
+        channel: validated.channel,
+        reason: validated.reason,
+        note: validated.note,
+        by: ctx.actorId,
+        at: timestamp,
+      };
+      record.adoption = [...(record.adoption ?? []).slice(-19), entry];
+      record.updated_at = timestamp;
+      return { explainer: presentExplainerIn(data, ctx, record), feedback: entry };
+    });
+    send(201, outcome);
+  }
+
+  /** 下载替换包：要求已复核、审计通过且未过期；只打包文件与替换清单，不伪装平台发布。 */
+  async function createExplainerPackage(ctx, req, explainerId, send) {
+    const result = await store.mutate(async data => {
+      const { record, project } = findExplainer(data, ctx, explainerId);
+      const version = activeExplainerVersion(record);
+      if (!version) throw new ApiError(409, 'NO_VERSION', '说明图还没有可导出版本');
+      if (version.review?.decision !== 'confirmed') {
+        throw new ApiError(409, 'REVIEW_REQUIRED', '导出前需人工复核确认该说明图');
+      }
+      const audit = auditExplainerPlan(version.plan, { truth: headTruthOf(data, project) });
+      if (!audit.ok) {
+        throw new ApiError(409, 'AUDIT_FAILED', '事实一致性审计未通过，不能导出', { mismatches: audit.mismatches });
+      }
+      const stale = explainerStale({ version, skuProfile: headSkuProfileOf(data, project), truth: headTruthOf(data, project) });
+      if (stale.stale) {
+        throw new ApiError(409, 'EXPLAINER_STALE', '说明图基于旧的档案/事实版本，请先重排后再导出', { reasons: stale.reasons });
+      }
+      const bytes = await store.readBlob(version.hash, version.format ?? 'png');
+      if (!bytes) throw new ApiError(409, 'FILE_MISSING', '说明图文件已不可读取');
+      const at = clock();
+      const filePath = explainerPath(record, version);
+      const manifest = {
+        package_format: 'qtb-explainer-package.1',
+        schema_version: 1,
+        generated_at: new Date(at).toISOString(),
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        explainer_id: record.id,
+        kind: record.kind,
+        kind_label: EXPLAINER_KIND_LABELS[record.kind] ?? record.kind,
+        sku: record.sku ?? null,
+        peer_sku: record.peer_sku ?? null,
+        version: {
+          id: version.id, number: version.number, width: version.width, height: version.height, sha256: version.hash,
+        },
+        files: [{ path: filePath, sha256: version.hash, bytes: bytes.length }],
+        replace_list: replacementListFor(record),
+        change_note: version.edits?.changes ?? [],
+        sources: version.plan?.sources ?? null,
+        checks: version.checks ?? null,
+        platform_compliance: 'not_claimed',
+        note: '说明图为确定性排版，未接入店铺发布；替换清单需商家手工替换。采用反馈不代表平台曝光、点击或转化收益。',
+      };
+      const entries = [
+        { name: filePath, bytes },
+        { name: 'explainer-manifest.json', bytes: Buffer.from(JSON.stringify(manifest, null, 2)) },
+      ];
+      const zip = buildZip(entries, { now: at });
+      const packageHash = zipSha256(zip);
+      const file = await store.putBlob(zip, packageHash, 'zip');
+      const exportId = exportRecordId();
+      data.exports[exportId] = {
+        id: exportId,
+        schema_version: EXPORT_SCHEMA_VERSION,
+        package_format: 'qtb-explainer-package.1',
+        kind: 'explainer_package',
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        run_id: null,
+        explainer_id: record.id,
+        scope: 'explainer',
+        complete: true,
+        status: 'PACKAGE_COMPLETE',
+        message: `说明图导出：${EXPLAINER_KIND_LABELS[record.kind] ?? record.kind} v${version.number}`,
+        package_filename: `qtb-explainer-${record.id}-v${version.number}.zip`,
+        package_sha256: packageHash,
+        package_bytes: zip.length,
+        package_path: file,
+        manifest,
+        qa_summary: null,
+        included: [{
+          deliverable_id: `explainer:${record.id}`,
+          label: EXPLAINER_KIND_LABELS[record.kind] ?? record.kind,
+          file: filePath,
+          sha256: version.hash,
+          format: 'png',
+          width: version.width,
+          height: version.height,
+          version_id: version.id,
+        }],
+        missing: [],
+        platform_compliance: 'not_claimed',
+        content_hash_scope: '清单与文件哈希；不含图片二进制',
+        created_by: ctx.actorId,
+        created_at: new Date(at).toISOString(),
+      };
+      return {
+        export_id: exportId,
+        filename: `qtb-explainer-${record.id}-v${version.number}.zip`,
+        sha256: packageHash,
+        replace_list: replacementListFor(record),
+      };
+    });
+    send(201, result);
+  }
+
+  /** E03 说明图重排：按最新档案确定性重排，不扣费、不调用生图模型。 */
+  async function runRecomposeExplainerItem(ctx, order, item) {
+    const prepared = await store.read(data => {
+      const record = data.explainers?.[item.explainer_id] ?? null;
+      if (!record || record.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '说明图不存在');
+      const project = findProject(data, ctx, record.project_id);
+      const skuProfile = headSkuProfileOf(data, project);
+      const truth = headTruthOf(data, project);
+      const built = buildExplainerPlan({
+        kind: record.kind,
+        skuProfile,
+        skuId: record.sku?.id ?? null,
+        skuCode: record.sku?.sku_code ?? null,
+        peerSkuId: record.peer_sku?.id ?? null,
+        peerSkuCode: record.peer_sku?.sku_code ?? null,
+        truth,
+      });
+      if (!built.ok) throw new ApiError(422, built.code, built.message, { missing: built.missing ?? [] });
+      const audit = auditExplainerPlan(built, { truth });
+      if (!audit.ok) {
+        throw new ApiError(409, 'FACT_CONFLICT',
+          '最新事实与 SKU 档案中的同名属性矛盾：先更新档案或人工核对后再重排，不能选一边照排',
+          { mismatches: audit.mismatches });
+      }
+      return {
+        projectId: project.id,
+        plan: built,
+        basePhoto: activeExplainerVersion(record)?.base_photo ?? null,
+      };
+    });
+    const base = prepared.basePhoto
+      ? await resolveExplainerBasePhoto(ctx, prepared.projectId, prepared.plan.sku?.id ?? null, prepared.basePhoto)
+      : { source: null, dataUri: null };
+    const rendered = await renderExplainer(prepared.plan, base);
+    const outcome = await store.mutate(data => {
+      const { record, project } = findExplainer(data, ctx, item.explainer_id);
+      const version = makeExplainerVersion({
+        record, plan: prepared.plan, base, rendered, ctx, truth: headTruthOf(data, project), at: now(),
+      });
+      return { version_id: version.id, number: version.number };
+    });
+    await store.mutate(data => {
+      const order2 = findChangeOrder(data, ctx, order.id);
+      mutateChangeItem(data, ctx, order2.id, item.id, target => {
+        target.status = 'done';
+        target.result_version_id = outcome.version_id;
+        target.result_version_number = outcome.number;
+        target.charged_credits = 0;
+        target.pending_adoption = true;
+        target.error = null;
+        target.error_code = null;
+        target.note = '说明图已按最新档案确定性重排并通过事实审计；导出前仍需人工复核确认';
+      });
+      finalizeChangeOrder(data, order2);
+    });
+  }
+
   // ---------- E02：图片版本依赖与导出渠道 ----------
 
   function findRun(data, ctx, runId) {
@@ -2424,13 +3126,6 @@ export function createApi({
   function truthVersionOf(data, project, version) {
     return Object.values(data.truth_versions ?? {}).find(item =>
       item.tenant_id === project.tenant_id && item.project_id === project.id && item.version === version) ?? null;
-  }
-
-  function headSkuProfileOf(data, project) {
-    const versions = Object.values(data.sku_profiles ?? {})
-      .filter(item => item.project_id === project.id && item.tenant_id === project.tenant_id)
-      .sort((left, right) => left.version - right.version);
-    return versions[versions.length - 1] ?? null;
   }
 
   /** 单项重生成计价：按该项源任务冻结 spec 的单张成品报价；算不出来时回落 1 点。 */
@@ -2997,8 +3692,11 @@ export function createApi({
     for (const entry of claim.claimed) {
       const item = claim.order.impact_items.find(candidate => candidate.id === entry.itemId);
       try {
-        if (entry.action === 'text_recompose') await runRecomposeItem(ctx, claim.order, item);
-        else if (entry.action === 'regenerate') {
+        if (entry.action === 'text_recompose') {
+          // E03 集成：说明图项走确定性重排，普通交付物走文字层重合成
+          if (item?.source === 'explainer') await runRecomposeExplainerItem(ctx, claim.order, item);
+          else await runRecomposeItem(ctx, claim.order, item);
+        } else if (entry.action === 'regenerate') {
           await runRegenerateItem(ctx, claim.order, item, item.retry_count ?? 0, {
             expectedCredits: claim.order.quote_confirm?.lines?.find(line => line.item_id === item.id)?.credits ?? null,
           });
@@ -3052,8 +3750,10 @@ export function createApi({
     for (const entry of claim.items) {
       const item = claim.order.impact_items.find(candidate => candidate.id === entry.id);
       try {
-        if (entry.action === 'text_recompose') await runRecomposeItem(ctx, claim.order, item);
-        else await runRegenerateItem(ctx, claim.order, item, (item.retry_count ?? 0) + 1, {
+        if (entry.action === 'text_recompose') {
+          if (item?.source === 'explainer') await runRecomposeExplainerItem(ctx, claim.order, item);
+          else await runRecomposeItem(ctx, claim.order, item);
+        } else await runRegenerateItem(ctx, claim.order, item, (item.retry_count ?? 0) + 1, {
           // 仅对「已实际发生过预留」的项校验确认价；从未扣到费的项（如中断恢复）按当前报价重新预留
           expectedCredits: Number(item.charged_credits) > 0 ? item.charged_credits : null,
         });

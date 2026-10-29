@@ -232,6 +232,46 @@ export function computeImpactList(data, project, diff, skuDiff = []) {
       });
     }
   }
+  // E06：说明图也是商品内容的一部分。其依赖条目记录在版本内（SKU 档案 / 事实 / 底图素材），
+  // 由同一套差异分类判定影响；没有依赖记录的说明图按 unknown 进人工核对，绝不显示「无影响」。
+  const explainers = Object.values(data.explainers ?? {})
+    .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+  for (const record of explainers) {
+    const version = (record.versions ?? []).find(item => item.active === true) ?? null;
+    if (!version) continue;
+    const entries = version.dependencies ?? [];
+    const evidence = entriesEvidence({ entries });
+    const base = {
+      source: 'explainer',
+      explainer_id: record.id,
+      kind: record.kind,
+      run_id: null,
+      deliverable_id: `explainer:${record.id}`,
+      deliverable_label: `${record.kind_label ?? record.kind}（说明图）`,
+      version_id: version.id,
+    };
+    if (evidence === 'unknown') {
+      items.push({
+        ...base, evidence: 'unknown', matched: [], action: 'needs_review',
+        reason: '该说明图没有依赖记录：无法断定是否受本次变更影响，需人工核对（不能视为无影响）',
+      });
+      continue;
+    }
+    const verdicts = entries
+      .map(entry => classifyImpact({ diff, skuDiff, dependencyEntry: entry, hasSpecSnapshot: true }))
+      .filter(Boolean);
+    if (verdicts.length === 0) continue;
+    const top = verdicts.reduce((a, b) =>
+      ((ACTION_PRIORITY[b.action] ?? 0) > (ACTION_PRIORITY[a.action] ?? 0) ? b : a));
+    items.push({
+      ...base,
+      evidence,
+      matched: [...new Set(verdicts.flatMap(item => item.matched))],
+      action: top.action,
+      visual_check: verdicts.some(item => item.visual_check === 'required') ? 'required' : undefined,
+      reason: top.reason ?? null,
+    });
+  }
   return items;
 }
 

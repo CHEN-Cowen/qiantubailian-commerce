@@ -403,9 +403,32 @@
 .q-block { margin-top: 8px; font-size: 13px; }
 .q-block ul { margin: 6px 0; padding-left: 20px; }
 .q-reuse { list-style: none; padding-left: 0; }
+/* E06 说明图（包装清单 / 尺寸 / SKU 对比） */
+.ex-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+.ex-form select { padding: 6px 8px; border: 1px solid #DFE5DC; border-radius: 6px; font-size: 12px; font-family: inherit; }
+.ex-notice { color: #2F6B4F; }
+.ex-preview { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px; margin-bottom: 12px; background: #FCFDFB; }
+.ex-rows { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+.ex-rows th, .ex-rows td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #EEF2EC; }
+.ex-rows tr.is-diff td { color: #B45309; font-weight: 600; }
+.ex-rows tr.is-excluded td { color: #8A958C; }
+.ex-issues { margin: 6px 0; padding-left: 20px; font-size: 12px; color: #B42318; }
+.ex-list { margin-bottom: 12px; }
+.ex-item { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 10px; }
+.ex-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ex-lines { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; }
+.ex-lines b { color: #263A32; }
+.ex-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.ex-ops, .ex-replace { margin-top: 8px; font-size: 12px; }
+.ex-ops summary, .ex-replace summary { cursor: pointer; color: #5F6B62; }
+.ex-op-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.ex-op-row input { flex: 1 1 200px; padding: 6px 8px; border: 1px solid #DFE5DC; border-radius: 6px; font-size: 12px; font-family: inherit; }
+.ex-replace ul, .ex-adoption { list-style: none; margin: 6px 0 0; padding: 0; font-size: 12px; }
+.ex-replace code { word-break: break-all; }
+.ex-adoption { color: #6D786F; }
 @media (max-width: 720px) {
-  .skc-form { flex-direction: column; align-items: stretch; }
-  .skc-form .skc-reason, .skc-form select { width: 100%; box-sizing: border-box; }
-  .q-form-row { flex-direction: column; align-items: stretch; }
-  .q-form-row select { width: 100%; box-sizing: border-box; }
+  .ex-form, .ex-op-row { flex-direction: column; align-items: stretch; }
+  .ex-form select, .ex-op-row input { width: 100%; box-sizing: border-box; }
+  .ex-rows { font-size: 11px; }
 }
+

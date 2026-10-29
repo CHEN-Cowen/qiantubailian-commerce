@@ -278,4 +278,27 @@ export const api = {
   getQuestionGroup: groupId => call(`/api/question-groups/${encodeURIComponent(groupId)}`),
   reviewQuestionGroup: (groupId, body) => call(
     `/api/question-groups/${encodeURIComponent(groupId)}/review`, { method: 'POST', json: body }),
+  // E06：说明图（预览不落库；创建必须带 Idempotency-Key；排版确定性免费，不调用生图模型）
+  previewExplainer: (projectId, body) => call(
+    `/api/projects/${encodeURIComponent(projectId)}/explainers/plan`, { method: 'POST', json: body }),
+  createExplainer: (projectId, body, idempotencyKey) => call(
+    `/api/projects/${encodeURIComponent(projectId)}/explainers`,
+    { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, json: body }),
+  listExplainers: projectId => call(`/api/projects/${encodeURIComponent(projectId)}/explainers`),
+  getExplainer: explainerId => call(`/api/explainers/${encodeURIComponent(explainerId)}`),
+  /** 说明图原图：走服务端内容路由，可直接 <img>/<a download>。 */
+  explainerContentUrl: (explainerId, versionId) => {
+    const query = versionId ? `?version_id=${encodeURIComponent(versionId)}` : '';
+    return `/api/explainers/${encodeURIComponent(explainerId)}/content${query}`;
+  },
+  editExplainer: (explainerId, body) => call(
+    `/api/explainers/${encodeURIComponent(explainerId)}/edits`, { method: 'POST', json: body }),
+  reviewExplainer: (explainerId, body) => call(
+    `/api/explainers/${encodeURIComponent(explainerId)}/review`, { method: 'POST', json: body }),
+  selectExplainer: (explainerId, body) => call(
+    `/api/explainers/${encodeURIComponent(explainerId)}/select`, { method: 'POST', json: body }),
+  explainerFeedback: (explainerId, body) => call(
+    `/api/explainers/${encodeURIComponent(explainerId)}/feedback`, { method: 'POST', json: body }),
+  explainerPackage: explainerId => call(
+    `/api/explainers/${encodeURIComponent(explainerId)}/package`, { method: 'POST', json: {} }),
 };

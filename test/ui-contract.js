@@ -464,3 +464,72 @@ test('E05 售前问题：项目页区块、api 端点、五类结果与诚实文
   assert.match(workbenchCss, /\.q-head\s*\{/);
   assert.match(workbenchCss, /\.q-block\s*\{/);
 });
+
+// 模块E06：说明图（确定性排版 + 复核/选版/替换包/采用反馈）前端契约
+test('E06 说明图：项目页区块、api 端点方法、三种图种与诚实文案', async () => {
+  const [realData, api, workbenchCss] = await Promise.all([
+    read('real-data.js'), read('api.js'), read('workbench.css'),
+  ]);
+  assert.match(realData, /id="explainer-section"/, 'real-data.js 缺少说明图区块 #explainer-section');
+  assert.match(realData, /void loadExplainers\(/);
+  // api.js：E06 端点方法（创建带 Idempotency-Key）
+  for (const fn of ['previewExplainer', 'createExplainer', 'listExplainers', 'getExplainer',
+    'explainerContentUrl', 'editExplainer', 'reviewExplainer', 'selectExplainer',
+    'explainerFeedback', 'explainerPackage']) {
+    assert.match(api, new RegExp(`${fn}`), `api.js 缺少方法 ${fn}`);
+  }
+  assert.match(api, /\/explainers\/plan/);
+  assert.match(api, /\/explainers`/, 'api.js 缺少项目说明图列表端点');
+  assert.match(api, /\/content/, '说明图原图必须走内容路由');
+  assert.match(api, /\/edits/);
+  assert.match(api, /\/review/);
+  assert.match(api, /\/select/);
+  assert.match(api, /\/feedback/);
+  assert.match(api, /\/package/);
+  assert.match(api, /Idempotency-Key/, '创建说明图必须携带 Idempotency-Key 头');
+  // real-data.js：关键函数与真实 API 接线
+  for (const fn of ['loadExplainers', 'renderExplainerSection', 'renderExplainerPreview',
+    'renderExplainerList', 'onExplainerClick', 'explainerErrorText']) {
+    assert.match(realData, new RegExp(`function ${fn}\\(`), `real-data.js 缺少函数 ${fn}`);
+  }
+  assert.match(realData, /api\.previewExplainer\(/);
+  assert.match(realData, /api\.createExplainer\(/);
+  assert.match(realData, /api\.listExplainers\(/);
+  assert.match(realData, /api\.reviewExplainer\(/);
+  assert.match(realData, /api\.selectExplainer\(/);
+  assert.match(realData, /api\.editExplainer\(/);
+  assert.match(realData, /api\.explainerFeedback\(/);
+  assert.match(realData, /api\.explainerPackage\(/);
+  assert.match(realData, /api\.explainerContentUrl\(/);
+  assert.match(realData, /api\.downloadExportUrl\(/, '替换包下载复用 downloadExportUrl');
+  // 三种图种与操作入口
+  for (const text of ['包装内容清单图', '尺寸说明图', 'SKU 对比图']) {
+    assert.match(realData, new RegExp(text), `缺少图种文案：${text}`);
+  }
+  for (const action of ['ex-preview', 'ex-create', 'ex-confirm', 'ex-reject', 'ex-select',
+    'ex-package', 'ex-edit', 'ex-used', 'ex-unused']) {
+    assert.match(realData, new RegExp(`data-action="${action}"`), `缺少操作入口 ${action}`);
+  }
+  assert.match(realData, /randomUUID/, '创建说明图的幂等键由 crypto 生成');
+  // 诚实文案：确定性排版免费、不推测、底图权益、复核依据、替换需手工、反馈不换算收益
+  assert.match(realData, /排版免费/);
+  assert.match(realData, /不调用生图模型/);
+  assert.match(realData, /不替你推测尺寸或适配结论/);
+  assert.match(realData, /没过闸口的图不能免费当底图/);
+  assert.match(realData, /复核必须留下依据/);
+  assert.match(realData, /数量\/单位\/条目名不可改/);
+  assert.match(realData, /不会自动同步平台/);
+  assert.match(realData, /不代表店铺曝光、点击或转化收益/);
+  // 闸口错误如实提示，不显示成成功
+  for (const code of ['FACT_CONFLICT', 'REVIEW_REQUIRED', 'EXPLAINER_STALE', 'SOURCE_NOT_ENTITLED',
+    'PHOTO_SOURCE_REQUIRED', 'AUDIT_FAILED']) {
+    assert.match(realData, new RegExp(code), `缺少错误码处理：${code}`);
+  }
+  // 区块样式与移动端
+  assert.match(workbenchCss, /\.ex-form\s*\{/);
+  assert.match(workbenchCss, /\.ex-preview\s*\{/);
+  assert.match(workbenchCss, /\.ex-rows\s*\{/);
+  assert.match(workbenchCss, /\.ex-item\s*\{/);
+  assert.match(workbenchCss, /\.ex-op-row\s*\{/);
+  assert.match(workbenchCss, /\.ex-form, \.ex-op-row \{ flex-direction: column/);
+});

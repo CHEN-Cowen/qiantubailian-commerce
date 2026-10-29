@@ -259,3 +259,49 @@
 
 - E04 提交：`4f516ec`（feat(sku-check): E04 SKU 防串图与包含物核对），已推送并在远端核验。
 - E05 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。
+
+## 模块 E06：可编辑说明图（包装内容清单 / 尺寸说明 / SKU 对比）
+
+### 目标
+
+三种说明图都用确定性排版（1080×1350）从 SKU 档案与已确认事实逐行取数，不调用生图模型、不扣额度；商家可预览、微调文案、复核、选版、下载与登记采用反馈；新图依赖回写到 E03，事实/档案变化后能被变更单找到并免费重排；未付费或未过导出闸口的图片版本不能免费当底图；不重复制作已有同排版图；反馈不伪装转化收益。
+
+### 实际实现
+
+1. 新文件 `src/explainer.mjs`（纯函数）：
+   - `buildExplainerPlan`：packing_list 逐条列 SKU 包含物（`included:false` 单列「不随包装交付」）；size 只收长度单位属性（容量 g/ml 不进尺寸图），确认事实同名项优先取值，缺单位/缺事实 → `SIZE_FACTS_MISSING` 并列出缺什么；sku_compare 按属性与包含物左右对照，对侧没有的条目明说「未包含」，缺一侧不推断；缺资料分别返回 `NO_SKU_PROFILE` / `SKU_NOT_FOUND` / `CONTENT_MISSING` / `PEER_SKU_REQUIRED` / `PEER_SKU_NOT_FOUND` / `PEER_SKU_INVALID` / `COMPARE_EMPTY`。
+   - 身份按商家编号：`skuCode`/`peerSkuCode` 回落定位（E01 档案重写会换内部 ID），自比按解析后的 `sku_code` 大小写不敏感判定。
+   - `applyExplainerEdits`：只允许 title/subtitle/footnote；改数量/单位/条目名 → `FACT_VALUE_IMMUTABLE`；承诺词（`CLAIM_BLOCKLIST`）→ `CLAIM_NOT_ALLOWED`；超长 → `INVALID_FIELD`；无变化交由路由判 `NO_CHANGES`。
+   - `auditExplainerPlan`：逐行核对 snapshot 的数量/单位/条目名/对照值，并跨来源核对「SKU 档案 vs 已确认事实」同名属性，矛盾记 `truth_conflict`（不选一边照排）。
+   - `explainerStale`（`SKU_PROFILE_CHANGED` / `TRUTH_CHANGED`）、`dependencyEntriesFor`（sku/fact/asset 条目回写 E03）、`replacementListFor`/`explainerPath`（旧文件替换清单：路径、新哈希、上一版哈希、改动说明）、`renderExplainerSvg`（纯 SVG，XML 转义，固定附「不推断适配机型」声明与事实来源说明）。
+2. `src/raster.mjs` 新增 `renderSvgPng`（sharp/librsvg，本地确定性栅格化）；`src/store.mjs` 追加 `explainers` 表（旧数据按空表迁移）。
+3. `src/api.mjs` 路由：`POST /api/projects/:id/explainers/plan`（预览不落库、不渲染、0 额度，返回 plan/audit/duplicate/photo_quote）、`POST|GET /api/projects/:id/explainers`（创建必须带 Idempotency-Key；同排版且同底图 → 200 duplicate 不重复制作，`force:true` 才重做；`require_photo` 无底图 → 409 `PHOTO_SOURCE_REQUIRED` 附报价且不扣费）、`GET /api/explainers/:id`、`GET .../content`（原图，带 `X-Content-SHA256`）、`POST .../edits`（新版本保留旧版，必须重新复核）、`POST .../review`（confirm 必须审计通过，reason 必填）、`POST .../select`（复核 + 审计 + 未过期闸口）、`POST .../feedback`（used 布尔，note 固定声明不代表曝光/点击/转化）、`POST .../package`（复核 + 审计 + 未过期，zip 内含 PNG 与 manifest，`platform_compliance: not_claimed`，替换清单需商家手工替换）。
+4. 底图权益 `resolveExplainerBasePhoto`：只接受生效中的商家素材（免费复用，style 素材 422 `BASE_PHOTO_INVALID`）或 `planSkuAvailability` 判定 included 的图片版本；否则 422 `SOURCE_NOT_ENTITLED`。事实版本变化使质量报告失效时，版本底图随之失去继承资格（规则正确，测试按此断言）。
+5. E03 联动：`computeImpactList` 遍历 `data.explainers` 当前版本，按版本 `dependencies` 复用同一套差异分类；executeChange 的 `text_recompose` 分支识别 `source:'explainer'` 走 `runRecomposeExplainerItem`（确定性重排、0 额度、新版本回 `awaiting_review`）；审计发现档案与事实矛盾 → 409 `FACT_CONFLICT`，不静默产出与事实矛盾的图。
+6. 前端：商品事实弹窗新增「说明图」区块 `#explainer-section`（图种/SKU/对比 SKU/底图选择、预览表格与缺失清单、生成、列表含状态徽章/行内容/过期原因/下载 PNG/选版/替换包下载/复核（依据必填）/文案微调/采用反馈/替换清单、采用反馈声明）；`frontend/api.js` +10 方法；`frontend/workbench.css` +`.ex-*` 与 720px 移动端。
+
+### 本轮调试修复
+
+1. **TDZ**：`EXPLAINER_PHOTO_QUOTE` 放在 `return publish;` 之前的顶层常量区，避免 E04 同类的 ReferenceError。
+2. `headSkuProfileOf` 在 api.mjs 重复声明两次（后者覆盖前者，逻辑等价）：删除 E03 区重复定义，保留基于 `skuProfilesOf` 的版本。
+3. **事实变化后仍按旧档案排版**：尺寸行改为「确认事实优先」，E03 免费重排会换上新数值；同时 `auditExplainerPlan` 跨来源核对，档案与事实矛盾直接 409，不允许选一边照排。
+4. **档案重写换内部 ID** 后说明图找不到 SKU/重复创建：`buildExplainerPlan` 支持按 `sku_code` 回落；判重与复用改用 `explainerIdentityOf(kind, sku_code, peer_code)`，复用时同步 SKU 快照。
+5. **换底图被当成重复图**：重复判定增加底图身份 `basePhotoKey`（asset/version），底图不同视为另一次制作，避免把旧底图成品当成本次结果返回，也让非法底图能走到校验并如实 422。
+6. 测试侧修正：错误详情在 `json.details`（不在顶层）；复核确认需先过 reason 必填校验再断言 `AUDIT_FAILED`；E03 集成改为「素材底图免费重排成功 + 版本底图被闸口拒绝 + 整单 partial_failed」。
+
+### 测试证据（Node 22.22.2）
+
+- `node --test test/e06.js`：7/7 通过（纯函数 5：三种图种行内容与缺资料码、编辑守卫、审计与 truth_conflict、过期/依赖/确定性渲染/转义、present 与复核反馈校验；集成 2：预览不落库/幂等与重复/复核选版闸口/替换包下载/反馈/底图与对比图参数闸口/跨租户 404；未过闸口版本不能当底图、已发布版本可继承、事实变化被变更单找到并确定性重排且零额度）。
+- 全量 `npm test`：296 项，295 通过 / 0 失败 / 1 跳过（既有符号链接项）；`node --test test/ui-contract.js`：13/13（含新增 E06 契约）。
+- `npm run check`：87 个文件通过。
+
+### 未验证 / 边界
+
+- 不调用生图模型：说明图全部为确定性 SVG→PNG；需要新底图时只报价不自动生成（生成链路由 M05 任务负责）。
+- 未接入店铺发布：替换包只含文件与替换清单，`platform_compliance: not_claimed`。
+- 采用反馈为商家自述，不接入平台曝光/点击/转化数据。
+- 真实浏览器截图与移动端验收统一在 E07/E08。
+
+### 提交与推送
+
+- 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。

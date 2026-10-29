@@ -16,6 +16,13 @@ export async function prepareSubjectMask({ bytes, mime, box = null }) {
     has_cutout: true, method: 'manual_box_pixels', message: '保留框内原始商品像素（含框内背景），边缘和摆放仍需复核' };
 }
 
+/** E06：把确定性排版的 SVG 栅格化为 PNG（librsvg），不经过任何生图模型。 */
+export async function renderSvgPng(svg, { width = null, height = null } = {}) {
+  const pipeline = sharp(Buffer.from(svg), { limitInputPixels: 48_000_000 });
+  if (width && height) pipeline.resize(width, height, { fit: 'fill' });
+  return pipeline.png({ adaptiveFiltering: false }).toBuffer();
+}
+
 export async function decodeToPng(bytes) {
   return sharp(bytes, { limitInputPixels: 48_000_000 }).rotate().removeAlpha().png({ adaptiveFiltering: false }).toBuffer();
 }

@@ -40,6 +40,8 @@ const TABLES = Object.freeze([
   'check_issues',
   // E05：售前问题组（脱敏输入、归类、频次来源、五类分流结果与信息缺口；旧数据按空表迁移）
   'question_groups',
+  // E06：说明图（三种确定性排版、版本、事实审计、复核、选用与采用反馈；旧数据按空表迁移）
+  'explainers',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -57,6 +59,7 @@ const EMPTY_DATA = () => ({
   change_orders: {}, replacement_todos: {},
   check_issues: {},
   question_groups: {},
+  explainers: {},
 });
 
 function normalize(raw) {
