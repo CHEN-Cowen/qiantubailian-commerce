@@ -369,3 +369,54 @@ test('E03 商品变更：项目页变更区块、api 端点方法、逐项处理
   assert.match(workbenchCss, /\.chg-detail\s*\{/);
   assert.match(workbenchCss, /\.chg-list\s*\{/);
 });
+
+// 模块E04：SKU 防串图核对与按 SKU 导出前端契约（区块同样挂在 #truth-dialog 内，由 real-data.js 注入）
+test('E04 SKU 核对：项目页核对区块、api 端点方法、三层分列与诚实文案', async () => {
+  const [html, realData, api, workbenchCss] = await Promise.all([
+    read('index.html'), read('real-data.js'), read('api.js'), read('workbench.css'),
+  ]);
+  assert.ok(html.includes('id="truth-dialog"'), 'index.html 缺少项目详情弹窗 #truth-dialog');
+  assert.match(realData, /id="check-section"/, 'real-data.js 缺少 SKU 核对区块 #check-section');
+  // api.js：E04 端点方法
+  for (const fn of ['runSkuChecks', 'listSkuChecks', 'resolveCheckIssue', 'createSkuExport', 'listSkuExports']) {
+    assert.match(api, new RegExp(`${fn}`), `api.js 缺少方法 ${fn}`);
+  }
+  assert.match(api, /\/sku-checks/);
+  assert.match(api, /\/check-issues\//);
+  assert.match(api, /\/resolve/);
+  assert.match(api, /\/sku-exports/);
+  // real-data.js：关键函数与真实 API 接线
+  for (const fn of ['loadSkuChecks', 'renderCheckSection', 'renderCheckIssues', 'renderCheckExports', 'onCheckClick']) {
+    assert.match(realData, new RegExp(`function ${fn}\\(`), `real-data.js 缺少函数 ${fn}`);
+  }
+  assert.match(realData, /api\.runSkuChecks\(/);
+  assert.match(realData, /api\.listSkuChecks\(/);
+  assert.match(realData, /api\.resolveCheckIssue\(/);
+  assert.match(realData, /api\.createSkuExport\(/);
+  assert.match(realData, /api\.listSkuExports\(/);
+  // 三层分列与操作
+  assert.match(realData, /归属核对/);
+  assert.match(realData, /结构核对/);
+  assert.match(realData, /视觉候选/);
+  assert.match(realData, /data-action="skc-run"/);
+  assert.match(realData, /data-action="skc-confirm"/);
+  assert.match(realData, /data-action="skc-reassign"/);
+  assert.match(realData, /data-action="skc-export"/);
+  assert.match(realData, /data-action="skc-open-workbench"/, '改文字/重做必须跳工作台');
+  assert.match(realData, /qb:open-workbench/);
+  // 版本图预览走服务端内容路由（未结算自带水印），不直接读文件
+  assert.match(realData, /workVersionImageUrl\(issue\.run_id, issue\.version_id\)/);
+  // 诚实文案：阻断不可被满意覆盖、复核绑定版本、视觉未知不作通过依据、不混入其他 SKU
+  assert.match(realData, /满意不能覆盖确定错误/);
+  assert.match(realData, /新版本需重新核对/);
+  assert.match(realData, /保持未知/);
+  assert.match(realData, /归属其他 SKU 的图不会混入/);
+  assert.match(realData, /ISSUE_HARD_BLOCK/);
+  assert.match(realData, /SKU_EXPORT_EMPTY/);
+  // 导出下载复用既有 downloadExportUrl
+  assert.match(realData, /api\.downloadExportUrl\(/);
+  // 区块样式
+  assert.match(workbenchCss, /\.skc-list\s*\{/);
+  assert.match(workbenchCss, /\.skc-form\s*\{/);
+  assert.match(workbenchCss, /\.skc-exports\s*\{/);
+});

@@ -372,3 +372,23 @@
 .chg-todos { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
 .chg-exports { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
 .chg-quote-confirm .state-actions { margin-top: 8px; }
+
+/* E04 SKU 核对与按 SKU 导出 */
+.skc-summary { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.skc-list { margin-bottom: 12px; }
+.skc-issue-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.skc-message { margin: 6px 0 0; font-size: 13px; }
+.skc-form { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.skc-form .skc-reason { flex: 1 1 240px; padding: 6px 8px; border: 1px solid #DFE5DC; border-radius: 6px; font-size: 12px; font-family: inherit; }
+.skc-form select { padding: 6px 8px; border: 1px solid #DFE5DC; border-radius: 6px; font-size: 12px; font-family: inherit; }
+.skc-detail { margin-top: 8px; font-size: 12px; }
+.skc-detail summary { cursor: pointer; color: #5F6B62; }
+.skc-preview { display: block; max-width: 220px; border: 1px solid var(--line); border-radius: var(--radius-sm); margin-top: 6px; }
+.skc-evidence { font-size: 12px; color: #6D786F; word-break: break-all; }
+.skc-exports { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.skc-exports h4 { margin: 0 0 8px; font-size: 13px; }
+.wb-status.bad { background: #FBEAEA; color: #B42318; }
+@media (max-width: 720px) {
+  .skc-form { flex-direction: column; align-items: stretch; }
+  .skc-form .skc-reason, .skc-form select { width: 100%; box-sizing: border-box; }
+}

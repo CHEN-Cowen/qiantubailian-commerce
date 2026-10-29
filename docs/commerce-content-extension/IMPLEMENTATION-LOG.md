@@ -175,4 +175,44 @@
 
 ### 提交与推送
 
+- 提交：`e85db8e`（feat(change): E03 商品变更更新助手完整流程），推送后已核验远端包含。
+
+## 模块 E04：SKU防串图与包含物核对
+
+### 实际实现
+
+1. 新表 `check_issues`（`src/store.mjs`，追加式）：问题指纹 contentHash（层+代码+对象引用）幂等，同版本同指纹不重复开立；resolution 绑定版本/事实版本/档案版本/操作者/依据。
+2. 新文件 `src/skucheck.mjs`（纯函数，业务规则单一来源）：
+   - 三层核对 `evaluateSkuChecks`：ownership（SKU_MISMATCH  blocker=认领集出现预期外已知 SKU 或缺预期 SKU；OWNERSHIP_UNKNOWN review=多规格无有效归属证据；ASSET_CROSS_SKU blocker=其他 SKU 专属素材串用，style 共享除外；已裁决 reassign 且目标仍在认领集 → 不重报）；structure（无层依据 STRUCTURE_UNKNOWN review、引用已删事实 FACT_REMOVED blocker、数量归一比对 QUANTITY_CONFLICT/UNIT_CONFLICT、SKU 属性矛盾 SPEC_CONFLICT，500ml≡0.5L 归一化不误报；规格本无文字层的交付物不适用，不误报 UNKNOWN）；visual（未配置/识别失败 VISUAL_UNAVAILABLE review 不阻断不伪造已核对、OCR 数量 token 与展示事实不一致 VISUAL_QUANTITY_SUSPECT review 候选证据）。
+   - `effectiveSkuOf` 生效归属：reassign 裁决 > 依赖 manual sku 条目（人工断言优先）> deterministic sku 条目 > truth/project.sku 命中档案 > null。
+   - `validateResolveInput`：action∈confirm/reassign、reason 必填 ≤300；blocker 不能 confirm（409 ISSUE_HARD_BLOCK）；reassign 仅归属层且目标须在档案内；已收口 409。
+   - `planSkuExport`：闸口顺序 REPORT_MISSING→STALE→BLOCKED/NEEDS_REVIEW→OPEN_BLOCKER→ENTITLEMENT_NOT_SETTLED；归属其他 SKU 静默跳过（不混入不罗列）；归属不明单列 OWNERSHIP_UNKNOWN；空 → SKU_EXPORT_EMPTY。
+3. `src/depgraph.mjs`：compileDependencies 的 sku 条目新增 `code`（商家编号）留痕——E01 档案更新重生成 sku id 后，归属解析按 code 回落映射到当前档案同编号 SKU，旧引用不失效（`resolveSkuEntryId`，id 优先 code 回落；都失效按无证据保持未知，不伪造错配）。
+4. `src/jobs.mjs`：`recordImageDependencies` 继承同 deliverable 前序版本依赖记录里的 manual 条目（文字改版/重合成不改变图的主体，已裁决/已关联归属不被静默翻回编译态；复核仍绑定版本，新版本会重新开单）；`createSkuExport`（导出前 settleFinishedImages 收口权益 → planSkuExport → buildZip 按 `images/<sku_code>/<deliverable>.<fmt>` + sku-manifest.json 如实列 excluded → exports 落 `kind:'sku_export'` 记录，下载走既有鉴权路由）。
+5. `src/api.mjs`：路由 `POST/GET /api/projects/:id/sku-checks`、`POST/GET /api/projects/:id/sku-exports`、`GET /api/check-issues/:id`、`POST /api/check-issues/:id/resolve`；权限 sku-checks→project:write/read、sku-exports→export:create/export:read、check-issues→project:write/read；OCR 适配器提升到 createApi 作用域与 jobs 共享实例，未配置（configured:false）不耗预算不发起调用；单次核对 OCR 预算 8 个版本，超预算版本 VISUAL_UNAVAILABLE(BUDGET_LIMIT)；自动收口=指纹消失的 review 项与 structure blocker 记 recheck_clear，ownership blocker 永不自动收口；reassign 收口时把目标 SKU 并入依赖记录 manual 条目留痕。
+6. 前端：商品事实弹窗新增「SKU 核对」区块（三层摘要徽章 + 发起核对/刷新 + 问题列表（状态/层级徽章、版本 vN 标注当前选用/历史、图片预览与证据 details、open 项依据输入 + ownership 层目标 SKU 选择 + 确认无误/更正归属/去工作台处理按钮）+ 按 SKU 导出区（SKU 选择、导出列表含排除清单 details 与下载链接））；`frontend/api.js` +5 方法；`frontend/workbench.css` +`.skc-*` 与 `.wb-status.bad`，移动端 720px 媒体查询。
+
+### 本轮调试修复
+
+1. **TDZ ReferenceError**：`SKU_CHECK_OCR_BUDGET` const 落在 `return publish;` 之后区域 → 移到 STATE_CHANGING 旁（api.mjs 结构性陷阱，已有警示注释）。
+2. **ocrAdapter 作用域**：api.mjs 本无此变量（OCR 只注入 jobs）→ createApi 内声明并与 jobs 共享实例；且 createOcrFromEnv 未配置时返回 `{configured:false}` 适配器而非 null，`ocr_configured` 判定改为 `configured !== false`，未配置不耗预算。
+3. **结构层误报**：main/scene 规格本无文字层却被开 STRUCTURE_UNKNOWN → 依赖记录无 text_layer 条目时结构层不适用。
+4. **档案更新使依赖 sku 引用悬空**：E01 PUT 重生成 id，历史依赖条目 ref 失效导致归属误判/导出异常 → sku 条目携带 code + `resolveSkuEntryId` 回落（见上 3）。
+5. **manual 归属条目不随版本延续**：text-edit 新版本依赖只含 deterministic，商家已裁决归属被翻回 → `recordImageDependencies` 继承前序 manual 条目（见上 4）。
+6. 测试侧修正：scene 版本格式以交付物规格为准（jpg）；PUT 更新档案后须用最新 sku id；409 错误响应的排除清单在 `details.excluded`。
+
+### 测试证据（Node 22.22.2）
+
+- `node --test test/e04.js`：9/9 通过（纯函数 5：ownership 全规则/structure/visual/effectiveSkuOf+validateResolveInput/planSkuExport 闸口；集成 4：干净核对幂等+未配置 OCR 保持未知+导出与跨租户 404 全套、人工错配→ISSUE_HARD_BLOCK→reassign 留痕→重核不重报→复核绑定版本新版本重开单→OPEN_BLOCKER 闸口、SPEC_CONFLICT 修档 recheck_clear 自动收口+FACT_REMOVED+STALE 闸口、NO_SKU_PROFILE/SKU_EXPORT_EMPTY/SKU_NOT_FOUND 参数闸口）。
+- 回归 `node --test test/e01.js test/e02.js test/e03.js test/ui-contract.js`：37/37 通过（ui-contract 含 E04 契约 11 项）。
+- `npm run check`：83 个文件通过。
+
+### 未验证 / 边界
+
+- 真实 OCR/视觉服务未配置：视觉层全部走 fixture/未配置路径（VISUAL_UNAVAILABLE 保持未知），真实识别效果列入 E08 未验收项。
+- 归属解析的 code 回落只覆盖本轮起新编译的依赖条目；更早旧数据（无 code 且档案已更新）按无证据保持未知，不回填伪造。
+- 前端为手工 DOM 实现，真实浏览器截图验收统一在 E07/E08。
+
+### 提交与推送
+
 - 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。

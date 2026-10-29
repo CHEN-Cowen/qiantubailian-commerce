@@ -74,7 +74,10 @@ export function compileDependencies({ spec, truth, deliverable, references = [],
     const hit = (skuProfile.skus ?? []).find(sku =>
       String(sku.sku_code ?? '').toLowerCase() === String(skuCode).toLowerCase());
     if (hit?.id) {
+      // code 随条目留痕：E01 档案更新会重生成 sku id，旧 id 失效后
+      // 归属核对（E04）可按商家编号把条目回落映射到当前档案的同编号 SKU
       push(entry('sku', hit.id, {
+        code: hit.sku_code,
         source_version: { sku_profile_version: skuProfile.version ?? null },
         note: `命中商家编号 ${hit.sku_code}`,
       }));

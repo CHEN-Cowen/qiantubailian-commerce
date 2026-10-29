@@ -42,7 +42,8 @@ import {
 import {
   TEXT_EDIT_VERSION, applyTextEdits, describeTextEdits, presentTextLayers, textEditLimits,
 } from './text-edits.mjs';
-import { compileDependencies } from './depgraph.mjs';
+import { compileDependencies, mergeManualEntries } from './depgraph.mjs';
+import { planSkuExport } from './skucheck.mjs';
 
 export const RUN_SCHEMA_VERSION = 1;
 export const EVENT_SCHEMA_VERSION = 1;
@@ -1164,6 +1165,13 @@ export function createJobs({
       skuProfile,
     });
     if (!entries) return;
+    // E04：人工关联（manual）是商家对「这张图」归属/来源的显式断言，文字改版/重合成不改变图的主体，
+    // 前序版本的 manual 条目延续到新版本记录，避免已裁决/已关联的归属被静默翻回编译态（复核仍绑定版本：
+    // 新版本会因认领集与事实不一致重新开单，需人工再次确认）。
+    const priorManual = Object.values(data.image_dependencies)
+      .filter(item => item.run_id === run.id && item.deliverable_id === version.deliverable_id)
+      .flatMap(item => (item.entries ?? []).filter(entry => entry.evidence === 'manual'));
+    const merged = priorManual.length > 0 ? mergeManualEntries(entries, priorManual) : entries;
     const at = clock();
     const id = newId('dep');
     data.image_dependencies[id] = {
@@ -1173,7 +1181,7 @@ export function createJobs({
       run_id: run.id,
       deliverable_id: version.deliverable_id,
       version_id: version.id,
-      entries,
+      entries: merged,
       status: 'active',
       created_by: 'system',
       created_at: new Date(at).toISOString(),
@@ -2743,6 +2751,8 @@ export function createJobs({
           kind: item.kind ?? 'images',
           run_id: item.run_id,
           scope: item.scope,
+          sku_id: item.sku_id ?? null,
+          sku_code: item.sku_code ?? null,
           complete: item.complete,
           status: item.status,
           package_filename: item.package_filename,
@@ -3385,6 +3395,118 @@ export function createJobs({
     return getExport(ctx, result.id);
   }
 
+  /**
+   * E04：按 SKU 导出。闸口由 planSkuExport 统一判定：生效归属、当前选用、报告可发布且有效、
+   * 无未解除阻断级问题、成品权益已结算。归属其他 SKU 的版本绝不混入包内；
+   * 归属不明与被闸口排除的版本列入 missing（附原因），不用抽检替代硬检查。
+   */
+  async function createSkuExport(ctx, projectId, { skuId } = {}) {
+    if (!skuId) throw new ApiError(422, 'SKU_REQUIRED', '请指定要导出的 SKU');
+    const result = await store.mutate(async data => {
+      const project = findProjectIn(data, ctx, projectId);
+      const skuProfile = Object.values(data.sku_profiles ?? {})
+        .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id)
+        .sort((left, right) => right.version - left.version)[0] ?? null;
+      if (!skuProfile) {
+        throw new ApiError(409, 'NO_SKU_PROFILE', '项目还没有 SKU 档案，请先在商品事实中维护 SKU 档案');
+      }
+      const runs = Object.values(data.runs ?? {})
+        .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+      const at = clock();
+      // 与 createExport 同一语义：导出前收口成品图权益，待复核的版本保持冻结
+      for (const run of runs) {
+        if (run.billing_mode === 'finished_image' && !ACTIVE_STATES.has(run.status)) {
+          settleFinishedImages(data, run, at);
+        }
+      }
+      const dependencies = Object.values(data.image_dependencies ?? {})
+        .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+      const issues = Object.values(data.check_issues ?? {})
+        .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+      const reports = {};
+      const validities = {};
+      for (const run of runs) {
+        for (const version of run.versions ?? []) {
+          const report = data.quality_reports?.[version.report_id] ?? null;
+          if (report && !reports[report.id]) {
+            reports[report.id] = report;
+            validities[report.id] = await reportValidityIn(data, report);
+          }
+        }
+      }
+      const plan = planSkuExport({ project, skuId, skuProfile, runs, dependencies, issues, reports, validities });
+      if (!plan.ok) {
+        throw new ApiError(plan.code === 'SKU_NOT_FOUND' ? 404 : 409, plan.code, plan.message, {
+          sku: plan.sku ?? null, excluded: plan.excluded,
+        });
+      }
+      const entries = [];
+      for (const item of plan.included) {
+        const bytes = await store.readBlob(item.hash, item.format);
+        if (!bytes) {
+          throw new ApiError(409, 'EXPORT_FILE_MISSING', `交付物 ${item.deliverable_id} 的文件已不可读取`);
+        }
+        entries.push({ name: item.path, bytes });
+      }
+      const manifest = {
+        package_format: 'qtb-sku-package.1',
+        schema_version: 1,
+        generated_at: new Date(at).toISOString(),
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        sku: plan.sku,
+        provider: {
+          id: provider.capabilities().id ?? null,
+          simulated: provider.capabilities().simulated === true,
+          acceptance: provider.capabilities().acceptance ?? null,
+        },
+        items: plan.included.map(item => ({
+          run_id: item.run_id, deliverable_id: item.deliverable_id, label: item.deliverable_label,
+          version_id: item.version_id, version_number: item.number,
+          file: item.path, sha256: item.hash, format: item.format, report_id: item.report_id,
+        })),
+        excluded: plan.excluded,
+        platform_compliance: 'not_claimed',
+        note: '按 SKU 组织的交付目录：仅含生效归属该 SKU、当前选用且通过全部闸口的版本；'
+          + '归属其他 SKU 的图不混入；被排除的版本逐项列出原因。',
+      };
+      entries.push({ name: 'sku-manifest.json', bytes: Buffer.from(JSON.stringify(manifest, null, 2)) });
+      const zip = buildZip(entries, { now: at });
+      const packageHash = zipSha256(zip);
+      const file = await store.putBlob(zip, packageHash, 'zip');
+      const record = {
+        id: exportRecordId(),
+        schema_version: EXPORT_SCHEMA_VERSION,
+        package_format: 'qtb-sku-package.1',
+        kind: 'sku_export',
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        run_id: null,
+        sku_id: plan.sku.id,
+        sku_code: plan.sku.sku_code,
+        scope: 'sku',
+        complete: plan.excluded.length === 0,
+        status: plan.code,
+        message: plan.message,
+        package_filename: `qtb-sku-${plan.sku.id}.zip`,
+        package_sha256: packageHash,
+        package_bytes: zip.length,
+        package_path: file,
+        manifest,
+        qa_summary: null,
+        included: plan.included,
+        missing: plan.excluded,
+        platform_compliance: 'not_claimed',
+        content_hash_scope: '清单与文件哈希；不含图片二进制',
+        created_by: ctx.actorId,
+        created_at: new Date(at).toISOString(),
+      };
+      data.exports[record.id] = record;
+      return { id: record.id };
+    });
+    return getExport(ctx, result.id);
+  }
+
   return {
     start, stop, createRun, cancelRun, confirmBudget, reconcileRun, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
     listGenerationRecords, getGenerationRecord,
@@ -3392,7 +3514,7 @@ export function createJobs({
     listRunVersions, readVersionContent, activateVersion, createExport, listExports, getExport, readExportPackage,
     textLayersOfDeliverable, editDeliverableText, recomposeVersionFacts,
     createVideoPlan, listVideoPlans, getVideoPlan, evaluateVideoPlanFrames, generateVideo,
-    createJointExport, createBatchExport,
+    createJointExport, createBatchExport, createSkuExport,
     get activeSubscriptions() { return listeners.size; },
   };
 }

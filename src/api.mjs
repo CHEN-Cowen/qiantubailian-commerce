@@ -25,6 +25,10 @@ import {
 } from './change.mjs';
 import { DEPENDENCY_KINDS, mergeManualEntries, presentDependency } from './depgraph.mjs';
 import {
+  AUTO_CLEAR_ACTION, CHECK_LAYERS, evaluateSkuChecks, presentCheckIssue,
+  validateResolveInput,
+} from './skucheck.mjs';
+import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
 import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
@@ -143,11 +147,14 @@ export function createApi({
     acceptance: resolvedProvider.acceptance,
     note: resolvedProvider.note,
   };
+  // R04/E04：OCR 适配器在 api 作用域保留一份（E04 三层核对的视觉层直接调用），
+  // 与注入 jobs 的是同一实例；未配置（null）时视觉项保持未知，绝不伪造已核对。
+  const ocrAdapter = injectedOcr ?? createOcrFromEnv(process.env);
   const jobs = createJobs({
     store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, revisionMaxRounds,
     providerMaxConcurrency, tenantMaxConcurrency, unknownReconcileMs,
     // R04：注入 OCR 时才会对成品做真实文字核对，否则文字项保持 unknown
-    ocr: injectedOcr ?? createOcrFromEnv(process.env),
+    ocr: ocrAdapter,
   });
   // M12：进程内指标只保留聚合计数，不记录请求体、素材或提示词
   const metrics = { total: 0, by_status: {}, errors: 0, by_error: {} };
@@ -201,6 +208,9 @@ export function createApi({
   // R01：状态变更方法集合。createApi 在下方提前 return publish，所有 const 声明必须在此之前，
   // 否则被提升的函数访问时会处于暂时性死区（ReferenceError）。
   const STATE_CHANGING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+  // E04：一次核对最多识别的版本数。OCR/视觉是有成本服务，超出预算的版本保持未知。
+  // 声明必须位于上方提前 return publish 之前，否则处理器执行时处于暂时性死区。
+  const SKU_CHECK_OCR_BUDGET = 8;
 
   return publish;
 
@@ -589,6 +599,18 @@ export function createApi({
       }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
+    // E04：SKU 核对问题（人工复核/更正归属；复核绑定版本与依据）
+    if (resource === 'check-issues') {
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getCheckIssue(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'resolve') {
+        requireMethod(method, ['POST']);
+        return resolveCheckIssue(ctx, req, rest[1], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
     if (resource !== 'projects') throw new ApiError(404, 'NOT_FOUND', '接口不存在');
 
     if (rest.length === 1) {
@@ -633,6 +655,17 @@ export function createApi({
       if (method === 'POST') return confirmChange(ctx, req, projectId, send);
       requireMethod(method, ['GET', 'HEAD', 'POST']);
       return listChanges(ctx, projectId, send);
+    }
+    // E04：SKU 防串图三层核对（发起/查询）与按 SKU 导出
+    if (rest.length === 3 && section === 'sku-checks') {
+      if (method === 'POST') return runSkuChecks(ctx, req, projectId, send);
+      requireMethod(method, ['GET', 'HEAD', 'POST']);
+      return listSkuChecks(ctx, projectId, send);
+    }
+    if (rest.length === 3 && section === 'sku-exports') {
+      if (method === 'POST') return createSkuExportRoute(ctx, req, projectId, send);
+      requireMethod(method, ['GET', 'HEAD', 'POST']);
+      return listSkuExportsRoute(ctx, projectId, send);
     }
     if (rest.length === 3 && section === 'readiness') {
       requireMethod(method, ['GET', 'HEAD']);
@@ -835,12 +868,17 @@ export function createApi({
       case 'changes':
       case 'replacement-todos':
         return write ? 'project:write' : 'project:read';
+      // E04：核对问题查询走 project:read；人工复核/更正归属是内容写操作
+      case 'check-issues': return write ? 'project:write' : 'project:read';
       case 'projects': {
         if (second === undefined) return write ? 'project:create' : 'project:read';
         if (third === 'assets') return write ? 'asset:write' : 'project:read';
         if (third === 'truth-versions') return write ? 'truth:write' : 'project:read';
         if (third === 'specs') return write ? 'spec:write' : 'project:read';
         if (third === 'changes') return write ? 'project:write' : 'project:read';
+        // E04：SKU 核对是项目级读写；按 SKU 导出与正式导出同权（创建计费语义一致）
+        if (third === 'sku-checks') return write ? 'project:write' : 'project:read';
+        if (third === 'sku-exports') return write ? 'export:create' : 'export:read';
         if (third === 'joint-exports') return write ? 'export:create' : 'export:read';
         return write ? 'project:write' : 'project:read';
       }
@@ -1605,6 +1643,239 @@ export function createApi({
     });
     if (!found) throw new ApiError(404, 'NOT_FOUND', 'SKU 档案版本不存在');
     send(200, { sku_profile: found });
+  }
+
+  // ---------- E04：SKU 防串图三层核对 ----------
+
+  function headSkuProfileOf(data, project) {
+    return skuProfilesOf(data, project).at(-1) ?? null;
+  }
+
+  function headTruthOf(data, project) {
+    return Object.values(data.truth_versions ?? {})
+      .filter(item => item.project_id === project.id && item.tenant_id === project.tenant_id)
+      .sort((left, right) => left.version - right.version).at(-1) ?? null;
+  }
+
+  /**
+   * 发起 SKU 三层核对（归属/结构/视觉）：
+   * - 幂等：同版本同指纹的 open 问题不重复开立；已复核的问题不随重核复开（复核绑定版本持续有效）；
+   * - 自动收口：复核时条件已不存在的 review 项与 structure blocker 记 recheck_clear；
+   *   ownership blocker 永不自动收口（删除关联不能解除确定阻断）；
+   * - 问题绑定 version_id：新版本必须重核，一次人工确认不能永久放行后续版本。
+   */
+  async function runSkuChecks(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const runIdFilter = typeof body?.run_id === 'string' && body.run_id.trim() !== ''
+      ? body.run_id.trim() : null;
+    const outcome = await store.mutate(async data => {
+      const project = findProject(data, ctx, projectId);
+      const profile = headSkuProfileOf(data, project);
+      const truth = headTruthOf(data, project);
+      const runs = Object.values(data.runs ?? {})
+        .filter(run => run.tenant_id === ctx.tenantId && run.project_id === project.id)
+        .filter(run => !runIdFilter || run.id === runIdFilter)
+        .sort((left, right) => String(left.created_at ?? '').localeCompare(String(right.created_at ?? '')));
+      if (runIdFilter && runs.length === 0) throw new ApiError(404, 'NOT_FOUND', '指定的任务不存在');
+      const assetsById = new Map(Object.values(data.assets ?? {})
+        .filter(asset => asset.tenant_id === ctx.tenantId && asset.project_id === project.id)
+        .map(asset => [asset.id, asset]));
+      const dependencies = Object.values(data.image_dependencies ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === project.id);
+      const existingIssues = Object.values(data.check_issues ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === project.id);
+      const timestamp = now();
+      // 未配置的适配器（createOcrFromEnv 的 not_configured 形态）不消耗预算、不发起调用：视觉层保持未知
+      const ocrConfigured = Boolean(ocrAdapter) && ocrAdapter.configured !== false;
+      let ocrBudget = SKU_CHECK_OCR_BUDGET;
+      let checked = 0;
+      let created = 0;
+      let autoCleared = 0;
+      for (const run of runs) {
+        for (const deliverable of run.deliverables ?? []) {
+          const version = (run.versions ?? []).find(item =>
+            item.deliverable_id === deliverable.deliverable_id && item.active === true) ?? null;
+          if (!version) continue;
+          checked += 1;
+          const dependencyRecord = dependencies.find(item =>
+            item.run_id === run.id && item.deliverable_id === deliverable.deliverable_id
+            && item.version_id === version.id) ?? null;
+          // 版本冻结文字层优先；旧版本无冻结层时回落编译计划层；都没有 → 结构层保持未知
+          let textLayers = Array.isArray(version.text_layers) && version.text_layers.length > 0
+            ? version.text_layers : null;
+          if (!textLayers) {
+            const planTarget = (run.execution?.plan?.deliverables ?? [])
+              .find(item => item.deliverable_id === deliverable.deliverable_id) ?? null;
+            textLayers = Array.isArray(planTarget?.text_layers) && planTarget.text_layers.length > 0
+              ? planTarget.text_layers : null;
+          }
+          // 视觉层：未配置 OCR 保持未知；配置了则在单次请求预算内识别，超预算同样保持未知
+          let ocr = null;
+          if (ocrConfigured) {
+            if (ocrBudget > 0) {
+              ocrBudget -= 1;
+              try {
+                const bytes = await store.readBlob(version.hash, version.format ?? 'png');
+                ocr = bytes
+                  ? await ocrAdapter.recognize({
+                      bytes, mime: version.format === 'jpg' ? 'image/jpeg' : `image/${version.format ?? 'png'}` })
+                  : { status: 'error', reason: 'FILE_MISSING' };
+              } catch (error) {
+                ocr = { status: 'error', reason: error?.message ?? 'OCR_CALL_FAILED' };
+              }
+            } else {
+              ocr = { status: 'error', reason: 'BUDGET_LIMIT' };
+            }
+          }
+          const drafts = evaluateSkuChecks({
+            run, version, dependencyRecord, skuProfile: profile, truth,
+            project, assetsById, textLayers, ocr,
+            priorIssues: existingIssues.filter(item => item.version_id === version.id),
+          });
+          const fresh = new Map(drafts.map(draft => [draft.fingerprint, draft]));
+          const ofVersion = existingIssues.filter(item => item.version_id === version.id);
+          for (const old of ofVersion.filter(item => item.status === 'open' && !fresh.has(item.fingerprint))) {
+            const clearable = old.severity === 'review' || old.layer === 'structure';
+            if (!clearable) continue;
+            old.status = 'resolved';
+            old.resolution = {
+              action: AUTO_CLEAR_ACTION, actor: ctx.actorId, at: timestamp,
+              reason: '再次核对时该问题的条件已不存在（档案/事实已修正）',
+              version_id: old.version_id,
+              truth_version: truth?.version ?? null,
+              sku_profile_version: profile?.version ?? null,
+            };
+            autoCleared += 1;
+          }
+          for (const [fingerprint, draft] of fresh) {
+            if (ofVersion.some(item => item.fingerprint === fingerprint)) continue;
+            const id = newId('chk');
+            const record = {
+              id, fingerprint,
+              tenant_id: ctx.tenantId, project_id: project.id,
+              run_id: run.id, deliverable_id: deliverable.deliverable_id, version_id: version.id,
+              layer: draft.layer, code: draft.code, severity: draft.severity,
+              message: draft.message, evidence: draft.evidence,
+              truth_version: truth?.version ?? null,
+              sku_profile_version: profile?.version ?? null,
+              status: 'open', resolution: null,
+              created_by: ctx.actorId, created_at: timestamp,
+            };
+            data.check_issues[id] = record;
+            existingIssues.push(record);
+            created += 1;
+          }
+        }
+      }
+      return { checked, created, auto_cleared: autoCleared, ocr_configured: ocrConfigured };
+    });
+    const listed = await readSkuChecks(ctx, projectId);
+    send(200, { ...outcome, ...listed });
+  }
+
+  /** 项目核对问题查询：补展示辅助（交付物名、版本号、是否当前选用），按层分组计数。 */
+  async function readSkuChecks(ctx, projectId) {
+    return store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const runsById = new Map(Object.values(data.runs ?? {})
+        .filter(run => run.tenant_id === ctx.tenantId && run.project_id === project.id)
+        .map(run => [run.id, run]));
+      const issues = Object.values(data.check_issues ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === project.id)
+        .sort((left, right) => String(right.created_at ?? '').localeCompare(String(left.created_at ?? '')))
+        .map(item => {
+          const run = runsById.get(item.run_id) ?? null;
+          const target = run?.deliverables?.find(d => d.deliverable_id === item.deliverable_id) ?? null;
+          const version = run?.versions?.find(v => v.id === item.version_id) ?? null;
+          return presentCheckIssue({
+            ...item,
+            deliverable_label: target?.label ?? item.deliverable_id,
+            version_number: version?.number ?? null,
+            version_active: version ? target?.active_version_id === version.id : null,
+          });
+        });
+      const summary = Object.fromEntries(CHECK_LAYERS.map(layer => [layer, {
+        open: issues.filter(item => item.layer === layer && item.status === 'open').length,
+        blocker: issues.filter(item => item.layer === layer && item.status === 'open' && item.severity === 'blocker').length,
+      }]));
+      return { project_id: project.id, issues, summary };
+    });
+  }
+
+  async function listSkuChecks(ctx, projectId, send) {
+    send(200, await readSkuChecks(ctx, projectId));
+  }
+
+  async function getCheckIssue(ctx, issueId, send) {
+    const found = await store.read(data => {
+      const issue = data.check_issues?.[issueId] ?? null;
+      if (!issue || issue.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '核对问题不存在');
+      return presentCheckIssue(issue);
+    });
+    send(200, { issue: found });
+  }
+
+  /**
+   * 人工复核/更正归属：依据必填；blocker 不能用「确认无误」放行（满意不覆盖硬错误）；
+   * 更正归属（reassign）仅限归属层，目标 SKU 必须在当前档案内，并在依赖记录留 manual 痕迹。
+   */
+  async function resolveCheckIssue(ctx, req, issueId, send) {
+    const body = await readJson(req);
+    const outcome = await store.mutate(data => {
+      const issue = data.check_issues?.[issueId] ?? null;
+      if (!issue || issue.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '核对问题不存在');
+      const project = data.projects?.[issue.project_id] ?? null;
+      if (!project) throw new ApiError(404, 'NOT_FOUND', '核对问题所属项目不存在');
+      const profile = headSkuProfileOf(data, project);
+      const input = validateResolveInput(body, issue, profile);
+      const timestamp = now();
+      issue.status = 'resolved';
+      issue.resolution = {
+        action: input.action, actor: ctx.actorId, reason: input.reason, at: timestamp,
+        version_id: issue.version_id,
+        truth_version: issue.truth_version ?? null,
+        sku_profile_version: profile?.version ?? null,
+        target_sku_id: input.target_sku_id ?? null,
+      };
+      if (input.action === 'reassign') {
+        // 可追溯：在依赖记录并入 manual sku 条目；deterministic 条目不删不动
+        const entry = {
+          kind: 'sku', ref: input.target_sku_id, evidence: 'manual',
+          note: `E04 归属更正（原问题 ${issue.code}）`, reason: input.reason,
+          actor: ctx.actorId, at: timestamp,
+        };
+        const record = Object.values(data.image_dependencies ?? {}).find(item =>
+          item.run_id === issue.run_id && item.deliverable_id === issue.deliverable_id
+          && item.version_id === issue.version_id) ?? null;
+        if (record) {
+          record.entries = mergeManualEntries(record.entries, [entry]);
+        } else {
+          const id = newId('dep');
+          data.image_dependencies[id] = {
+            id, tenant_id: ctx.tenantId, project_id: issue.project_id,
+            run_id: issue.run_id, deliverable_id: issue.deliverable_id, version_id: issue.version_id,
+            entries: [entry], status: 'active', created_by: ctx.actorId, created_at: timestamp,
+          };
+        }
+      }
+      return issue;
+    });
+    send(200, { issue: presentCheckIssue(outcome) });
+  }
+
+  // ---------- E04：按 SKU 导出 ----------
+
+  async function createSkuExportRoute(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const skuId = typeof body?.sku_id === 'string' ? body.sku_id.trim() : '';
+    if (!skuId) throw new ApiError(422, 'INVALID_FIELD', 'sku_id 必填：按 SKU 导出必须指明目标 SKU');
+    const result = await jobs.createSkuExport(ctx, projectId, { skuId });
+    send(201, result);
+  }
+
+  async function listSkuExportsRoute(ctx, projectId, send) {
+    const result = await jobs.listExports(ctx, { projectId });
+    send(200, { ...result, exports: result.exports.filter(item => item.kind === 'sku_export') });
   }
 
   // ---------- E02：图片版本依赖与导出渠道 ----------

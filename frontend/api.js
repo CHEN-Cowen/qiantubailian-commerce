@@ -259,4 +259,15 @@ export const api = {
   /** 只登记「商家确认已在各渠道手动替换旧图」，不代表平台已同步。 */
   confirmReplacementTodo: (todoId, body = {}) => call(
     `/api/replacement-todos/${encodeURIComponent(todoId)}/confirm`, { method: 'POST', json: body }),
+  // E04：SKU 防串图核对与按 SKU 导出
+  /** 发起一次三层核对（归属/结构/视觉候选）。返回 {checked, created, auto_cleared, issues, summary}。 */
+  runSkuChecks: projectId => call(
+    `/api/projects/${encodeURIComponent(projectId)}/sku-checks`, { method: 'POST', json: {} }),
+  listSkuChecks: projectId => call(`/api/projects/${encodeURIComponent(projectId)}/sku-checks`),
+  /** 人工复核：action=confirm（满意，不覆盖阻断）或 reassign（更正归属，需 target_sku_id）；reason 必填。 */
+  resolveCheckIssue: (issueId, body) => call(
+    `/api/check-issues/${encodeURIComponent(issueId)}/resolve`, { method: 'POST', json: body }),
+  createSkuExport: (projectId, body) => call(
+    `/api/projects/${encodeURIComponent(projectId)}/sku-exports`, { method: 'POST', json: body }),
+  listSkuExports: projectId => call(`/api/projects/${encodeURIComponent(projectId)}/sku-exports`),
 };

@@ -16,7 +16,7 @@ const ROLE_OPTIONS = [
 ];
 const ROLE_LABELS = Object.fromEntries(ROLE_OPTIONS.map(([value, label]) => [value, label]));
 
-const state = { toast: () => {}, projects: [], detail: null, regions: new Map(), pendingProjectId: null, skuEditing: null, change: null };
+const state = { toast: () => {}, projects: [], detail: null, regions: new Map(), pendingProjectId: null, skuEditing: null, change: null, check: null };
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -353,11 +353,15 @@ function renderTruth() {
     <section class="truth-section" id="change-section">
       ${renderChangeSection()}
     </section>
+    <section class="truth-section" id="check-section">
+      ${renderCheckSection()}
+    </section>
     <section class="truth-section">
       <h3>版本历史</h3>
       ${history ? `<ul class="truth-history">${history}</ul>` : '<p class="truth-empty">尚无事实版本。</p>'}
     </section>`;
   void loadChanges(project.id);
+  void loadSkuChecks(project.id);
 }
 
 // ---------- E01：SKU 档案板块 ----------
@@ -1274,12 +1278,237 @@ async function onChangeClick(action, trigger) {
   }
 }
 
+// ---------- E04：SKU 核对与按 SKU 导出 ----------
+
+const CHECK_LAYER_META = {
+  ownership: '归属核对',
+  structure: '结构核对',
+  visual: '视觉候选',
+};
+const CHECK_RESOLVE_LABEL = {
+  confirm: '确认无误',
+  reassign: '更正归属',
+  recheck_clear: '复核自动收口',
+};
+
+function emptyCheckState(projectId) {
+  return { projectId, loading: true, error: '', notice: '', issues: [], summary: {}, exports: [], running: false };
+}
+
+async function loadSkuChecks(projectId) {
+  if (!state.check || state.check.projectId !== projectId) state.check = emptyCheckState(projectId);
+  const area = state.check;
+  area.loading = true;
+  area.error = '';
+  rerenderCheckSection();
+  try {
+    const [checksRes, exportsRes] = await Promise.all([
+      api.listSkuChecks(projectId),
+      api.listSkuExports(projectId),
+    ]);
+    if (state.check !== area) return; // 已切换到其它项目，丢弃过期结果
+    area.issues = checksRes.issues ?? [];
+    area.summary = checksRes.summary ?? {};
+    area.exports = exportsRes.exports ?? [];
+    area.loading = false;
+  } catch (error) {
+    if (state.check !== area) return;
+    area.loading = false;
+    area.error = errorText(error);
+  }
+  rerenderCheckSection();
+}
+
+function rerenderCheckSection() {
+  const node = $('#check-section');
+  if (node) node.innerHTML = renderCheckSection();
+}
+
+function renderCheckSection() {
+  const area = state.check;
+  if (!area || area.projectId !== state.detail?.project?.id) {
+    return '<h3>SKU 核对与导出</h3><p class="truth-hint">正在读取核对结果…</p>';
+  }
+  const parts = ['<h3>SKU 核对与导出</h3>'];
+  parts.push('<p class="truth-hint">三层核对：归属（图是否属于对应 SKU）、结构（包含物数量/规格与档案是否一致）、视觉（OCR 候选，仅作提示不作硬结论）。阻断级问题不能用「满意」覆盖；人工复核绑定版本，新版本需重新核对。</p>');
+  if (area.error) parts.push(`<p class="truth-error" role="alert">${escapeHtml(area.error)}</p>`);
+  if (area.notice) parts.push(`<p class="truth-hint chg-notice">${escapeHtml(area.notice)}</p>`);
+  if (area.loading) {
+    parts.push('<div class="loading-line"></div>');
+    return parts.join('');
+  }
+  const summaryLine = Object.entries(CHECK_LAYER_META).map(([layer, label]) => {
+    const stat = area.summary?.[layer] ?? { open: 0, blocker: 0 };
+    const tone = stat.blocker > 0 ? 'bad' : (stat.open > 0 ? 'amber' : 'ok');
+    return `<span class="wb-status ${tone}">${label}：未处理 ${stat.open}${stat.blocker > 0 ? `（阻断 ${stat.blocker}）` : ''}</span>`;
+  }).join('');
+  parts.push(`<div class="skc-summary">${summaryLine}</div>`);
+  parts.push(`<div class="truth-actions">
+    <button type="button" class="text-button" data-action="skc-run"${area.running ? ' disabled' : ''}>${area.running ? '核对中…' : '发起三层核对'}</button>
+    <button type="button" class="text-button" data-action="skc-refresh">刷新</button>
+  </div>`);
+  parts.push(renderCheckIssues(area));
+  parts.push(renderCheckExports(area));
+  return parts.join('');
+}
+
+function skcEvidenceLine(evidence) {
+  const entries = Object.entries(evidence ?? {});
+  if (entries.length === 0) return '';
+  return entries.map(([key, value]) =>
+    `${escapeHtml(key)}：${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : String(value))}`).join('；');
+}
+
+function renderCheckIssues(area) {
+  if (area.issues.length === 0) {
+    return '<p class="truth-empty">尚无核对问题。生成图片后点击「发起三层核对」。</p>';
+  }
+  const skus = state.detail?.skuData?.profile?.skus ?? [];
+  const rows = area.issues.map(issue => {
+    const open = issue.status === 'open';
+    const blocker = issue.severity === 'blocker';
+    const versionText = issue.version_number
+      ? `版本 v${issue.version_number}${issue.version_active === true ? '（当前选用）' : issue.version_active === false ? '（历史版本）' : ''}`
+      : '版本未知';
+    const head = `<div class="skc-issue-head">
+      <span class="wb-status ${open ? (blocker ? 'bad' : 'amber') : 'ok'}">${open ? (blocker ? '阻断' : '待复核') : '已收口'}</span>
+      <span class="wb-status neutral">${escapeHtml(CHECK_LAYER_META[issue.layer] ?? issue.layer)}</span>
+      <b>${escapeHtml(issue.code)}</b>
+      <span class="chg-meta">${escapeHtml(issue.deliverable_label ?? issue.deliverable_id)} · ${escapeHtml(versionText)} · ${escapeHtml(formatTime(issue.created_at))}</span>
+    </div>`;
+    const evidence = skcEvidenceLine(issue.evidence);
+    const detail = `<details class="skc-detail"><summary>图片与证据</summary>
+      <img class="skc-preview" src="${workVersionImageUrl(issue.run_id, issue.version_id)}" alt="问题版本图（服务端按结算状态加水印）" loading="lazy">
+      ${evidence ? `<p class="skc-evidence">${evidence}</p>` : ''}
+      <p class="chg-meta">事实 v${issue.truth_version ?? '—'} · 档案 v${issue.sku_profile_version ?? '—'}</p>
+    </details>`;
+    let body;
+    if (open) {
+      const actions = [`<input type="text" class="skc-reason" placeholder="依据/理由（必填，随复核记录留存）" maxlength="300">`];
+      if (issue.layer === 'ownership' && skus.length > 0) {
+        actions.push(`<select class="skc-target">${skus.map(sku =>
+          `<option value="${escapeHtml(sku.id)}">${escapeHtml(sku.sku_code)} ${escapeHtml(sku.label)}</option>`).join('')}</select>`);
+        actions.push(`<button type="button" class="text-button" data-action="skc-reassign" data-issue-id="${escapeHtml(issue.id)}">更正归属</button>`);
+      }
+      actions.push(blocker
+        ? `<button type="button" class="text-button" data-action="skc-confirm" data-issue-id="${escapeHtml(issue.id)}">确认无误（阻断项不可用）</button>`
+        : `<button type="button" class="text-button" data-action="skc-confirm" data-issue-id="${escapeHtml(issue.id)}">确认无误</button>`);
+      actions.push(`<button type="button" class="text-button" data-action="skc-open-workbench" data-run-id="${escapeHtml(issue.run_id)}">改文字 / 重做</button>`);
+      body = `<p class="skc-message">${escapeHtml(issue.message)}</p>${detail}
+        <div class="skc-form">${actions.join('')}</div>
+        ${blocker ? '<p class="truth-hint">阻断级问题：满意不能覆盖确定错误。可更正归属（有依据）、修正档案/事实后重新核对自动收口，或生成新版本。</p>' : ''}`;
+    } else {
+      const resolution = issue.resolution ?? {};
+      body = `<p class="skc-message">${escapeHtml(issue.message)}</p>${detail}
+        <p class="chg-meta">收口：${escapeHtml(CHECK_RESOLVE_LABEL[resolution.action] ?? resolution.action ?? '—')} · ${escapeHtml(resolution.actor ?? '')} · ${escapeHtml(formatTime(resolution.at))}${resolution.reason ? ` · 依据：${escapeHtml(resolution.reason)}` : ''}</p>`;
+    }
+    return `<li class="chg-item skc-issue" data-issue-id="${escapeHtml(issue.id)}">${head}${body}</li>`;
+  }).join('');
+  return `<ul class="chg-items skc-list">${rows}</ul>`;
+}
+
+function renderCheckExports(area) {
+  const skus = state.detail?.skuData?.profile?.skus ?? [];
+  const parts = ['<div class="skc-exports"><h4>按 SKU 导出</h4>'];
+  if (skus.length === 0) {
+    parts.push('<p class="truth-hint">尚未建立 SKU 档案：先在上方「SKU 档案」建档并确认后，才能按 SKU 组织交付目录。</p>');
+  } else {
+    parts.push(`<div class="skc-form">
+      <select id="skc-sku">${skus.map(sku => `<option value="${escapeHtml(sku.id)}">${escapeHtml(sku.sku_code)} ${escapeHtml(sku.label)}</option>`).join('')}</select>
+      <button type="button" class="text-button" data-action="skc-export">生成该 SKU 导出包</button>
+    </div>
+    <p class="truth-hint">导出只含生效归属该 SKU、当前选用、检查通过且未失效、权益已结算的版本；归属其他 SKU 的图不会混入，被排除的版本在包内清单逐项列明原因。</p>`);
+  }
+  if (area.exports.length > 0) {
+    parts.push(`<ul class="chg-list">${area.exports.map(item => {
+      const excluded = Array.isArray(item.missing) ? item.missing : [];
+      return `<li class="chg-row">
+        <span class="wb-status ${item.complete ? 'ok' : 'amber'}">${item.complete ? '完整' : '部分'}</span>
+        <span class="chg-meta">SKU ${escapeHtml(item.sku_code ?? '')} · 含 ${item.included?.length ?? 0} 项 · 排除 ${excluded.length} 项 · ${escapeHtml(formatTime(item.created_at))}</span>
+        <a class="text-button" href="${api.downloadExportUrl(item.id)}" download>下载</a>
+        ${excluded.length > 0 ? `<details class="skc-detail"><summary>排除清单（${excluded.length}）</summary><ul class="chg-diff">${excluded.map(row =>
+          `<li>${escapeHtml(row.deliverable_label ?? row.deliverable_id)}：${escapeHtml(row.reason)} — ${escapeHtml(row.message ?? '')}</li>`).join('')}</ul></details>` : ''}
+      </li>`;
+    }).join('')}</ul>`);
+  }
+  parts.push('</div>');
+  return parts.join('');
+}
+
+async function onCheckClick(action, trigger) {
+  const project = state.detail?.project;
+  if (!project) return;
+  if (!state.check || state.check.projectId !== project.id) state.check = emptyCheckState(project.id);
+  const area = state.check;
+  if (action === 'skc-refresh') { await loadSkuChecks(project.id); return; }
+  if (action === 'skc-run') {
+    area.running = true;
+    area.error = '';
+    area.notice = '';
+    rerenderCheckSection();
+    try {
+      const result = await api.runSkuChecks(project.id);
+      if (state.check !== area) return;
+      area.issues = result.issues ?? [];
+      area.summary = result.summary ?? {};
+      area.notice = `核对完成：检查 ${result.checked ?? 0} 个版本，新开 ${result.created ?? 0} 项，自动收口 ${result.auto_cleared ?? 0} 项${result.ocr_configured ? '' : '；未配置视觉核对（OCR），视觉项保持未知，不作为通过依据'}`;
+    } catch (error) {
+      if (state.check === area) area.error = errorText(error);
+    }
+    if (state.check !== area) return;
+    area.running = false;
+    rerenderCheckSection();
+    return;
+  }
+  if (action === 'skc-confirm' || action === 'skc-reassign') {
+    const row = trigger.closest('.skc-issue');
+    const reason = row?.querySelector('.skc-reason')?.value.trim() ?? '';
+    const body = { action: action === 'skc-confirm' ? 'confirm' : 'reassign', reason };
+    if (action === 'skc-reassign') body.target_sku_id = row?.querySelector('.skc-target')?.value ?? '';
+    area.error = '';
+    try {
+      await api.resolveCheckIssue(trigger.dataset.issueId, body);
+      state.toast(action === 'skc-confirm' ? '已确认无误（仅对该版本生效）' : '已更正归属并留痕');
+      await loadSkuChecks(project.id);
+    } catch (error) {
+      if (state.check !== area) return;
+      area.error = errorText(error); // 如实展示 ISSUE_HARD_BLOCK / ISSUE_ALREADY_RESOLVED / REASSIGN_NOT_APPLICABLE 等
+      rerenderCheckSection();
+    }
+    return;
+  }
+  if (action === 'skc-export') {
+    const skuId = $('#skc-sku')?.value ?? '';
+    trigger.disabled = true;
+    area.error = '';
+    try {
+      const payload = await api.createSkuExport(project.id, { sku_id: skuId });
+      state.toast(payload.export?.message ?? 'SKU 导出包已生成');
+      await loadSkuChecks(project.id);
+    } catch (error) {
+      if (state.check !== area) return;
+      area.error = errorText(error); // 如实展示 SKU_EXPORT_EMPTY / ENTITLEMENT_NOT_SETTLED / NO_SKU_PROFILE 等
+      rerenderCheckSection();
+    } finally {
+      trigger.disabled = false;
+    }
+    return;
+  }
+  if (action === 'skc-open-workbench') {
+    window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: project.id, runId: trigger.dataset.runId } }));
+  }
+}
+
 function onTruthClick(event) {
   const trigger = event.target.closest('[data-action]');
   if (!trigger) return;
   const action = trigger.dataset.action;
   if (action.startsWith('chg-')) {
     void onChangeClick(action, trigger);
+    return;
+  }
+  if (action.startsWith('skc-')) {
+    void onCheckClick(action, trigger);
     return;
   }
   if (action.startsWith('sku-')) {
