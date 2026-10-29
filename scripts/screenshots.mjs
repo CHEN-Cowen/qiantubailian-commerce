@@ -19,11 +19,10 @@ import { createFixtureProvider } from './fixture-provider.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SHOTS = path.join(ROOT, 'docs', 'experience-optimization', 'screenshots');
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe';
-const DEBUG_PORT = 9337;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 class Cdp {
-  constructor(socket) { this.socket = socket; this.id = 0; this.pending = new Map(); }
+  constructor(socket) { this.socket = socket; this.id = 0; this.pending = new Map(); this.onEvent = null; }
   static async connect(url) {
     const socket = new WebSocket(url);
     await new Promise((resolve, reject) => {
@@ -33,6 +32,7 @@ class Cdp {
     const client = new Cdp(socket);
     socket.addEventListener('message', event => {
       const message = JSON.parse(event.data);
+      if (message.method && client.onEvent) { client.onEvent(message); return; }
       const pending = message.id && client.pending.get(message.id);
       if (!pending) return;
       client.pending.delete(message.id);
@@ -52,27 +52,46 @@ class Cdp {
   close() { this.socket.close(); }
 }
 
+/**
+ * 每次用全新的临时 profile 和空闲调试端口。
+ * 固定 profile 时，上一次异常退出残留的 Chrome 会占住端口与单例锁，
+ * 新进程把调试请求交接给旧浏览器，后续 Page.navigate 会挂起（曾出现 CDP 超时）。
+ */
 async function launchChrome() {
-  const profile = path.join(ROOT, 'runtime', 'chrome-profile-07');
-  await mkdir(profile, { recursive: true });
+  const profile = await mkdtemp(path.join(ROOT, 'runtime', 'chrome-07-'));
+  const port = await findDebugPort(9400);
   const chrome = spawn(CHROME, [
-    '--headless=new', `--remote-debugging-port=${DEBUG_PORT}`, `--user-data-dir=${profile}`,
+    '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--disable-extensions',
     '--disable-background-networking', '--hide-scrollbars', '--force-device-scale-factor=1',
+    // 无 GPU 时合成器容易卡住，截图会停在旧帧（曾出现多张截图 sha256 相同）
+    '--disable-gpu', '--disable-dev-shm-usage',
     '--window-size=1440,1080', 'about:blank',
   ], { stdio: 'ignore' });
   const exited = new Promise(resolve => chrome.once('exit', resolve));
   let target = null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     try {
-      const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
       target = list.find(item => item.type === 'page');
       if (target?.webSocketDebuggerUrl) break;
     } catch { /* 等待调试端口 */ }
     await sleep(250);
   }
   if (!target) { chrome.kill(); throw new Error('Chrome 未在 20 秒内提供页面调试目标'); }
-  return { chrome, exited, target };
+  return { chrome, exited, target, profile };
+}
+
+/** 找一个没有服务监听的本地端口，避免接上残留浏览器。 */
+async function findDebugPort(start) {
+  for (let port = start; port < start + 40; port += 1) {
+    try {
+      await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(300) });
+    } catch {
+      return port;
+    }
+  }
+  throw new Error('找不到可用的 Chrome 调试端口');
 }
 
 function createClient(base) {
@@ -133,6 +152,35 @@ async function subjectPng() {
     .png().toBuffer();
 }
 
+/** 两个 SKU 档案：ACC-01 标准装 / ACC-02 双支装（含包含物，供核对与说明图截图）。 */
+function skuPayload() {
+  return {
+    confirm: true,
+    skus: [
+      {
+        sku_code: 'ACC-01', label: '标准装', confirmed: true,
+        attributes: [{ key: '容量', value: '50', unit: 'g' }, { key: '核心卖点', value: '舒缓维稳' }],
+        contents: [{ item: '瓶装', quantity: 1, unit: '瓶', included: true, source: 'user_input' }],
+      },
+      {
+        sku_code: 'ACC-02', label: '双支装', confirmed: true,
+        attributes: [{ key: '容量', value: '100', unit: 'g' }],
+        contents: [{ item: '瓶装', quantity: 2, unit: '瓶', included: true, source: 'user_input' }],
+      },
+    ],
+  };
+}
+
+/** 变更单的视觉核对：与前端一致，逐项留依据。 */
+async function passVisualChecks(request, change) {
+  for (const item of change.impact_items.filter(entry => entry.status === 'done' && entry.visual_check === 'required')) {
+    const checked = await request(`/api/changes/${change.id}/items/${item.id}/visual-check`, {
+      method: 'POST', body: { reason: '界面截图预置：已核对画面与更新后事实一致' },
+    });
+    if (checked.status !== 200) throw new Error(`视觉核对失败：${JSON.stringify(checked.json)}`);
+  }
+}
+
 /** 预置一个完整商品项目：3 张成品、一次文字修改与版本历史。 */
 async function seed(request) {
   const email = `shots-${Date.now()}@example.test`;
@@ -152,6 +200,11 @@ async function seed(request) {
     method: 'POST', body: await subjectPng(), headers: { 'Content-Type': 'image/png' },
   });
   if (uploaded.status !== 201) throw new Error(`素材上传失败：${JSON.stringify(uploaded.json)}`);
+  const profile = await request(`/api/projects/${project.id}/skus`, {
+    method: 'PUT', body: { base_version: 0, ...skuPayload() },
+  });
+  if (profile.status !== 201) throw new Error(`SKU 档案失败：${JSON.stringify(profile.json)}`);
+  const skuIds = Object.fromEntries(profile.json.sku_profile.skus.map(item => [item.sku_code, item.id]));
   const truth = await request(`/api/projects/${project.id}/truth-versions`, {
     method: 'POST',
     body: {
@@ -203,6 +256,56 @@ async function seed(request) {
       await request(`/api/runs/${run.id}/versions/${edited.json.version.id}/activate`, { method: 'POST' });
     }
   }
+
+  // E02 人工依赖：给卖点图补一条人工关联，依赖面板同时展示系统编译与人工条目的区别
+  const currentVersions = (await request(`/api/runs/${run.id}/versions`)).json.versions;
+  const benefitCurrent = currentVersions.find(item => item.current && item.deliverable_id === 'benefit');
+  await request(`/api/runs/${run.id}/deliverables/benefit/dependencies`, {
+    method: 'POST',
+    body: { version_id: benefitCurrent.id, reason: '截图预置：商家确认卖点图与适用肤质有关', entries: [{ kind: 'fact', ref: '适用肤质' }] },
+  });
+
+  // 先导出一次，供变更后生成替换待办
+  const exported = await request(`/api/runs/${run.id}/exports`, { method: 'POST', body: { scope: 'complete' } });
+  if (exported.status !== 201) throw new Error(`导出失败：${JSON.stringify(exported.json)}`);
+
+  // E05 售前问题：数量类 → 需要包装清单图；确认后进入已采用
+  const question = await request(`/api/projects/${project.id}/questions/analyze`, {
+    method: 'POST', headers: { 'Idempotency-Key': 'shots-question' },
+    body: { text: '收到之后有几个，配件包含哪些', sku_id: skuIds['ACC-01'] },
+  });
+  if (question.status !== 201) throw new Error(`问题分析失败：${JSON.stringify(question.json)}`);
+  await request(`/api/question-groups/${question.json.group.id}/review`, { method: 'POST', body: { action: 'confirm' } });
+
+  // E04 SKU 核对：未配置 OCR → 视觉未知待复核
+  await request(`/api/projects/${project.id}/sku-checks`, { method: 'POST', body: {} });
+
+  // E03 商品变更：只改文字，确定性重排免费；完成后旧导出生成替换待办
+  const newFacts = [
+    { key: '容量', value: '50g', critical: true, confirmed: true, source_type: 'user_input' },
+    { key: '核心卖点', value: '舒缓维稳 持久水润', critical: false, confirmed: true, source_type: 'user_input' },
+    { key: '适用肤质', value: '干敏肌', critical: false, confirmed: true, source_type: 'user_input' },
+  ];
+  const change = await request(`/api/projects/${project.id}/changes`, {
+    method: 'POST', headers: { 'Idempotency-Key': 'shots-change' },
+    body: { base_truth_version: 1, facts: newFacts, critical_text: [{ text: '月光舒缓' }] },
+  });
+  if (change.status !== 201) throw new Error(`变更确认失败：${JSON.stringify(change.json)}`);
+  const executed = await request(`/api/changes/${change.json.change.id}/execute`, { method: 'POST', body: {} });
+  if (executed.status !== 200) throw new Error(`变更执行失败：${JSON.stringify(executed.json)}`);
+  await passVisualChecks(request, executed.json.change);
+
+  // E06 说明图：在事实更新之后创建，避免一生成就过期；复核后即 active
+  const explainer = await request(`/api/projects/${project.id}/explainers`, {
+    method: 'POST', headers: { 'Idempotency-Key': 'shots-explainer' },
+    body: { kind: 'packing_list', sku_id: skuIds['ACC-01'] },
+  });
+  if (explainer.status !== 201) throw new Error(`说明图失败：${JSON.stringify(explainer.json)}`);
+  const reviewedExplainer = await request(`/api/explainers/${explainer.json.explainer.id}/review`, {
+    method: 'POST', body: { action: 'confirm', reason: '截图预置：逐项核对数量与单位一致' },
+  });
+  if (reviewedExplainer.status !== 200) throw new Error(`说明图复核失败：${JSON.stringify(reviewedExplainer.json)}`);
+
   return { projectId: project.id, runId: run.id };
 }
 
@@ -226,15 +329,43 @@ async function main() {
     cdp = await Cdp.connect(chromeHandle.target.webSocketDebuggerUrl);
     await cdp.send('Page.enable');
     await cdp.send('Network.enable');
+    await cdp.send('Runtime.enable');
+    cdp.onEvent = message => {
+      if (message.method === 'Runtime.exceptionThrown') {
+        console.log('页面异常', message.params.exceptionDetails?.exception?.description?.slice(0, 600));
+      }
+    };
     const [name, value] = session.split('=');
     await cdp.send('Network.setCookie', { name, value, url: base, path: '/', httpOnly: true, sameSite: 'Lax' });
 
-    // 同一 #hash 的导航不会触发重载，先回空白页强制整页重开，截图状态才干净
+    // 同一 #hash 的导航不会触发重载，先回空白页强制整页重开，截图状态才干净。
+    // headless 偶发 Page.navigate 卡住（渲染进程忙于上一张截图），这里重试并中止加载。
     const navigate = async target => {
-      await cdp.send('Page.navigate', { url: 'about:blank' });
-      await sleep(200);
-      await cdp.send('Page.navigate', { url: target });
-      await sleep(600);
+      let lastError = null;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          await cdp.send('Page.navigate', { url: 'about:blank' });
+          await sleep(200);
+          await cdp.send('Page.navigate', { url: target });
+          // 模块脚本执行完才会绑定点击事件与渲染；只 sleep 会在负载高时点到空节点，
+          // 截出与上一张完全相同（甚至没打开弹窗）的旧画面。
+          for (let attempt = 0; attempt < 150; attempt += 1) {
+            await sleep(100);
+            const ready = await cdp.send('Runtime.evaluate', {
+              expression: 'document.readyState === "complete"', returnByValue: true,
+            });
+            if (ready.result.value) break;
+          }
+          await sleep(400);
+          return;
+        } catch (error) {
+          lastError = error;
+          console.log(`导航重试 ${attempt + 1}：${target}`);
+          try { await cdp.send('Page.stopLoading'); } catch { /* 连接已断时忽略 */ }
+          await sleep(500);
+        }
+      }
+      throw new Error(`导航失败：${target}（${lastError.message}）`);
     };
 
     const shoot = async (file, { view, mobile = false, script, settle = 1_400 }) => {
@@ -245,6 +376,11 @@ async function main() {
       await navigate(`${base}/#${view}`);
       if (script) await cdp.send('Runtime.evaluate', { expression: script, awaitPromise: true });
       await sleep(settle);
+      // 等两帧再截，避免合成器还没提交新画面（会出现整张图与上一张完全相同）
+      await cdp.send('Runtime.evaluate', {
+        expression: 'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+        awaitPromise: true,
+      });
       const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
       const bytes = Buffer.from(shot.data, 'base64');
       await writeFile(path.join(SHOTS, file), bytes);
@@ -279,6 +415,63 @@ async function main() {
     await writeFile(path.join(SHOTS, '07-workbench-text-edit.png'), Buffer.from(editShot.data, 'base64'));
     console.log('已截图 07-workbench-text-edit.png');
 
+    // E03—E07：商品事实弹窗的检查与更新分区（真实点击导航，非静态拼接）
+    // 说明图区块是异步加载的：必须等它渲染完再定位，否则跳转落在"正在读取"的短内容上，
+    // 四张分区截图会停在同一个最大滚动位置（曾出现 13/14 像素完全一致）。
+    const truthScript = section => `(async () => {
+      const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+      // 商品卡片来自异步列表请求，先等真实按钮出现再点，避免空点
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        await wait(100);
+        if (document.querySelector('[data-action="truth"]')) break;
+      }
+      document.querySelector('[data-action="truth"]')?.click();
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await wait(100);
+        const area = document.querySelector('#explainer-section');
+        if (area && area.querySelector('.ex-form') && !area.querySelector('.loading-line')) break;
+      }
+      await wait(300);
+      const target = document.getElementById('${section}');
+      target?.scrollIntoView({ behavior: 'auto', block: 'start' });
+      await wait(400);
+      target?.scrollIntoView({ behavior: 'auto', block: 'start' });
+    })()`;
+    await shoot('11-truth-change.png', { view: 'home', script: truthScript('change-section'), settle: 2_000 });
+    await shoot('12-truth-sku-check.png', { view: 'home', script: truthScript('check-section'), settle: 2_000 });
+    await shoot('13-truth-question.png', { view: 'home', script: truthScript('question-section'), settle: 2_000 });
+    await shoot('14-truth-explainer.png', { view: 'home', script: truthScript('explainer-section'), settle: 2_000 });
+    // E02/E07：作品依赖面板（系统编译 + 人工关联）
+    await shoot('15-workbench-dependencies.png', {
+      view: 'home', settle: 2_000,
+      script: `(async () => {
+        window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: '${seeded.projectId}' } }));
+        await new Promise(resolve => setTimeout(resolve, 1600));
+        document.querySelector('[data-deliverable-id="benefit"]')?.click();
+        await new Promise(resolve => setTimeout(resolve, 1600));
+        document.querySelector('#wb-dep-body')?.scrollIntoView({ block: 'start' });
+      })()`,
+    });
+    // 手机：首页待办与说明图主路径
+    await shoot('16-home-mobile.png', {
+      view: 'home', mobile: true, settle: 1_400,
+      script: `(async () => {
+        const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          await wait(100);
+          if (document.querySelector('#home-todos .todo-group')) break;
+        }
+        await wait(400);
+        const node = document.getElementById('home-todos');
+        if (node) {
+          // 顶部有吸顶导航，留出高度，避免分组标题被遮住
+          window.scrollTo(0, node.getBoundingClientRect().top + window.scrollY - 70);
+          await wait(300);
+          window.scrollTo(0, node.getBoundingClientRect().top + window.scrollY - 70);
+        }
+      })()`,
+    });
+    await shoot('17-truth-explainer-mobile.png', { view: 'home', mobile: true, script: truthScript('explainer-section'), settle: 2_200 });
     await shoot('08-home-mobile.png', { view: 'home', mobile: true });
     await shoot('09-workbench-mobile.png', { view: 'home', mobile: true, settle: 2_000, script: `window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: '${seeded.projectId}' } }))` });
 
@@ -297,6 +490,7 @@ async function main() {
     if (chromeHandle) {
       chromeHandle.chrome.kill('SIGKILL');
       await Promise.race([chromeHandle.exited, sleep(2_000)]);
+      await rm(chromeHandle.profile, { recursive: true, force: true }).catch(() => {});
     }
     try { await app.close(); } catch { /* 忽略关闭异常 */ }
     try { await rm(storeDir, { recursive: true, force: true }); } catch { /* Windows 占用时忽略 */ }

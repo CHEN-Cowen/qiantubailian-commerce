@@ -511,6 +511,10 @@ test('E06 说明图：项目页区块、api 端点方法、三种图种与诚实
     assert.match(realData, new RegExp(`data-action="${action}"`), `缺少操作入口 ${action}`);
   }
   assert.match(realData, /randomUUID/, '创建说明图的幂等键由 crypto 生成');
+  // 图种枚举已 map+join 成字符串，模板里再调 .join 会抛 TypeError，
+  // 导致整个说明图区块退化为「正在读取说明图…」（真实浏览器验收时发现）。
+  assert.match(realData, /\$\{kindOptions\}/, '图种选项应直接插入已拼接好的字符串');
+  assert.doesNotMatch(realData, /kindOptions\.join\(/, 'kindOptions 已是字符串，不能再调用 join');
   // 诚实文案：确定性排版免费、不推测、底图权益、复核依据、替换需手工、反馈不换算收益
   assert.match(realData, /排版免费/);
   assert.match(realData, /不调用生图模型/);

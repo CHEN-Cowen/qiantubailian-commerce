@@ -2025,7 +2025,7 @@ function renderExplainerForm(area) {
   const baseOptions = ['<option value="none">不带底图（纯排版）</option>']
     .concat(assets.map(asset => `<option value="asset:${escapeHtml(asset.id)}"${baseValue === `asset:${asset.id}` ? ' selected' : ''}>底图：${escapeHtml(asset.filename)}（${ROLE_LABELS[asset.role] ?? asset.role}）</option>`));
   return `<div class="ex-form">
-    <select id="ex-kind" aria-label="说明图类型">${kindOptions.join('')}</select>
+    <select id="ex-kind" aria-label="说明图类型">${kindOptions}</select>
     <select id="ex-sku" aria-label="项目 SKU">${skuOptions.join('')}</select>
     ${draft.kind === 'sku_compare' ? `<select id="ex-peer" aria-label="对比 SKU">${peerOptions.join('')}</select>` : ''}
     <select id="ex-base" aria-label="底图">${baseOptions.join('')}</select>

@@ -350,3 +350,40 @@
 ### 提交与推送
 
 - 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。
+
+## 模块 E08：端到端验收、全量回归与交付
+
+### 目标
+
+按总提示词第 10 节 15 类场景做最终端到端验收：真实 HTTP、双租户、多 SKU、全链路生成/导出/变更/核对/问题/说明图/待办/重启/隔离；补充真实浏览器桌面与手机截图；执行全量回归；逐条标注已实现、已模拟验证与未验证边界。
+
+### 实际实现与产物
+
+1. 新增 `test/acceptance.js`（1 个测试、12 段）：两租户（甲店/乙店）、两 SKU（ACC-01 标准装 50g×1 / ACC-02 双支装 100g×2）、真实上传主体图、事实与品牌套件冻结、报价、建任务（幂等键）、发布 3 个版本、完整 ZIP 与按 SKU 导出；SKU 档案 v2 只改 ACC-02，断言 ACC-01 不变；纯文字变更报价 0、执行后余额不变、主图 `active_version` 不变、替换待办确认；未配置 OCR 时 `VISUAL_UNAVAILABLE` 保持未知，无依据确认 422、带依据确认绑定 `version_id`；物流问题归入 `out_of_scope/logistics` 且不出现「高频」；说明图创建/复核/内容哈希；`/api/todos` 四组键序与真实入口；同 storeDir 重启后项目、`head_version`、余额与待办摘要一致；乙方对全部对象与下载 404、待办 0、余额不变；`/api/provider/capabilities` 声明 `simulated` 与 `simulated_only`。
+2. 扩展 `scripts/screenshots.mjs`：预置两 SKU、人工依赖、旧导出、售前问题、说明图、SKU 核对与一次文字变更；新增 `11-truth-change`、`12-truth-sku-check`、`13-truth-question`、`14-truth-explainer`、`15-workbench-dependencies`、`16-home-mobile`、`17-truth-explainer-mobile` 七张真实 Chrome 截图；截图脚本逐张打印字节数与 SHA-256。
+3. `package.json`：`test` 纳入 `test/e07.js` 与 `test/acceptance.js`，并把测试进程并发限制为 4，避免 sharp 重负载下多个集成测试同时启动时的连接抖动；断言未放宽。
+4. 更新 `README.md`：补充 E01—E07 能力概览、验证命令（含 `npm run e2e`、`npm run screenshots`）与验收报告入口。
+5. 新增 `docs/commerce-content-extension/ACCEPTANCE-REPORT.md`：15 类场景逐条对应实际验证方式、外部服务未验证边界与本轮修复记录。
+
+### 本轮调试修复
+
+1. **说明图区块在真实浏览器整体不可用**：`renderExplainerForm` 中 `kindOptions` 已是 `map(...).join('')` 后的字符串，模板又调用 `${kindOptions.join('')}`，运行期抛 `TypeError`，弹窗内说明图始终停在「正在读取说明图…」。改为 `${kindOptions}`，并在 `test/ui-contract.js` 增加「直接插入 / 不得再 join」的回归断言。
+2. **截图内容重复或事件空点**：截图脚本在模块脚本执行完成前就点击商品卡片或派发 `qb:open-workbench`，负载高时点到空节点，截出与上一张相同的旧帧；固定 Chrome profile/调试端口还会接上残留实例。改为等待 `document.readyState=complete` 与真实按钮出现、截图前等两帧、每轮使用全新临时 profile 与空闲端口、导航失败重试，并加 `--disable-gpu`。修复后 17 张截图 SHA-256 全部不同。
+3. **全量并行下 4 项集成测试偶发 `fetch failed`**：E02/E03/E04/acceptance 在等待任务终态时连接被重置；四个文件串行重跑 24/24 通过，确认不是断言或业务回归。`npm test` 并发限制为 4 后全量 300 项稳定通过，未删除或弱化任何断言。
+
+### 测试证据（Node 22.22.2）
+
+- 全量 `npm test`：300 项，299 通过 / 0 失败 / 1 跳过（既有符号链接权限项），196 秒。
+- `node --test test/acceptance.js`：1/1 通过（约 15.5 秒）。
+- `node --test --test-concurrency=1 test/e02.js test/e03.js test/e04.js test/acceptance.js`：24/24 通过（隔离复测上述 4 项）。
+- `node scripts/e2e.mjs`：13 步全部通过（未登录 401、CSRF 403、幂等 400、3 张成品、文字免费、重生成 1 点、导出、跨租户 404、静态资源、Provider 能力声明）。
+- `node scripts/check.mjs`：89 个文件语法检查通过。
+- `node scripts/screenshots.mjs`：17 张真实 Chrome 截图，桌面与手机，逐张哈希不同。
+
+### 未验证 / 边界
+
+详见 [ACCEPTANCE-REPORT.md](ACCEPTANCE-REPORT.md) 第 4 节。要点：生图模型为 fixture、OCR/视觉评审未配置、微信支付为 mock、平台同步未实现、手机为 Chrome 设备模拟；场景 3/9 只做了自动化覆盖，未在真实浏览器内逐步点击完整链路；未做真实断网/弱网与真机测试。以上均不作为生产可用或平台成功结论。
+
+### 提交与推送
+
+- 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。
