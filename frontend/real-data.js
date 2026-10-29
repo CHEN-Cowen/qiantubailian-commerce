@@ -16,7 +16,7 @@ const ROLE_OPTIONS = [
 ];
 const ROLE_LABELS = Object.fromEntries(ROLE_OPTIONS.map(([value, label]) => [value, label]));
 
-const state = { toast: () => {}, projects: [], detail: null, regions: new Map(), pendingProjectId: null, skuEditing: null };
+const state = { toast: () => {}, projects: [], detail: null, regions: new Map(), pendingProjectId: null, skuEditing: null, change: null };
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -350,10 +350,14 @@ function renderTruth() {
     <section class="truth-section" id="sku-section">
       ${renderSkuSection()}
     </section>
+    <section class="truth-section" id="change-section">
+      ${renderChangeSection()}
+    </section>
     <section class="truth-section">
       <h3>版本历史</h3>
       ${history ? `<ul class="truth-history">${history}</ul>` : '<p class="truth-empty">尚无事实版本。</p>'}
     </section>`;
+  void loadChanges(project.id);
 }
 
 // ---------- E01：SKU 档案板块 ----------
@@ -567,10 +571,717 @@ async function onSkuClick(action, trigger) {
   rerenderSkuSection();
 }
 
+// ---------- E03：商品变更更新助手 ----------
+// 数据流：preview（不落库）→ confirm（Idempotency-Key + base_truth_version 乐观锁）→
+// 逐项执行（重合成免费/重生成按张计费需报价确认）→ 数量类人工视觉核对 →
+// 失败项重试 / 待补实拍登记素材续做 → 结果版本人工选用 → 导出 + 旧导出替换待办登记。
+// 所有状态都来自服务端变更单，前端不本地伪造进度。
+
+const CHANGE_STATUS_META = {
+  draft: ['草稿', 'neutral'],
+  confirmed: ['已确认待执行', 'blue'],
+  executing: ['执行中', 'blue'],
+  completed: ['已完成', 'ok'],
+  partial_failed: ['部分失败', 'red'],
+  awaiting_material: ['待补实拍素材', 'amber'],
+  awaiting_review: ['待人工核对', 'amber'],
+  cancelled: ['已取消', 'neutral'],
+};
+const CHANGE_ACTION_LABEL = {
+  text_recompose: '文字重合成（免费）',
+  regenerate: '重生成（按张计费）',
+  needs_new_photo: '需新实拍',
+  needs_review: '需人工核对',
+  skip: '跳过',
+};
+const CHANGE_ITEM_STATUS_META = {
+  pending: ['待处理', 'neutral'],
+  running: ['执行中', 'blue'],
+  done: ['已完成', 'ok'],
+  failed: ['失败', 'red'],
+  skipped: ['已跳过', 'neutral'],
+};
+const CHANGE_AWAITING_LABEL = { material: '待补实拍', review: '待人工核对', user: '商家已主动跳过' };
+const CHANGE_COUNT_LABELS = [
+  ['pending', '待处理'], ['running', '执行中'], ['done', '已完成'], ['failed', '失败'],
+  ['skipped', '已跳过'], ['pending_visual_checks', '待视觉核对'],
+  ['awaiting_material', '待补实拍'], ['awaiting_review', '待人工核对'],
+];
+const CHANGE_CANCELLABLE = ['confirmed', 'partial_failed', 'awaiting_material', 'awaiting_review', 'executing'];
+
+function emptyChangeState(projectId) {
+  return {
+    projectId, loading: true, error: '', notice: '',
+    changes: [], todos: [], draft: null, detailId: null, detail: null, quoteConfirm: null,
+  };
+}
+
+async function loadChanges(projectId) {
+  if (!state.change || state.change.projectId !== projectId) state.change = emptyChangeState(projectId);
+  const area = state.change;
+  area.loading = true;
+  area.error = '';
+  rerenderChangeSection();
+  try {
+    const [changesRes, todosRes] = await Promise.all([
+      api.listChanges(projectId),
+      api.listReplacementTodos({ projectId }),
+    ]);
+    if (state.change !== area) return; // 已切换到其它项目，丢弃过期结果
+    area.changes = changesRes.changes ?? [];
+    area.todos = todosRes.replacement_todos ?? [];
+    area.loading = false;
+    if (area.detailId) {
+      try {
+        const detail = await api.getChange(area.detailId);
+        if (state.change !== area) return;
+        area.detail = detail.change;
+      } catch (error) {
+        if (state.change !== area) return;
+        area.detail = null;
+        area.detailId = null;
+        area.error = errorText(error);
+      }
+    }
+  } catch (error) {
+    if (state.change !== area) return;
+    area.loading = false;
+    area.error = errorText(error);
+  }
+  rerenderChangeSection();
+}
+
+function rerenderChangeSection() {
+  const node = $('#change-section');
+  if (node) node.innerHTML = renderChangeSection();
+}
+
+function renderChangeSection() {
+  const area = state.change;
+  if (!area || area.projectId !== state.detail?.project?.id) {
+    return '<h3>商品变更</h3><p class="truth-hint">正在读取变更记录…</p>';
+  }
+  const parts = ['<h3>商品变更</h3>'];
+  parts.push('<p class="truth-hint">商品事实、素材或品牌有更新时，在这里计算差异并逐项更新已生成的图片；数量类变化与质检待复核的新版本必须人工核对后才算完成。</p>');
+  if (area.error) parts.push(`<p class="truth-error" role="alert">${escapeHtml(area.error)}</p>`);
+  if (area.notice) parts.push(`<p class="truth-hint chg-notice">${escapeHtml(area.notice)}</p>`);
+  if (area.loading) {
+    parts.push('<div class="loading-line"></div>');
+    return parts.join('');
+  }
+  parts.push(area.draft ? renderChangeDraft(area) : '<button type="button" class="text-button" data-action="chg-new">＋ 发起商品变更</button>');
+  parts.push(renderChangeDetail(area));
+  parts.push(renderChangeList(area));
+  parts.push(renderChangeTodos(area));
+  return parts.join('');
+}
+
+/** 变更单列表：整单状态由服务端 deriveChangeStatus 推导，如实展示，不把 awaiting 渲染成完成。 */
+function renderChangeList(area) {
+  if (area.changes.length === 0) return '<p class="truth-empty">尚无变更单。商品信息更新后可在这里发起变更。</p>';
+  return `<ul class="chg-list">${area.changes.map(change => {
+    const [label, tone] = CHANGE_STATUS_META[change.status] ?? [change.status, 'neutral'];
+    return `<li class="chg-row">
+      <span class="wb-status ${tone}">${escapeHtml(label)}</span>
+      <span class="chg-meta">事实 v${change.base_truth_version} → v${change.new_truth_version} · ${change.impact_items?.length ?? 0} 项 · ${escapeHtml(formatTime(change.created_at))}</span>
+      <button type="button" class="text-button" data-action="chg-open" data-change-id="${escapeHtml(change.id)}">${area.detailId === change.id ? '收起' : '查看 / 处理'}</button>
+    </li>`;
+  }).join('')}</ul>`;
+}
+
+/** 旧导出替换待办：只登记「商家已手动替换」，不暗示平台已同步。 */
+function renderChangeTodos(area) {
+  const note = '<p class="truth-hint">以下待办仅在商家确认已手动到各渠道替换旧图后登记，不代表平台已同步。</p>';
+  if (area.todos.length === 0) {
+    return `<div class="chg-todos"><h4>旧导出替换待办</h4>${note}<p class="truth-empty">当前没有待替换的旧导出。</p></div>`;
+  }
+  return `<div class="chg-todos"><h4>旧导出替换待办</h4>${note}<ul class="chg-list">${area.todos.map(todo => {
+    const done = todo.status === 'replaced';
+    return `<li class="chg-row">
+      <span class="wb-status ${done ? 'ok' : 'amber'}">${done ? '已确认替换' : '待替换'}</span>
+      <span class="chg-meta">导出 ${escapeHtml(String(todo.export_id).slice(0, 14))}…（渠道：${escapeHtml((todo.channel_labels ?? []).join('、') || '未标注')}） · ${escapeHtml(todo.deliverable_id)} · 旧版本 → 新版本 ${escapeHtml(String(todo.new_version_id).slice(0, 12))}…</span>
+      ${done
+        ? `<span class="chg-meta">${escapeHtml(todo.confirmed_by ?? '')} · ${escapeHtml(formatTime(todo.confirmed_at))}</span>`
+        : `<button type="button" class="text-button" data-action="chg-todo-confirm" data-todo-id="${escapeHtml(todo.id)}">确认已手动替换</button>`}
+    </li>`;
+  }).join('')}</ul></div>`;
+}
+
+function chgFactRow(fact, index) {
+  return `<div class="fact-row chg-fact-row" data-chg-fact="${index}">
+    <label class="fact-flag"><input type="checkbox" data-chg-fact-field="critical"${fact.critical ? ' checked' : ''}> 关键</label>
+    <input data-chg-fact-field="key" placeholder="事实项，如 容量" value="${escapeHtml(fact.key ?? '')}" maxlength="60">
+    <input data-chg-fact-field="value" placeholder="值，如 50g" value="${escapeHtml(fact.value ?? '')}" maxlength="500">
+    <label class="fact-flag"><input type="checkbox" data-chg-fact-field="confirmed"${fact.confirmed ? ' checked' : ''}> 已确认</label>
+  </div>`;
+}
+
+/** 变更编辑区：新事实/关键文字/已更换素材；预览结果（差异 + 影响清单 + 预算）来自服务端。 */
+function renderChangeDraft(area) {
+  const { draft } = area;
+  const parts = ['<div class="chg-draft">'];
+  parts.push('<h4>发起商品变更</h4>');
+  parts.push(`<p class="truth-hint">基于当前事实版本 v${state.detail.project.truth_head_version} 编辑；确认后生成新事实版本与变更单，预览本身不落库。</p>`);
+  parts.push('<p class="truth-hint">商品事实（与当前版本逐项比对差异；关键项需勾选已确认）</p>');
+  parts.push(draft.facts.map((fact, index) => chgFactRow(fact, index)).join(''));
+  parts.push('<button type="button" class="text-button" data-action="chg-add-fact">＋ 添加事实项</button>');
+  parts.push('<p class="truth-hint">关键文字（每行一条包装文字；变化等同实物包装变化，需新实拍）</p>');
+  parts.push(`<textarea class="chg-text" rows="3" data-chg-field="critical_text">${escapeHtml(draft.criticalText)}</textarea>`);
+  const assets = (state.detail?.assets ?? []).filter(asset => asset.role_status === 'active' && asset.role !== 'style');
+  if (assets.length > 0) {
+    parts.push('<p class="truth-hint">已更换的素材（如换包装；依赖该素材的图片会被标记为需新实拍）</p>');
+    parts.push(`<div class="chg-assets">${assets.map(asset => `<label class="fact-flag">
+      <input type="checkbox" data-chg-asset="${escapeHtml(asset.id)}"${draft.changedAssetIds.includes(asset.id) ? ' checked' : ''}> ${escapeHtml(asset.filename)}（${ROLE_LABELS[asset.role] ?? asset.role}）
+    </label>`).join('')}</div>`);
+  }
+  parts.push(`<label class="fact-flag"><input type="checkbox" data-chg-field="brand_kit_changed"${draft.brandKitChanged ? ' checked' : ''}> 品牌套件已更新（不自动作用于历史图片，相关版本进入人工核对）</label>`);
+  parts.push('<p class="truth-error" id="change-error" role="alert"></p>');
+  parts.push(`<div class="truth-actions">
+    <button type="button" class="secondary" data-action="chg-draft-cancel">取消</button>
+    <button type="button" class="secondary" data-action="chg-preview">预览差异与影响</button>
+    ${draft.preview && !draft.preview.empty ? '<button type="button" class="primary" data-action="chg-confirm">确认变更</button>' : ''}
+  </div>`);
+  if (draft.preview) parts.push(renderChangePreview(draft.preview));
+  parts.push('</div>');
+  return parts.join('');
+}
+
+function renderChangePreview(preview) {
+  if (preview.empty) {
+    return '<div class="state-note"><div><b>与当前版本没有差异</b><br>请修改事实、关键文字或素材后再预览；无差异不会创建变更单。</div></div>';
+  }
+  const diff = preview.diff ?? {};
+  const factLines = (diff.facts ?? []).map(item => {
+    const label = { added: '新增', removed: '删除', changed: '修改' }[item.change] ?? item.change;
+    const from = item.from ? `${item.from.value ?? ''}${item.from.unit ?? ''}` : '—';
+    const to = item.to ? `${item.to.value ?? ''}${item.to.unit ?? ''}` : '—';
+    return `<li>${escapeHtml(item.key)}（${label}）：${escapeHtml(from)} → ${escapeHtml(to)}</li>`;
+  });
+  if (diff.critical_text) factLines.push(`<li>关键文字：${escapeHtml((diff.critical_text.from ?? []).join('、') || '—')} → ${escapeHtml((diff.critical_text.to ?? []).join('、') || '—')}</li>`);
+  if (diff.category) factLines.push(`<li>类目：${escapeHtml(diff.category.from ?? '—')} → ${escapeHtml(diff.category.to ?? '—')}</li>`);
+  for (const assetId of diff.changed_asset_ids ?? []) factLines.push(`<li>素材已更换：${escapeHtml(assetId)}</li>`);
+  if (diff.brand_kit_changed) factLines.push('<li>品牌套件已更新</li>');
+  const items = preview.impact_items ?? [];
+  const quote = preview.quote ?? {};
+  return `<div class="chg-preview">
+    <h4>差异与影响预览（未落库）</h4>
+    <ul class="chg-diff">${factLines.join('')}</ul>
+    ${items.length === 0
+      ? '<p class="truth-hint">当前没有匹配到受影响的图片版本。</p>'
+      : `<ul class="chg-impact">${items.map(item => `<li>
+          <b>${escapeHtml(item.deliverable_label ?? item.deliverable_id)}</b>
+          <span class="wb-status ${item.action === 'needs_new_photo' ? 'amber' : item.action === 'needs_review' ? 'amber' : 'blue'}">${escapeHtml(CHANGE_ACTION_LABEL[item.action] ?? item.action)}</span>
+          ${item.visual_check === 'required' ? '<span class="wb-status amber">完成后需人工视觉核对</span>' : ''}
+          <span class="chg-meta">当前版本 ${escapeHtml(String(item.version_id).slice(0, 12))}… · 命中 ${escapeHtml((item.matched ?? []).join('、') || '依赖记录不足')}</span>
+          ${item.reason ? `<span class="chg-reason">${escapeHtml(item.reason)}</span>` : ''}
+        </li>`).join('')}</ul>`}
+    <p class="chg-quote">预算：预计消耗 ${quote.estimated_credits ?? 0} 点（重生成 ${quote.regenerate_count ?? 0} 项计费 · 文字重合成 ${quote.recompose_count ?? 0} 项免费 · 需新实拍 ${quote.new_photo_count ?? 0} 项 · 需人工核对 ${quote.review_count ?? 0} 项）</p>
+    ${(quote.notes ?? []).map(line => `<p class="truth-hint">${escapeHtml(line)}</p>`).join('')}
+  </div>`;
+}
+
+/** 变更单详情：逐项状态 + 执行/核对/补拍/选用/重试/取消/导出入口。 */
+function renderChangeDetail(area) {
+  const detail = area.detail;
+  if (!detail) return '';
+  const [statusLabel, statusTone] = CHANGE_STATUS_META[detail.status] ?? [detail.status, 'neutral'];
+  const counts = detail.counts ?? {};
+  const parts = [`<div class="chg-detail" data-change-id="${escapeHtml(detail.id)}">
+    <div class="chg-detail-head">
+      <span class="wb-status ${statusTone}">${escapeHtml(statusLabel)}</span>
+      <span class="chg-meta">变更单 ${escapeHtml(detail.id)} · 事实 v${detail.base_truth_version} → v${detail.new_truth_version}</span>
+      <button type="button" class="text-button" data-action="chg-refresh">刷新状态</button>
+    </div>
+    <div class="chg-counts">${CHANGE_COUNT_LABELS
+      .filter(([key]) => (counts[key] ?? 0) > 0)
+      .map(([key, label]) => `<span class="wb-chip">${label} ${counts[key]}</span>`).join('')}</div>`];
+  if (detail.status === 'awaiting_material') {
+    parts.push('<div class="state-note warn"><div><b>待补实拍素材</b><br>有图片需要新实拍照片才能更新；跳过不等于更新完成。请在对应项上传补拍素材后继续处理。</div></div>');
+  }
+  if (detail.status === 'awaiting_review') {
+    parts.push('<div class="state-note warn"><div><b>待人工核对</b><br>有图片证据不足，需人工核对处理方式（撤下/改文案/重拍）；未核对前不算更新完成。</div></div>');
+  }
+  if ((counts.pending_visual_checks ?? 0) > 0) {
+    parts.push('<div class="state-note warn"><div><b>待人工视觉核对</b><br>数量/套装类变化不能只换字就放行：请逐项核对画面数量表达后提交核对结论，未核对前整单不完成。</div></div>');
+  }
+  if (detail.status === 'partial_failed') {
+    parts.push('<div class="state-note danger"><div><b>部分失败</b><br>成功项已保留；失败项可单独重试（重试才产生新预留，不重复扣费）。</div></div>');
+  }
+  if (area.quoteConfirm) {
+    const quote = area.quoteConfirm.quote;
+    parts.push(`<div class="state-note warn chg-quote-confirm"><div><b>确认重生成报价</b><br>本次执行含重生成项，按服务端当前报价预计消耗 ${quote.estimated_credits} 点（价格口径 ${escapeHtml(quote.price_version)}）。确认后才会预留额度并执行。
+      <div class="state-actions"><button type="button" class="primary" data-action="chg-quote-confirm">确认报价并执行</button><button type="button" class="secondary" data-action="chg-quote-cancel">放弃本次执行</button></div></div></div>`);
+  }
+  parts.push(`<ul class="chg-items">${(detail.impact_items ?? []).map(item => renderChangeItem(item, detail)).join('')}</ul>`);
+  const actions = [];
+  if ((counts.pending ?? 0) > 0 && detail.status !== 'cancelled') {
+    actions.push('<button type="button" class="primary" data-action="chg-execute-all">执行全部待处理项</button>');
+  }
+  if (detail.status === 'partial_failed') {
+    actions.push('<button type="button" class="secondary" data-action="chg-retry">只重试失败项</button>');
+  }
+  if (CHANGE_CANCELLABLE.includes(detail.status)) {
+    actions.push('<button type="button" class="secondary" data-action="chg-cancel">取消变更单</button>');
+  }
+  if (actions.length > 0) parts.push(`<div class="truth-actions">${actions.join('')}</div>`);
+  if (detail.status === 'completed') parts.push(renderChangeExports(detail, area));
+  parts.push('</div>');
+  return parts.join('');
+}
+
+function renderChangeItem(item, detail) {
+  const [statusLabel, statusTone] = CHANGE_ITEM_STATUS_META[item.status] ?? [item.status, 'neutral'];
+  const parts = [`<li class="chg-item" data-item-id="${escapeHtml(item.id)}">
+    <div class="chg-item-head">
+      <b>${escapeHtml(item.deliverable_label ?? item.deliverable_id)}</b>
+      <span class="wb-status ${statusTone}">${escapeHtml(statusLabel)}</span>
+      <span class="chg-meta">建议：${escapeHtml(CHANGE_ACTION_LABEL[item.action] ?? item.action)} · 当前版本 ${escapeHtml(String(item.version_id ?? '').slice(0, 12))}…</span>
+    </div>`];
+  if (item.reason) parts.push(`<p class="chg-reason">${escapeHtml(item.reason)}</p>`);
+  if ((item.matched ?? []).length > 0) parts.push(`<p class="chg-meta">命中：${escapeHtml(item.matched.join('、'))}</p>`);
+  if (item.status === 'running') {
+    parts.push(`<p class="chg-meta">执行中${item.child_run_id ? `（子任务 ${escapeHtml(String(item.child_run_id).slice(0, 14))}…）` : ''}，请稍后刷新。</p>`);
+  }
+  if (item.status === 'failed') {
+    parts.push(`<p class="truth-error" role="alert">${escapeHtml(item.error ?? '执行失败')}${item.error_code ? `（${escapeHtml(item.error_code)}）` : ''}</p>`);
+    if (item.error_code === 'REGENERATION_NEEDS_REVIEW') {
+      parts.push(`<p class="truth-hint">重生成结果质检待人工复核，未自动选用：请到源任务详情复核放行并人工选用新版本，不要在变更单里重复重试扣费。</p>
+        <button type="button" class="text-button" data-action="chg-open-source">打开工作台复核源任务</button>`);
+    }
+  }
+  if (item.status === 'skipped') {
+    parts.push(`<p class="chg-meta">${escapeHtml(item.skip_reason ?? '已跳过')} · ${escapeHtml(CHANGE_AWAITING_LABEL[item.awaiting] ?? '已跳过')}</p>`);
+    if (item.awaiting === 'material') {
+      parts.push(`<div class="chg-material">
+        <p class="truth-hint">该项实物已变化，需要新实拍照片：上传补拍素材并登记后，该项恢复为可执行的文字重合成（以新素材为底图）。</p>
+        <input type="file" accept="image/jpeg,image/png,image/webp" data-chg-material-file aria-label="补拍素材文件">
+        <button type="button" class="secondary" data-action="chg-material" data-item-id="${escapeHtml(item.id)}">上传并登记补拍素材</button>
+      </div>`);
+    }
+    if (item.awaiting === 'review') {
+      parts.push(renderItemActionPicker(item));
+    }
+  }
+  if (item.status === 'pending') {
+    if (item.action === 'needs_new_photo' && !item.material_asset_id) {
+      parts.push('<p class="truth-hint">该项需新实拍：登记补拍素材前不能选择文字重合成或重生成（服务端会拒绝，避免用换字冒充实物变化）。</p>');
+    }
+    parts.push(renderItemActionPicker(item));
+  }
+  if (item.status === 'done') {
+    if (item.charged_credits > 0) parts.push(`<p class="chg-meta">已按张结算 ${item.charged_credits} 点。</p>`);
+    if (item.pending_adoption) parts.push('<p class="wb-chip warn">新版本未自动选用：核对通过后将一并选用</p>');
+    if (item.visual_check === 'required') {
+      parts.push(`<div class="chg-visual-check">
+        <p class="truth-hint">需人工视觉核对（数量表达/重合成效果）：请填写核对结论后提交。${item.pending_adoption ? '核对通过会同时选用新版本。' : ''}</p>
+        <input type="text" data-chg-check-reason maxlength="300" placeholder="核对结论（必填，≤300 字），如：已核对画面数量表达为 2 瓶，与新事实一致">
+        <button type="button" class="secondary" data-action="chg-visual-check" data-item-id="${escapeHtml(item.id)}">提交核对结论</button>
+      </div>`);
+    }
+    if (item.visual_check === 'passed') {
+      parts.push(`<p class="chg-meta">视觉核对已通过：${escapeHtml(item.visual_check_reason ?? '')}（${escapeHtml(item.visual_check_by ?? '')} · ${escapeHtml(formatTime(item.visual_check_at))}）</p>`);
+    }
+    if (item.result_version_id) {
+      parts.push(`<button type="button" class="text-button" data-action="chg-activate" data-run-id="${escapeHtml(item.run_id)}" data-version-id="${escapeHtml(item.result_version_id)}">选用此版本</button>`);
+    }
+  }
+  parts.push('</li>');
+  return parts.join('');
+}
+
+/** 单项动作选择：text_recompose / regenerate / skip；needs_review 覆盖必须附确切依据。 */
+function renderItemActionPicker(item) {
+  const options = [];
+  const allowText = item.action === 'text_recompose' || item.action === 'needs_review' || Boolean(item.material_asset_id);
+  const allowRegen = item.action !== 'needs_new_photo' || Boolean(item.material_asset_id);
+  if (allowText) options.push(['text_recompose', '文字重合成（免费）']);
+  if (allowRegen) options.push(['regenerate', '重生成（按张计费）']);
+  options.push(['skip', '跳过（知情放弃，不阻塞整单完成）']);
+  const selected = options.some(([value]) => value === item.action) ? item.action : 'skip';
+  return `<div class="chg-item-actions">
+    <select data-chg-action-select aria-label="处理动作">${options.map(([value, label]) =>
+      `<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`).join('')}</select>
+    ${item.action === 'needs_review'
+      ? '<input type="text" data-chg-override-reason maxlength="300" placeholder="覆盖为处理动作时的确切依据（必填），如：已人工核对品牌更新不影响此图">'
+      : ''}
+    <button type="button" class="secondary" data-action="chg-execute-item" data-item-id="${escapeHtml(item.id)}">按所选动作执行</button>
+  </div>`;
+}
+
+/** 完成后导出入口：按受影响的源任务导出更新后的套图。 */
+function renderChangeExports(detail, area) {
+  const runIds = [...new Set((detail.impact_items ?? [])
+    .filter(item => item.result_version_id)
+    .map(item => item.run_id))];
+  if (runIds.length === 0) return '';
+  return `<div class="chg-exports">
+    <h4>导出更新后的套图</h4>
+    <p class="truth-hint">导出后如有旧导出包含被替换的旧版本，会在下方「旧导出替换待办」登记；替换动作由商家在各渠道手动完成。</p>
+    ${runIds.map(runId => {
+      const exportedId = area.exportedByRun?.[runId];
+      return `<div class="chg-row">
+        <button type="button" class="secondary" data-action="chg-export" data-run-id="${escapeHtml(runId)}">导出任务 ${escapeHtml(String(runId).slice(0, 14))}… 的更新套图</button>
+        ${exportedId ? `<a class="text-button" href="${escapeHtml(api.downloadExportUrl(exportedId))}">下载导出包</a>` : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+/** 把编辑区 DOM 值收回 draft（预览/确认前先收集，避免丢输入）。 */
+function collectChangeDraft(draft) {
+  const root = $('#change-section');
+  if (!root) return;
+  $$('.chg-fact-row', root).forEach(row => {
+    const index = Number(row.dataset.chgFact);
+    const fact = draft.facts[index];
+    if (!fact) return;
+    fact.key = row.querySelector('[data-chg-fact-field="key"]').value.trim();
+    fact.value = row.querySelector('[data-chg-fact-field="value"]').value.trim();
+    fact.critical = row.querySelector('[data-chg-fact-field="critical"]').checked;
+    fact.confirmed = row.querySelector('[data-chg-fact-field="confirmed"]').checked;
+  });
+  const textArea = root.querySelector('[data-chg-field="critical_text"]');
+  if (textArea) draft.criticalText = textArea.value;
+  draft.changedAssetIds = $$('[data-chg-asset]:checked', root).map(input => input.dataset.chgAsset);
+  const brand = root.querySelector('[data-chg-field="brand_kit_changed"]');
+  if (brand) draft.brandKitChanged = brand.checked;
+}
+
+function changeDraftPayload(draft) {
+  return {
+    sku: state.detail.project.sku,
+    category: state.detail.project.category,
+    facts: draft.facts.filter(fact => fact.key && fact.value),
+    critical_text: draft.criticalText.split('\n').map(line => line.trim()).filter(Boolean)
+      .map(text => ({ text, case_sensitive: true, normalization: 'trim' })),
+    changed_asset_ids: draft.changedAssetIds,
+    brand_kit_changed: draft.brandKitChanged,
+  };
+}
+
+function changeError(message) {
+  const node = $('#change-error');
+  if (node) node.textContent = message ?? '';
+  else if (state.change) state.change.error = message ?? '';
+}
+
+function newChangeIdempotencyKey() {
+  return `chg-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+async function submitChangePreview() {
+  const area = state.change;
+  const draft = area?.draft;
+  if (!draft) return;
+  collectChangeDraft(draft);
+  draft.preview = null;
+  changeError('');
+  try {
+    draft.preview = await api.previewChange(area.projectId, changeDraftPayload(draft));
+    if (draft.preview.empty) changeError('');
+  } catch (error) {
+    changeError(errorText(error));
+  }
+  rerenderChangeSection();
+}
+
+async function confirmChangeOrder() {
+  const area = state.change;
+  const draft = area?.draft;
+  if (!draft?.preview || draft.preview.empty) return;
+  collectChangeDraft(draft);
+  changeError('');
+  try {
+    const payload = await api.confirmChange(area.projectId, {
+      ...changeDraftPayload(draft),
+      base_truth_version: draft.preview.base_truth_version,
+    }, draft.idempotencyKey);
+    state.toast(payload.replayed ? '该变更已提交过，已为你打开原变更单' : `变更单已创建（事实 v${payload.change.new_truth_version}）`);
+    area.draft = null;
+    area.detailId = payload.change.id;
+    area.detail = payload.change;
+    await refresh();
+    await loadChanges(area.projectId);
+  } catch (error) {
+    if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') {
+      changeError(`商品事实已有新变更（服务端当前为 v${error.details?.current_version ?? '？'}），请刷新后重新预检，本次未创建变更单`);
+    } else if (error instanceof ApiFailure && error.code === 'IDEMPOTENCY_KEY_CONFLICT') {
+      draft.idempotencyKey = newChangeIdempotencyKey();
+      changeError('提交标识冲突，已为你生成新标识，请重新点击「确认变更」');
+    } else if (error instanceof ApiFailure && error.code === 'NO_CHANGES') {
+      changeError('与当前版本没有差异，未创建变更单');
+    } else {
+      changeError(errorText(error));
+    }
+  }
+  rerenderChangeSection();
+}
+
+/** 执行入口：整单待处理或单项。重生成项被报价闸口拦截时，展示服务端当前报价供确认后重发。 */
+async function executeChangeOrder(itemId) {
+  const area = state.change;
+  const detail = area?.detail;
+  if (!detail) return;
+  const body = {};
+  if (itemId) {
+    const row = $(`#change-section .chg-item[data-item-id="${CSS.escape(itemId)}"]`);
+    const action = row?.querySelector('[data-chg-action-select]')?.value;
+    const item = detail.impact_items.find(entry => entry.id === itemId);
+    body.item_ids = [itemId];
+    if (action) body.actions = { [itemId]: action };
+    if (item?.action === 'needs_review' && action && action !== 'skip' && action !== item.action) {
+      const reason = row?.querySelector('[data-chg-override-reason]')?.value.trim() ?? '';
+      if (reason === '') {
+        area.error = '该项证据不足（需人工核对）：选择处理动作时必须填写确切依据，不能靠选择动作绕过人工判断';
+        rerenderChangeSection();
+        return;
+      }
+      body.override_reasons = { [itemId]: reason };
+    }
+  }
+  await runChangeExecution(area, body);
+}
+
+async function runChangeExecution(area, body, { quoteConfirmed = false } = {}) {
+  area.error = '';
+  try {
+    const payload = await api.executeChange(area.detail.id, body);
+    area.detail = payload.change;
+    area.quoteConfirm = null;
+    area.notice = '执行请求已受理；异步重生成项请刷新查看进度';
+    await loadChanges(area.projectId);
+  } catch (error) {
+    if (error instanceof ApiFailure && (error.code === 'QUOTE_CONFIRMATION_REQUIRED' || error.code === 'QUOTE_STALE')) {
+      // 报价闸口：如实展示服务端当前报价，商家确认后带 quote_confirm 重发同一请求
+      area.quoteConfirm = { body, quote: error.details?.quote ?? null };
+      area.error = error.code === 'QUOTE_STALE' ? '报价已变化，请按最新报价重新确认' : '';
+    } else if (error instanceof ApiFailure && error.code === 'HARD_OVERRIDE_BLOCKED') {
+      area.error = `${error.message}（不能用换字或重绘冒充实物变化）`;
+    } else if (error instanceof ApiFailure && error.code === 'INSUFFICIENT_CREDITS') {
+      area.error = error.message;
+    } else {
+      area.error = errorText(error);
+    }
+    rerenderChangeSection();
+    return;
+  }
+  if (quoteConfirmed) state.toast('已按确认报价执行');
+}
+
+async function retryChangeOrder() {
+  const area = state.change;
+  if (!area?.detail) return;
+  area.error = '';
+  try {
+    const payload = await api.retryChange(area.detail.id);
+    area.detail = payload.change;
+    area.notice = '已重试失败项（新子任务单独预留，成功只结算一次）';
+    await loadChanges(area.projectId);
+  } catch (error) {
+    area.error = errorText(error);
+    rerenderChangeSection();
+  }
+}
+
+async function cancelChangeOrder() {
+  const area = state.change;
+  if (!area?.detail) return;
+  if (!window.confirm('确认取消该变更单？运行中的重生成子任务会一并请求取消，已预留额度随子任务终态释放，不会重复扣费。')) return;
+  area.error = '';
+  try {
+    const payload = await api.cancelChange(area.detail.id, { reason: '商家在界面取消' });
+    area.detail = payload.change;
+    area.quoteConfirm = null;
+    state.toast('变更单已取消');
+    await loadChanges(area.projectId);
+  } catch (error) {
+    area.error = errorText(error);
+    rerenderChangeSection();
+  }
+}
+
+/** 数量/重合成结果的人工视觉核对：核对通过时服务端一并选用待选用的新版本。 */
+async function submitVisualCheck(itemId) {
+  const area = state.change;
+  if (!area?.detail) return;
+  const row = $(`#change-section .chg-item[data-item-id="${CSS.escape(itemId)}"]`);
+  const reason = row?.querySelector('[data-chg-check-reason]')?.value.trim() ?? '';
+  if (reason === '') {
+    area.error = '请填写核对结论（reason 必填，说明画面与新事实是否一致）';
+    rerenderChangeSection();
+    return;
+  }
+  area.error = '';
+  try {
+    const payload = await api.visualCheckItem(area.detail.id, itemId, { reason });
+    area.detail = payload.change;
+    area.notice = '核对结论已登记';
+    await loadChanges(area.projectId);
+  } catch (error) {
+    area.error = errorText(error);
+    rerenderChangeSection();
+  }
+}
+
+/** 补拍素材登记：上传（role=packaging）→ 登记到变更项 → 项恢复为可执行的文字重合成。 */
+async function attachChangeMaterial(itemId, trigger) {
+  const area = state.change;
+  if (!area?.detail) return;
+  const row = trigger.closest('.chg-item');
+  const file = row?.querySelector('[data-chg-material-file]')?.files?.[0];
+  if (!file) {
+    area.error = '请先选择补拍素材图片文件（JPEG / PNG / WebP）';
+    rerenderChangeSection();
+    return;
+  }
+  trigger.disabled = true;
+  area.error = '';
+  try {
+    const uploaded = await api.uploadAsset(area.projectId, file, { role: 'packaging' });
+    const payload = await api.attachChangeItemMaterial(area.detail.id, itemId, { asset_id: uploaded.asset.id });
+    area.detail = payload.change;
+    area.notice = '补拍素材已登记，该项恢复为可执行的文字重合成（以新素材为底图）';
+    await loadChanges(area.projectId);
+  } catch (error) {
+    area.error = errorText(error);
+    rerenderChangeSection();
+  }
+}
+
+/** 选用/恢复结果版本：复用既有版本选用接口，不绕过任务详情的人工复核。 */
+async function activateChangeVersion(runId, versionId) {
+  const area = state.change;
+  if (!area) return;
+  area.error = '';
+  try {
+    await api.activateVersion(runId, versionId);
+    state.toast('已选用该版本');
+    await loadChanges(area.projectId);
+  } catch (error) {
+    area.error = errorText(error);
+    rerenderChangeSection();
+  }
+}
+
+async function exportChangeRun(runId, trigger) {
+  const area = state.change;
+  if (!area) return;
+  trigger.disabled = true;
+  area.error = '';
+  try {
+    const payload = await api.createExport(runId);
+    area.exportedByRun = { ...(area.exportedByRun ?? {}), [runId]: payload.export.id };
+    state.toast('导出包已生成');
+    await loadChanges(area.projectId);
+    area.exportedByRun = { ...(area.exportedByRun ?? {}), [runId]: payload.export.id };
+    rerenderChangeSection();
+  } catch (error) {
+    area.error = errorText(error);
+    rerenderChangeSection();
+  }
+}
+
+async function confirmReplacementTodoItem(todoId) {
+  const area = state.change;
+  if (!area) return;
+  area.error = '';
+  try {
+    await api.confirmReplacementTodo(todoId, {});
+    state.toast('已登记：商家确认已在各渠道手动替换旧图（不代表平台已同步）');
+    await loadChanges(area.projectId);
+  } catch (error) {
+    area.error = errorText(error);
+    rerenderChangeSection();
+  }
+}
+
+async function onChangeClick(action, trigger) {
+  const area = state.change;
+  const project = state.detail?.project;
+  if (!project) return;
+  if (!area || area.projectId !== project.id) state.change = emptyChangeState(project.id);
+  if (action === 'chg-new') {
+    const truth = state.detail.truth_head;
+    state.change.draft = {
+      facts: (truth?.facts ?? []).map(fact => ({ ...fact })),
+      criticalText: (truth?.critical_text ?? []).map(item => item.text).join('\n'),
+      changedAssetIds: [],
+      brandKitChanged: false,
+      preview: null,
+      idempotencyKey: newChangeIdempotencyKey(),
+    };
+    rerenderChangeSection();
+    return;
+  }
+  if (action === 'chg-draft-cancel') {
+    state.change.draft = null;
+    rerenderChangeSection();
+    return;
+  }
+  if (action === 'chg-add-fact') {
+    collectChangeDraft(state.change.draft);
+    state.change.draft.facts.push({ key: '', value: '', critical: false, confirmed: false, source_type: 'user_input' });
+    rerenderChangeSection();
+    return;
+  }
+  if (action === 'chg-preview') { await submitChangePreview(); return; }
+  if (action === 'chg-confirm') { await confirmChangeOrder(); return; }
+  if (action === 'chg-open') {
+    const changeId = trigger.dataset.changeId;
+    if (state.change.detailId === changeId) {
+      state.change.detailId = null;
+      state.change.detail = null;
+      state.change.quoteConfirm = null;
+      rerenderChangeSection();
+      return;
+    }
+    state.change.detailId = changeId;
+    state.change.detail = null;
+    state.change.quoteConfirm = null;
+    state.change.error = '';
+    rerenderChangeSection();
+    try {
+      const payload = await api.getChange(changeId);
+      state.change.detail = payload.change;
+    } catch (error) {
+      state.change.error = errorText(error);
+    }
+    rerenderChangeSection();
+    return;
+  }
+  if (action === 'chg-refresh') { await loadChanges(state.change.projectId); return; }
+  if (action === 'chg-execute-all') { await executeChangeOrder(null); return; }
+  if (action === 'chg-execute-item') { await executeChangeOrder(trigger.dataset.itemId); return; }
+  if (action === 'chg-retry') { await retryChangeOrder(); return; }
+  if (action === 'chg-cancel') { await cancelChangeOrder(); return; }
+  if (action === 'chg-quote-confirm') {
+    const pending = state.change.quoteConfirm;
+    if (pending?.quote) await runChangeExecution(state.change, { ...pending.body, quote_confirm: pending.quote }, { quoteConfirmed: true });
+    return;
+  }
+  if (action === 'chg-quote-cancel') {
+    state.change.quoteConfirm = null;
+    rerenderChangeSection();
+    return;
+  }
+  if (action === 'chg-visual-check') { await submitVisualCheck(trigger.dataset.itemId); return; }
+  if (action === 'chg-material') { await attachChangeMaterial(trigger.dataset.itemId, trigger); return; }
+  if (action === 'chg-activate') { await activateChangeVersion(trigger.dataset.runId, trigger.dataset.versionId); return; }
+  if (action === 'chg-export') { await exportChangeRun(trigger.dataset.runId, trigger); return; }
+  if (action === 'chg-todo-confirm') { await confirmReplacementTodoItem(trigger.dataset.todoId); return; }
+  if (action === 'chg-open-source') {
+    window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: project.id } }));
+  }
+}
+
 function onTruthClick(event) {
   const trigger = event.target.closest('[data-action]');
   if (!trigger) return;
   const action = trigger.dataset.action;
+  if (action.startsWith('chg-')) {
+    void onChangeClick(action, trigger);
+    return;
+  }
   if (action.startsWith('sku-')) {
     void onSkuClick(action, trigger);
     return;

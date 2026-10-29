@@ -135,3 +135,44 @@
 ### 提交与推送
 
 - 提交：见 E03 记录开头补入。
+
+## 模块 E03：商品变更更新助手完整流程
+
+> 补记：E02 提交号为 `36bb8bf`（feat(deps): E02 图片依赖编译/人工关联与导出渠道追踪，含品牌版本 stale 修复），推送时已核对远端包含。
+
+### 实际实现
+
+1. 新表 `change_orders`（逐项状态持久化）与 `replacement_todos`（旧导出替换待办），旧数据按空表迁移（`src/store.mjs`）。
+2. 新文件 `src/change.mjs`：变更单状态推导 `deriveChangeStatus`（pending/failed/pending_visual_checks/awaiting_material/awaiting_review 计数，partial_failed 优先）、`presentChange` 透传呈现、影响项动作分类（text_recompose/regenerate/needs_new_photo/skip）。
+3. 预览与确认：`POST /api/projects/:id/changes/preview`（差异 + 影响清单 + 预算，不落库）；`POST .../changes` 带 Idempotency-Key 与 base_truth_version 乐观锁，同事务建事实版本 + 变更单。
+4. 逐项执行：`POST /api/changes/:id/execute`（item_ids/actions 选定；needs_new_photo 无素材时选重合成/重生成 → 409 HARD_OVERRIDE_BLOCKED）；报价闸口（QUOTE_CONFIRMATION_REQUIRED/QUOTE_STALE/INSUFFICIENT_CREDITS，未确认不预留不扣费）；部分失败 `POST .../retry` 只重试失败项；`POST .../cancel` 取消。
+5. 重合成质检三分支（runRecomposeItem）：publishable → done + 自动选用；blocked → failed(RECOMPOSE_QA_BLOCKED)，不能靠人工核对绕过；needs_review → done + visual_check=required + pending_adoption，视觉核对通过时一并选用新版本（visualCheckItem 内 activateVersion）。
+6. 换包装/实物变化：`changed_asset_ids` 命中的版本全部 needs_new_photo，跳过 ≠ 完成，整单 awaiting_material；登记补拍素材（`POST .../items/:itemId/material`）后恢复 pending 并以新素材为底图重合成；新实拍素材进入新版本依赖记录（evidence=manual）。
+7. 变更单重生成显式冻结新 spec 快照（launchRegeneration `spec_override`）；createRun 重生成守卫改为 spec_override 感知：变更单路径报价按新快照现场生成（一致性天然成立），普通单张重生成仍对照源任务旧快照（REGENERATION_QUOTE_MISMATCH 409）。
+8. 重生成结果 adopt 链：子任务完成 adoptRegenerationResult 登记回源 run（publishable 才 active）；needs_review 不自动选用，须人工在源任务显式 activateVersion；变更单核对 adopted_version_id === active_version_id 才记 done，否则 REGENERATION_NEEDS_REVIEW。
+9. reconcileChangeOrder 不按整单状态白名单跳过（confirmed 单也可能有中断遗留 running 项），逐项核对子任务收口；并发双变更单各自逐项认领，互不覆盖。
+10. 旧导出替换待办：变更单推进版本后为涉及旧版本的导出记录生成 replacement_todos；`GET /api/replacement-todos`、`POST .../:id/confirm` 只登记商家确认，不伪装店铺同步。
+11. 前端完整入口（`frontend/api.js` +11 个方法、`frontend/real-data.js` 项目页「商品变更」区块、`frontend/workbench.css` `.chg-*`）：差异编辑 → 预览（差异/影响清单/预算）→ 确认（乐观锁 + 幂等键 + 409 如实提示）→ 逐项状态/动作选定/执行/取消 → 补拍素材登记 → 数量复核（reason 必填，pending_adoption 标注「核对通过后一并选用」）→ 只重试失败项/REGENERATION_NEEDS_REVIEW 引导人工选用 → 选用/恢复版本 → 导出与替换待办（明确「不代表平台已同步」）。
+
+### 本轮调试修复（接续前 2 项失败 + 续开发中新增 1 项）
+
+1. **掩码 512 缩放出血环导致补拍底图系统性失配**：`SUBJECT_MASK_MAX_SIDE=512`，掩码在低分辨率计算后按比例映射回输出，主体矩形边缘产生 1-3px 出血环；compositeSubject 合成时把 cutout 像素写入出血环，故「原始素材图当补拍底图」在 SUBJECT_PIXEL_PRESERVATION 零容差逐像素核对下必然失配。测试改为「确认变更单前下载当前选用版本成品图当补拍底图」（确认后事实版本推进、旧报告 stale，只能拿到 draftPreview 带水印 768 缩图，会 BASE_SIZE_MISMATCH）。
+2. **输出与补拍素材逐字节相同被 RISK_CONTENT 硬闸拦截**：无文字层的交付物重合成是幂等复制（输出 == 底图素材），触发 OUTPUT_IDENTICAL_TO_SOURCE_ASSET。该守卫针对的是供应商拿源素材冒充生成结果；本地重合成路径的底图是商家自己登记的新实拍，一致是构造使然。修法：`evaluateAttemptQuality` 增加 `excludeAssetIds`，仅本地重合成且显式补拍底图时把该底图排除出 duplicated_source 比对，其余素材照常比对（`src/jobs.mjs`）。测试同时为补拍底图在掩码区与文字区之外叠加微差异块，模拟真实新实拍不可能与旧图逐字节相同。
+3. **中断遗留 running 项不收口**：reconcileChangeOrder 原有整单状态白名单（executing/partial_failed/completed/awaiting_*）跳过核对，confirmed 单的中断遗留项永远无法收口；已删除白名单，只保留 cancelled 跳过，收口状态由 finalizeChangeOrder 重算。
+4. needs_review 重生成结果复核到 publishable 不联动选用（M13 契约：人工显式 activateVersion）；测试增加 adoptRegenerationIfNeeded/passAllVisualChecks 辅助，覆盖该人工动作。
+5. fixture 动态化：submit 只存请求快照，poll 时按当前 control.failIf/holdIf 判定，支持「先 hold 断言 running、再改 fail」的确定性时序。
+
+### 测试证据（Node 22.22.2）
+
+- `node --test test/e03.js`：11/11 通过（差异预览、确认乐观锁、执行/跳过/待补素材、补拍续做、数量复核、失败重试账本、报价闸口、并发/中断、needs_review 覆盖、不覆盖新 head）。
+- `node --test test/e01.js test/e02.js`：15/15 回归通过；`node --test test/ui-contract.js`：10/10（含新增 E03 契约测试：区块 DOM、11 个 API 方法、错误码处理与诚实文案断言）。
+- `npm run check`：81 个文件通过；全量 `npm test`：273 项，271 通过 / 0 失败 / 1 跳过（既有符号链接项）/ 1 例并行负载下子进程启动超时 flaky（index.js 单跑 10/10 通过，与本次改动无关）。
+
+### 未验证 / 边界
+
+- 真实外部服务（生图模型、OCR、视觉评审、支付、平台同步）未配置：全部走 fixture/契约路径，效果验收在 E08 统一标注；替换待办仅登记商家确认，不做店铺同步验证。
+- 变更区块前端为手工 DOM 实现，真实浏览器截图验收统一在 E07/E08。
+
+### 提交与推送
+
+- 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。

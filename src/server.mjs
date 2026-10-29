@@ -151,6 +151,8 @@ export function createApp({
   return {
     server,
     jobs: api.jobs,
+    // 测试挂钩：集成测试用 store.mutate 模拟崩溃现场（如变更项已认领但子任务未落库）
+    store,
     listen() {
       return new Promise((resolve, reject) => {
         const onError = error => { server.off('listening', onListen); reject(error); };

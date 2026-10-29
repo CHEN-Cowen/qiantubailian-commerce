@@ -34,6 +34,8 @@ const TABLES = Object.freeze([
   'sku_profiles',
   // E02：图片版本依赖记录与导出渠道标签（只增不改 / 更新保留历史；旧数据按空表迁移）
   'image_dependencies', 'export_channels',
+  // E03：商品变更单（逐项状态持久化）与旧导出替换待办（旧数据按空表迁移）
+  'change_orders', 'replacement_todos',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -48,6 +50,7 @@ const EMPTY_DATA = () => ({
   credit_lots: {}, credit_reservations: {},
   sku_profiles: {},
   image_dependencies: {}, export_channels: {},
+  change_orders: {}, replacement_todos: {},
 });
 
 function normalize(raw) {

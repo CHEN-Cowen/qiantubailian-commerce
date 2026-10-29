@@ -298,3 +298,74 @@ test('M06 一致性：状态组件、长内容省略与断链清扫', async () =
     assert.ok(html.includes(`id="${id}"`), `r05 关键节点 #${id} 被误删`);
   }
 });
+
+// 模块E03：商品变更更新助手前端契约（区块挂在 real-data 管理的项目详情弹窗内，DOM 由 real-data.js 运行时注入）
+test('E03 商品变更：项目页变更区块、api 端点方法、逐项处理与诚实文案', async () => {
+  const [html, realData, api, workbenchCss] = await Promise.all([
+    read('index.html'), read('real-data.js'), read('api.js'), read('workbench.css'),
+  ]);
+  // 入口：项目详情（商品事实）弹窗内注入 #change-section 区块
+  assert.ok(html.includes('id="truth-dialog"'), 'index.html 缺少项目详情弹窗 #truth-dialog');
+  assert.match(realData, /id="change-section"/, 'real-data.js 缺少商品变更区块 #change-section');
+  assert.match(realData, /id="change-error"/, 'real-data.js 缺少区块错误节点 #change-error');
+  // api.js：E03 端点方法（同源 /api，写请求经 call 自动带 CSRF；确认带 Idempotency-Key）
+  for (const fn of ['previewChange', 'confirmChange', 'listChanges', 'getChange', 'executeChange',
+    'retryChange', 'cancelChange', 'visualCheckItem', 'attachChangeItemMaterial',
+    'listReplacementTodos', 'confirmReplacementTodo']) {
+    assert.match(api, new RegExp(`${fn}`), `api.js 缺少方法 ${fn}`);
+  }
+  assert.match(api, /\/changes\/preview/);
+  assert.match(api, /Idempotency-Key/, '确认变更必须携带 Idempotency-Key 头');
+  assert.match(api, /\/execute/);
+  assert.match(api, /\/retry/);
+  assert.match(api, /\/cancel/);
+  assert.match(api, /\/visual-check/);
+  assert.match(api, /\/material/);
+  assert.match(api, /\/replacement-todos/);
+  // real-data.js：关键函数与真实 API 接线
+  for (const fn of ['loadChanges', 'renderChangeSection', 'renderChangeDetail', 'renderChangeItem',
+    'submitChangePreview', 'confirmChangeOrder', 'executeChangeOrder', 'retryChangeOrder',
+    'cancelChangeOrder', 'submitVisualCheck', 'attachChangeMaterial', 'activateChangeVersion', 'onChangeClick']) {
+    assert.match(realData, new RegExp(`function ${fn}\\(`), `real-data.js 缺少函数 ${fn}`);
+  }
+  assert.match(realData, /api\.previewChange\(/);
+  assert.match(realData, /api\.confirmChange\(/);
+  assert.match(realData, /api\.executeChange\(/);
+  assert.match(realData, /api\.retryChange\(/);
+  assert.match(realData, /api\.cancelChange\(/);
+  assert.match(realData, /api\.visualCheckItem\(/);
+  assert.match(realData, /api\.attachChangeItemMaterial\(/);
+  assert.match(realData, /api\.listReplacementTodos\(/);
+  assert.match(realData, /api\.confirmReplacementTodo\(/);
+  assert.match(realData, /api\.activateVersion\(/, '结果版本选用/恢复复用 activateVersion');
+  assert.match(realData, /api\.createExport\(/, '完成后导出入口复用 createExport');
+  assert.match(realData, /api\.uploadAsset\(/, '补拍素材上传复用 uploadAsset');
+  // 乐观锁与幂等：base_truth_version 随确认提交；幂等键由 crypto 生成
+  assert.match(realData, /base_truth_version/);
+  assert.match(realData, /randomUUID/);
+  // 冲突如实提示「已有新变更，请刷新」，不假装成功
+  assert.match(realData, /VERSION_CONFLICT/);
+  assert.match(realData, /商品事实已有新变更/);
+  assert.match(realData, /请刷新后重新预检/);
+  // 执行闸口：报价确认、硬阻断、余额不足、重试限制的错误码如实处理
+  assert.match(realData, /QUOTE_CONFIRMATION_REQUIRED/);
+  assert.match(realData, /QUOTE_STALE/);
+  assert.match(realData, /HARD_OVERRIDE_BLOCKED/);
+  assert.match(realData, /INSUFFICIENT_CREDITS/);
+  // REGENERATION_NEEDS_REVIEW：提示到源任务人工选用，不在变更单里重复扣费重试
+  assert.match(realData, /REGENERATION_NEEDS_REVIEW/);
+  assert.match(realData, /未自动选用/);
+  assert.match(realData, /qb:open-workbench/, '复核入口必须跳回源任务工作台');
+  // 待补实拍与数量人工核对文案（跳过≠完成；核对结论必填）
+  assert.match(realData, /待补实拍/);
+  assert.match(realData, /核对结论（必填/);
+  assert.match(realData, /只重试失败项/);
+  assert.match(realData, /取消变更单/);
+  // 替换待办：只登记商家手动替换，不代表平台已同步
+  assert.match(realData, /确认已手动替换/);
+  assert.match(realData, /不代表平台已同步/);
+  // 区块样式追加到 workbench.css
+  assert.match(workbenchCss, /\.chg-item\s*\{/);
+  assert.match(workbenchCss, /\.chg-detail\s*\{/);
+  assert.match(workbenchCss, /\.chg-list\s*\{/);
+});

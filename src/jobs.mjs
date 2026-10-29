@@ -323,10 +323,17 @@ export function createJobs({
           throw new ApiError(409, 'REGENERATION_QUOTE_MISMATCH',
             '重生成必须使用仅含该交付物的单张成品报价，请重新发起');
         }
-        if (quote.spec_ref?.version !== sourceRun.spec_ref?.version
-          || quote.spec_ref?.content_hash !== sourceRun.spec_ref?.content_hash) {
+        // E03 变更单重生成（spec_override=true）：报价按传入的新冻结快照现场生成，
+        // 一致性天然成立（quote.spec_ref === 新 spec），不再对照源任务旧 spec；
+        // 普通单张重生成仍要求报价依据与源任务冻结快照一致。
+        const specRefMatches = regeneration.spec_override === true
+          ? quote.spec_ref?.version === spec.version
+            && quote.spec_ref?.content_hash === spec.content_hash
+          : quote.spec_ref?.version === sourceRun.spec_ref?.version
+            && quote.spec_ref?.content_hash === sourceRun.spec_ref?.content_hash;
+        if (!specRefMatches) {
           throw new ApiError(409, 'REGENERATION_QUOTE_MISMATCH',
-            '报价依据的冻结快照与源任务不一致，不能用于重生成');
+            '报价依据的冻结快照与重生成所用的生产配置不一致，不能用于重生成');
         }
         const inFlight = (sourceRun.regenerations ?? []).some(item =>
           item.deliverable_id === regeneration.deliverable_id
@@ -1095,7 +1102,11 @@ export function createJobs({
       sourceDeliverable.active_version_id = adopted.id;
     }
     sourceRun.versions.push(adopted);
-    recordImageDependencies(data, sourceRun, adopted);
+    // E03：变更单重生成的子任务按新事实快照冻结 spec 生产；adopt 回源任务时依赖记录
+    // 必须指向子任务实际使用的 spec 对应的事实版本，而不是源任务旧 spec 的旧事实。
+    recordImageDependencies(data, sourceRun, adopted, {
+      truthOverride: truthOfRun(data, run, specOfRun(data, run)),
+    });
     refreshRunQuality(data, sourceRun);
     // 源任务侧登记：这条重生成已到终态（publishable/needs_review），模块 05 的互斥看这个状态
     const registration = (sourceRun.regenerations ?? []).find(item => item.run_id === run.id);
@@ -1130,13 +1141,14 @@ export function createJobs({
   }
 
   // ---------- E02：版本落库时编译确定依赖（无编译依据则跳过，查询侧按 unknown 处理） ----------
-  function recordImageDependencies(data, run, version) {
+  // E03：truthOverride 用于变更单文字重合成——新版本文字反映新事实版本，依赖快照也应指向它
+  function recordImageDependencies(data, run, version, { truthOverride = null } = {}) {
     if (!run || !version || !data.image_dependencies) return;
     if (Object.values(data.image_dependencies).some(item =>
       item.run_id === run.id && item.deliverable_id === version.deliverable_id && item.version_id === version.id)) return;
     const spec = specOfRun(data, run);
     if (!spec) return; // legacy 版本：没有冻结快照，不伪造依赖
-    const truth = truthOfRun(data, run, spec);
+    const truth = truthOverride ?? truthOfRun(data, run, spec);
     const compiled = executionForDeliverable(run.execution?.plan, { deliverableId: version.deliverable_id });
     // 文字修改版本以随版本冻结的 text_layers 为准（与实际渲染产物一致），否则用编译计划
     const deliverable = compiled || Array.isArray(version.text_layers)
@@ -1205,7 +1217,7 @@ export function createJobs({
   }
 
   async function evaluateAttemptQuality(data, run, attempt, target, {
-    outputBytes, ext, outputHash, composite, losslessOutput = null, recordId,
+    outputBytes, ext, outputHash, composite, losslessOutput = null, recordId, excludeAssetIds = null,
   }, events, at) {
     const spec = specOfRun(data, run);
     const truth = truthOfRun(data, run, spec);
@@ -1237,7 +1249,12 @@ export function createJobs({
           decoded_bytes: ext === 'jpg' && losslessOutput ? await decodeToPng(outputBytes) : null,
         },
         subject: { maskBytes, cutoutBytes, composite, losslessBytes: losslessOutput },
-        assets: activeAssetsOf(data, run),
+        // E03 补拍重合成：底图是商家自己登记的新实拍素材，输出与底图一致是构造使然
+        // （无文字层时重合成等于底图直出），不属于「供应商拿源素材冒充生成结果」，
+        // 因此该底图不参与 RISK_CONTENT 的 duplicated_source 比对；其余素材仍照常比对。
+        assets: (excludeAssetIds?.length ?? 0) > 0
+          ? activeAssetsOf(data, run).filter(asset => !excludeAssetIds.includes(asset.id))
+          : activeAssetsOf(data, run),
         ocr,
         now: at,
       });
@@ -2371,6 +2388,51 @@ export function createJobs({
     if (edits !== undefined && !Array.isArray(edits)) {
       throw new ApiError(422, 'INVALID_TEXT_EDITS', 'edits 必须是数组');
     }
+    return recomposeTextLayers({ ctx, runId, deliverableId, baseVersionId, edits });
+  }
+
+  /**
+   * E03：变更单文字重合成——按「fact_key → 新文案」生成编辑，走与用户文字修改完全相同的
+   * 免费重合成路径（不调模型、不写额度流水）。truthVersion 让新版本的依赖快照指向
+   * 变更后的新事实版本，而不是源任务冻结 spec 里的旧版本。
+   */
+  async function recomposeVersionFacts({ ctx, runId, deliverableId, baseVersionId, factTexts = {}, truthVersion = null, note = null, baseAssetId = null } = {}) {
+    const prepared = await store.read(data => {
+      const run = findRun(data, ctx, runId);
+      const { version } = deliverableTextContext(data, run, deliverableId);
+      if (baseVersionId != null && String(baseVersionId) !== version.id) {
+        throw new ApiError(409, 'VERSION_CONFLICT', '当前选用版本已变化，请刷新后基于最新版本重试',
+          { active_version_id: version.id, provided_version_id: String(baseVersionId) });
+      }
+      const edits = [];
+      for (const layer of version.text_layers ?? []) {
+        if (layer.source !== 'fact' || !layer.fact_key) continue;
+        const text = factTexts[layer.fact_key];
+        if (text === undefined || text === null) continue;
+        if (String(layer.text ?? '') === String(text)) continue;
+        edits.push({ id: layer.id, text: String(text) });
+      }
+      const truth = truthVersion === null ? null
+        : Object.values(data.truth_versions ?? {}).find(item =>
+            item.tenant_id === run.tenant_id && item.project_id === run.project_id && item.version === truthVersion) ?? null;
+      if (truthVersion !== null && !truth) throw new ApiError(404, 'NOT_FOUND', '变更单引用的事实版本不存在');
+      return { edits, truth };
+    });
+    if (prepared.edits.length === 0 && !baseAssetId) {
+      throw new ApiError(409, 'NO_CHANGES', '变更事实在该版本没有对应的可编辑文字层，或文字已是最新');
+    }
+    return recomposeTextLayers({
+      ctx, runId, deliverableId, baseVersionId, edits: prepared.edits,
+      note: note ?? '商品变更文字重合成', createdBy: 'change_order', truthOverride: prepared.truth,
+      baseAssetId: baseAssetId ?? null,
+    });
+  }
+
+  /** 文字层重合成共用核心：用户文字修改与变更单重合成只是 edits 来源不同。
+   *  baseAssetId（E03 补拍新实拍）：提供时以该素材图片为底图重合成文字层，
+   *  替代原版本的 overlay_base_hash（换包装等实物变化不能用旧底图冒充）。 */
+  async function recomposeTextLayers({ ctx, runId, deliverableId, baseVersionId, edits,
+    note = '文字排版修改', createdBy = 'user_text_edit', truthOverride = null, baseAssetId = null }) {
     const result = await store.mutate(async data => {
       const run = findRun(data, ctx, runId);
       if (run.status !== 'completed') {
@@ -2385,7 +2447,7 @@ export function createJobs({
         throw new ApiError(409, 'VERSION_CONFLICT', '当前选用版本已变化，请刷新后基于最新版本重试',
           { active_version_id: version.id, provided_version_id: String(baseVersionId) });
       }
-      if (!Array.isArray(version.text_layers) || !version.overlay_base_hash) {
+      if (!Array.isArray(version.text_layers) || (!version.overlay_base_hash && !baseAssetId)) {
         throw new ApiError(409, 'TEXT_LAYER_MISSING',
           '该版本来自不支持文字层的生成路径，没有可编辑的文字层或底图来源，不能做文字排版修改');
       }
@@ -2394,15 +2456,39 @@ export function createJobs({
       if (applied.issues.length > 0) {
         throw new ApiError(422, 'TEXT_EDIT_INVALID', '部分文字修改无法受理，请按问题逐项调整', { issues: applied.issues });
       }
-      if (!applied.changed) {
+      if (!applied.changed && !baseAssetId) {
         throw new ApiError(409, 'NO_CHANGES', '本次没有实际变化，未生成新版本');
       }
 
-      // 本地重合成：底图仍是原版本的 overlay_base_hash，来源不变；不调用 Provider
+      // 本地重合成：默认底图仍是原版本的 overlay_base_hash；E03 补拍新实拍时用新素材作底图。
       const finalFormat = version.format === 'jpg' ? 'jpg' : 'png';
-      const baseBytes = await store.readBlob(version.overlay_base_hash, 'png');
-      if (!baseBytes) {
-        throw new ApiError(409, 'TEXT_LAYER_MISSING', '底图来源文件不可读取，无法重新合成文字层');
+      let baseBytes;
+      let baseHash = version.overlay_base_hash;
+      if (baseAssetId) {
+        const asset = data.assets?.[String(baseAssetId)] ?? null;
+        if (!asset || asset.tenant_id !== run.tenant_id || asset.project_id !== run.project_id) {
+          throw new ApiError(404, 'NOT_FOUND', '补拍素材不存在');
+        }
+        if (asset.role_status !== 'active') {
+          throw new ApiError(409, 'ASSET_INACTIVE', '补拍素材已被替换，请使用当前有效素材');
+        }
+        if (Number(asset.width) !== version.width || Number(asset.height) !== version.height) {
+          throw new ApiError(422, 'BASE_SIZE_MISMATCH',
+            `新实拍素材尺寸 ${asset.width}×${asset.height} 与原图 ${version.width}×${version.height} 不一致；请按原图尺寸提供，或改用重生成`, {
+              required: { width: version.width, height: version.height },
+              provided: { width: asset.width ?? null, height: asset.height ?? null },
+            });
+        }
+        baseBytes = await store.readBlob(asset.sha256, asset.ext);
+        if (!baseBytes) {
+          throw new ApiError(409, 'TEXT_EDIT_RENDER_FAILED', '补拍素材文件不可读取，无法合成');
+        }
+        baseHash = asset.sha256;
+      } else {
+        baseBytes = await store.readBlob(version.overlay_base_hash, 'png');
+        if (!baseBytes) {
+          throw new ApiError(409, 'TEXT_LAYER_MISSING', '底图来源文件不可读取，无法重新合成文字层');
+        }
       }
       const logoLayer = applied.layers.find(layer => layer.logo === true);
       let logoBytes = null;
@@ -2449,6 +2535,7 @@ export function createJobs({
       const report = await evaluateAttemptQuality(data, run, pseudoAttempt, target, {
         outputBytes, ext: finalFormat, outputHash, composite: pseudoAttempt.composite, losslessOutput: rendered.losslessBytes,
         recordId: null,
+        excludeAssetIds: baseAssetId ? [String(baseAssetId)] : null,
       }, [], clock());
 
       const previousVersionId = version.id;
@@ -2459,11 +2546,11 @@ export function createJobs({
           width: version.width, height: version.height, bytes: outputBytes.length,
         },
         textLayers: applied.layers,
-        overlayBaseHash: version.overlay_base_hash,
+        overlayBaseHash: baseHash,
         at: clock(),
       });
-      nextVersion.note = '文字排版修改';
-      nextVersion.created_by = 'user_text_edit';
+      nextVersion.note = note;
+      nextVersion.created_by = createdBy;
       nextVersion.adopted_from = null;
 
       const publishable = report.decision === 'publishable';
@@ -2481,7 +2568,7 @@ export function createJobs({
         nextVersion.superseded_at = nextVersion.created_at;
       }
       run.versions.push(nextVersion);
-      recordImageDependencies(data, run, nextVersion);
+      recordImageDependencies(data, run, nextVersion, { truthOverride });
       const activeVersion = run.versions.find(item => item.active && item.deliverable_id === deliverableId) ?? null;
       target.quality_report_id = activeVersion?.report_id ?? target.quality_report_id;
       refreshRunQuality(data, run);
@@ -3303,7 +3390,7 @@ export function createJobs({
     listGenerationRecords, getGenerationRecord,
     listQualityReports, getQualityReport, reviewQualityReport,
     listRunVersions, readVersionContent, activateVersion, createExport, listExports, getExport, readExportPackage,
-    textLayersOfDeliverable, editDeliverableText,
+    textLayersOfDeliverable, editDeliverableText, recomposeVersionFacts,
     createVideoPlan, listVideoPlans, getVideoPlan, evaluateVideoPlanFrames, generateVideo,
     createJointExport, createBatchExport,
     get activeSubscriptions() { return listeners.size; },

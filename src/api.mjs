@@ -18,8 +18,11 @@ import {
 } from './domain.mjs';
 import { getTemplate, listChannelRules, listTemplates, matchChannelRule } from './catalog.mjs';
 import {
-  simplifiedSkuView, skuProfileContentHash, validateSkuProfilesInput,
+  simplifiedSkuView, skuProfileContentHash, validateSkuProfilesInput, diffSkuProfiles,
 } from './sku.mjs';
+import {
+  computeImpactList, deriveChangeStatus, diffIsEmpty, diffTruth, presentChange, quoteChange,
+} from './change.mjs';
 import { DEPENDENCY_KINDS, mergeManualEntries, presentDependency } from './depgraph.mjs';
 import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
@@ -546,6 +549,46 @@ export function createApi({
     }
     if (resource === 'catalog') return handleCatalog(method, rest, query, send);
     if (resource === 'brand-kits') return handleBrandKits(ctx, method, rest, req, send);
+    // E03：商品变更更新助手（变更单详情/执行/重试/视觉核对）
+    if (resource === 'changes') {
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getChange(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'execute') {
+        requireMethod(method, ['POST']);
+        return executeChange(ctx, req, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'retry') {
+        requireMethod(method, ['POST']);
+        return retryChange(ctx, req, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'cancel') {
+        requireMethod(method, ['POST']);
+        return cancelChange(ctx, req, rest[1], send);
+      }
+      if (rest.length === 5 && rest[2] === 'items' && rest[4] === 'visual-check') {
+        requireMethod(method, ['POST']);
+        return visualCheckItem(ctx, req, rest[1], rest[3], send);
+      }
+      if (rest.length === 5 && rest[2] === 'items' && rest[4] === 'material') {
+        requireMethod(method, ['POST']);
+        return attachChangeItemMaterial(ctx, req, rest[1], rest[3], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
+    // E03：旧导出替换待办（只记商家确认已替换，不做平台同步）
+    if (resource === 'replacement-todos') {
+      if (rest.length === 1) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return listReplacementTodos(ctx, query, send);
+      }
+      if (rest.length === 3 && rest[2] === 'confirm') {
+        requireMethod(method, ['POST']);
+        return confirmReplacementTodo(ctx, req, rest[1], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
     if (resource !== 'projects') throw new ApiError(404, 'NOT_FOUND', '接口不存在');
 
     if (rest.length === 1) {
@@ -580,6 +623,16 @@ export function createApi({
     if (rest.length === 5 && section === 'skus' && third === 'versions') {
       requireMethod(method, ['GET', 'HEAD']);
       return getSkuVersion(ctx, projectId, rest[4], send);
+    }
+    // E03：商品变更更新助手（预览不落库；确认在同一事务内建事实版本+变更单）
+    if (rest.length === 4 && section === 'changes' && third === 'preview') {
+      requireMethod(method, ['POST']);
+      return previewChange(ctx, req, projectId, send);
+    }
+    if (rest.length === 3 && section === 'changes') {
+      if (method === 'POST') return confirmChange(ctx, req, projectId, send);
+      requireMethod(method, ['GET', 'HEAD', 'POST']);
+      return listChanges(ctx, projectId, send);
     }
     if (rest.length === 3 && section === 'readiness') {
       requireMethod(method, ['GET', 'HEAD']);
@@ -778,11 +831,16 @@ export function createApi({
       case 'eval': case 'models': case 'provider': return 'metrics:read';
       case 'generation-records': return 'run:read';
       case 'catalog': return 'project:read';
+      // E03：变更单与替换待办走项目读写权限
+      case 'changes':
+      case 'replacement-todos':
+        return write ? 'project:write' : 'project:read';
       case 'projects': {
         if (second === undefined) return write ? 'project:create' : 'project:read';
         if (third === 'assets') return write ? 'asset:write' : 'project:read';
         if (third === 'truth-versions') return write ? 'truth:write' : 'project:read';
         if (third === 'specs') return write ? 'spec:write' : 'project:read';
+        if (third === 'changes') return write ? 'project:write' : 'project:read';
         if (third === 'joint-exports') return write ? 'export:create' : 'export:read';
         return write ? 'project:write' : 'project:read';
       }
@@ -1338,6 +1396,66 @@ export function createApi({
     });
   }
 
+  /**
+   * 在既有 mutate 内追加一个事实版本（E03 变更确认与 M03 提交共用同一核心）。
+   * 调用方必须已完成 validateTruthInput；乐观锁与确认闸口都在这里判定。
+   */
+  function applyTruthVersionIn(data, ctx, project, payload) {
+    const assets = Object.values(data.assets)
+      .filter(asset => asset.project_id === project.id && asset.tenant_id === ctx.tenantId);
+    if (payload.base_version !== project.truth_head_version) {
+      throw new ApiError(409, 'VERSION_CONFLICT', `事实版本已更新到 v${project.truth_head_version}，请基于最新版本重新提交`, {
+        current_version: project.truth_head_version,
+      });
+    }
+    const timestamp = now();
+    const facts = payload.facts.map(fact => ({
+      ...fact,
+      confirmed_by: fact.confirmed ? ctx.actorId : null,
+      confirmed_at: fact.confirmed ? timestamp : null,
+    }));
+    const version = project.truth_head_version + 1;
+    const provisional = {
+      version,
+      sku: payload.sku,
+      category: payload.category,
+      facts,
+      immutable_regions: payload.immutable_regions,
+      critical_text: payload.critical_text,
+      confirmation_status: payload.confirm ? 'confirmed' : 'draft',
+    };
+    const readiness = computeReadiness(project, assets, provisional);
+    if (payload.confirm && readiness.blockers.length > 0) {
+      throw new ApiError(409, 'CONFIRMATION_BLOCKED', '关键项未全部确认，无法确认商品事实版本', {
+        blockers: readiness.blockers,
+      });
+    }
+    const record = {
+      id: newId('tv'),
+      tenant_id: ctx.tenantId,
+      project_id: project.id,
+      version,
+      base_version: payload.base_version,
+      sku: payload.sku,
+      category: payload.category,
+      facts,
+      immutable_regions: payload.immutable_regions,
+      critical_text: payload.critical_text,
+      confirmation_status: provisional.confirmation_status,
+      blockers: readiness.blockers,
+      warnings: readiness.warnings,
+      content_hash: truthContentHash(provisional),
+      created_by: ctx.actorId,
+      created_at: timestamp,
+    };
+    data.truth_versions[record.id] = record;
+    project.truth_head_version = version;
+    project.confirmation_status = record.confirmation_status;
+    project.status = record.confirmation_status === 'confirmed' ? 'ready' : 'drafting';
+    project.updated_at = timestamp;
+    return { record, readiness };
+  }
+
   async function createTruthVersion(ctx, req, projectId, send) {
     const body = await readJson(req);
     const result = await store.mutate(data => {
@@ -1345,57 +1463,7 @@ export function createApi({
       const assets = Object.values(data.assets)
         .filter(asset => asset.project_id === project.id && asset.tenant_id === ctx.tenantId);
       const payload = validateTruthInput(body, { project, assets });
-      if (payload.base_version !== project.truth_head_version) {
-        throw new ApiError(409, 'VERSION_CONFLICT', `事实版本已更新到 v${project.truth_head_version}，请基于最新版本重新提交`, {
-          current_version: project.truth_head_version,
-        });
-      }
-      const timestamp = now();
-      const facts = payload.facts.map(fact => ({
-        ...fact,
-        confirmed_by: fact.confirmed ? ctx.actorId : null,
-        confirmed_at: fact.confirmed ? timestamp : null,
-      }));
-      const version = project.truth_head_version + 1;
-      const provisional = {
-        version,
-        sku: payload.sku,
-        category: payload.category,
-        facts,
-        immutable_regions: payload.immutable_regions,
-        critical_text: payload.critical_text,
-        confirmation_status: payload.confirm ? 'confirmed' : 'draft',
-      };
-      const readiness = computeReadiness(project, assets, provisional);
-      if (payload.confirm && readiness.blockers.length > 0) {
-        throw new ApiError(409, 'CONFIRMATION_BLOCKED', '关键项未全部确认，无法确认商品事实版本', {
-          blockers: readiness.blockers,
-        });
-      }
-      const record = {
-        id: newId('tv'),
-        tenant_id: ctx.tenantId,
-        project_id: project.id,
-        version,
-        base_version: payload.base_version,
-        sku: payload.sku,
-        category: payload.category,
-        facts,
-        immutable_regions: payload.immutable_regions,
-        critical_text: payload.critical_text,
-        confirmation_status: provisional.confirmation_status,
-        blockers: readiness.blockers,
-        warnings: readiness.warnings,
-        content_hash: truthContentHash(provisional),
-        created_by: ctx.actorId,
-        created_at: timestamp,
-      };
-      data.truth_versions[record.id] = record;
-      project.truth_head_version = version;
-      project.confirmation_status = record.confirmation_status;
-      project.status = record.confirmation_status === 'confirmed' ? 'ready' : 'drafting';
-      project.updated_at = timestamp;
-      return { record, readiness };
+      return applyTruthVersionIn(data, ctx, project, payload);
     });
     send(201, { truth_version: result.record, readiness: result.readiness });
   }
@@ -1460,6 +1528,45 @@ export function createApi({
     send(200, result);
   }
 
+  /** 在既有 mutate 内追加一个 SKU 档案版本（E01 提交与 E03 变更确认共用同一核心）。 */
+  function applySkuProfilesIn(data, ctx, project, payload) {
+    const head = project.sku_head_version ?? 0;
+    if (payload.base_version !== head) {
+      throw new ApiError(409, 'VERSION_CONFLICT', `SKU 档案已更新到 v${head}，请刷新后基于最新版本重新提交`, {
+        current_version: head,
+      });
+    }
+    if (payload.confirm && (payload.skus.length === 0 || payload.skus.some(sku => !sku.confirmed))) {
+      throw new ApiError(409, 'CONFIRMATION_BLOCKED', '存在未确认的 SKU，无法确认档案：请逐项确认后再提交', {
+        unconfirmed: payload.skus.filter(sku => !sku.confirmed).map(sku => sku.sku_code),
+      });
+    }
+    const timestamp = now();
+    const skus = payload.skus.map(sku => ({
+      ...sku,
+      id: sku.id ?? newId('sku'),
+      confirmed_by: sku.confirmed ? ctx.actorId : null,
+      confirmed_at: sku.confirmed ? timestamp : null,
+    }));
+    const version = head + 1;
+    const entry = {
+      id: newId('sp'),
+      tenant_id: ctx.tenantId,
+      project_id: project.id,
+      version,
+      base_version: payload.base_version,
+      skus,
+      confirmation_status: payload.confirm ? 'confirmed' : 'draft',
+      content_hash: skuProfileContentHash({ skus }),
+      created_by: ctx.actorId,
+      created_at: timestamp,
+    };
+    data.sku_profiles[entry.id] = entry;
+    project.sku_head_version = version;
+    project.updated_at = timestamp;
+    return entry;
+  }
+
   async function putSkuProfiles(ctx, req, projectId, send) {
     const body = await readJson(req);
     const record = await store.mutate(data => {
@@ -1467,41 +1574,7 @@ export function createApi({
       const assets = Object.values(data.assets)
         .filter(asset => asset.project_id === project.id && asset.tenant_id === ctx.tenantId);
       const payload = validateSkuProfilesInput(body, { project, assets });
-      const head = project.sku_head_version ?? 0;
-      if (payload.base_version !== head) {
-        throw new ApiError(409, 'VERSION_CONFLICT', `SKU 档案已更新到 v${head}，请刷新后基于最新版本重新提交`, {
-          current_version: head,
-        });
-      }
-      if (payload.confirm && (payload.skus.length === 0 || payload.skus.some(sku => !sku.confirmed))) {
-        throw new ApiError(409, 'CONFIRMATION_BLOCKED', '存在未确认的 SKU，无法确认档案：请逐项确认后再提交', {
-          unconfirmed: payload.skus.filter(sku => !sku.confirmed).map(sku => sku.sku_code),
-        });
-      }
-      const timestamp = now();
-      const skus = payload.skus.map(sku => ({
-        ...sku,
-        id: sku.id ?? newId('sku'),
-        confirmed_by: sku.confirmed ? ctx.actorId : null,
-        confirmed_at: sku.confirmed ? timestamp : null,
-      }));
-      const version = head + 1;
-      const entry = {
-        id: newId('sp'),
-        tenant_id: ctx.tenantId,
-        project_id: project.id,
-        version,
-        base_version: payload.base_version,
-        skus,
-        confirmation_status: payload.confirm ? 'confirmed' : 'draft',
-        content_hash: skuProfileContentHash({ skus }),
-        created_by: ctx.actorId,
-        created_at: timestamp,
-      };
-      data.sku_profiles[entry.id] = entry;
-      project.sku_head_version = version;
-      project.updated_at = timestamp;
-      return entry;
+      return applySkuProfilesIn(data, ctx, project, payload);
     });
     send(201, { sku_profile: record });
   }
@@ -1815,6 +1888,837 @@ export function createApi({
     send(200, result);
   }
 
+  // ---------- E03：商品变更更新助手 ----------
+
+  function findChangeOrder(data, ctx, changeId) {
+    const order = data.change_orders?.[changeId] ?? null;
+    if (!order || order.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '变更单不存在');
+    return order;
+  }
+
+  function truthVersionOf(data, project, version) {
+    return Object.values(data.truth_versions ?? {}).find(item =>
+      item.tenant_id === project.tenant_id && item.project_id === project.id && item.version === version) ?? null;
+  }
+
+  function headSkuProfileOf(data, project) {
+    const versions = Object.values(data.sku_profiles ?? {})
+      .filter(item => item.project_id === project.id && item.tenant_id === project.tenant_id)
+      .sort((left, right) => left.version - right.version);
+    return versions[versions.length - 1] ?? null;
+  }
+
+  /** 单项重生成计价：按该项源任务冻结 spec 的单张成品报价；算不出来时回落 1 点。 */
+  function changePriceOfItem(data, project) {
+    return item => {
+      const run = data.runs?.[item.run_id] ?? null;
+      if (!run) return 1;
+      try {
+        const spec = resolveSpecRecord(data, project.id, run.spec_ref?.version);
+        return quoteFromSpec({
+          spec, finishedImages: true, includeOptional: true,
+          onlyDeliverableIds: [item.deliverable_id], at: new Date(clock()),
+        }).estimated_credits;
+      } catch {
+        return 1;
+      }
+    };
+  }
+
+  /**
+   * 解析变更载荷：事实部分复用 validateTruthInput（含 SKU 一致性、素材依据校验），
+   * SKU 档案部分（可选）复用 validateSkuProfilesInput。预览不传 confirm，落库才确认。
+   */
+  function parseChangePayload(data, ctx, project, body, { confirm }) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new ApiError(400, 'INVALID_BODY', '请求体必须为 JSON 对象');
+    }
+    const assets = Object.values(data.assets)
+      .filter(asset => asset.project_id === project.id && asset.tenant_id === ctx.tenantId);
+    const baseTruth = Number.isInteger(body.base_truth_version) && body.base_truth_version >= 0
+      ? body.base_truth_version : project.truth_head_version;
+    const truthPayload = validateTruthInput({
+      base_version: baseTruth,
+      sku: body.sku,
+      category: body.category,
+      facts: body.facts,
+      immutable_regions: body.immutable_regions,
+      critical_text: body.critical_text,
+      confirm,
+    }, { project, assets });
+    let skuPayload = null;
+    if (body.skus !== undefined) {
+      if (!Array.isArray(body.skus)) throw new ApiError(422, 'INVALID_FIELD', 'skus 必须为数组');
+      skuPayload = validateSkuProfilesInput({
+        base_version: project.sku_head_version ?? 0,
+        confirm,
+        skus: body.skus,
+      }, { project, assets });
+    }
+    return { truthPayload, skuPayload };
+  }
+
+  function computeChangeImpactIn(data, project, diff, skuDiff) {
+    const items = computeImpactList(data, project, diff, skuDiff)
+      .map(item => ({ id: newId('itm'), ...item }));
+    const quote = quoteChange(items, { priceOfItem: changePriceOfItem(data, project) });
+    return { items, quote };
+  }
+
+  /** 预览：只算差异与影响，不落任何数据、不触发任何生成。 */
+  async function previewChange(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const result = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const oldTruth = truthVersionOf(data, project, project.truth_head_version);
+      if (!oldTruth) throw new ApiError(409, 'NO_TRUTH_VERSION', '项目尚无事实版本，无法做变更预检');
+      const { truthPayload, skuPayload } = parseChangePayload(data, ctx, project, body, { confirm: false });
+      const diff = diffTruth(oldTruth, { ...truthPayload, changed_asset_ids: body.changed_asset_ids, brand_kit_changed: body.brand_kit_changed });
+      const skuDiff = skuPayload
+        ? diffSkuProfiles(headSkuProfileOf(data, project)?.skus ?? [], skuPayload.skus)
+        : [];
+      const { items, quote } = computeChangeImpactIn(data, project, diff, skuDiff);
+      return {
+        project_id: project.id,
+        base_truth_version: project.truth_head_version,
+        diff,
+        sku_diff: skuDiff,
+        impact_items: items.map(item => ({ ...item, status: 'pending' })),
+        quote,
+        empty: diffIsEmpty(diff, skuDiff),
+      };
+    });
+    send(200, result);
+  }
+
+  /**
+   * 确认变更：同一 mutate 内创建新事实版本（可选同时创建新 SKU 档案版本）+ 变更单。
+   * Idempotency-Key 必需；重放返回同一单；键被不同请求复用 → 409。
+   */
+  async function confirmChange(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+    if (idempotencyKey === '') {
+      throw new ApiError(400, 'MISSING_IDEMPOTENCY_KEY', '创建变更单必须带 Idempotency-Key，避免重复提交产生重复变更');
+    }
+    const fingerprint = fingerprintOf({ project_id: projectId, body });
+    const outcome = await store.mutate(data => {
+      const project = findProject(data, ctx, projectId);
+      const existing = Object.values(data.change_orders ?? {})
+        .find(item => item.tenant_id === ctx.tenantId && item.idempotency_key === idempotencyKey) ?? null;
+      if (existing) {
+        if (existing.idempotency_fingerprint && existing.idempotency_fingerprint !== fingerprint) {
+          throw new ApiError(409, 'IDEMPOTENCY_KEY_CONFLICT',
+            '该 Idempotency-Key 已用于另一份不同的变更请求，请更换后再提交', { change_id: existing.id });
+        }
+        return { order: existing, replayed: true };
+      }
+      if (!Number.isInteger(body?.base_truth_version) || body.base_truth_version < 1) {
+        throw new ApiError(422, 'INVALID_FIELD', 'base_truth_version 必须为不小于 1 的整数（当前事实版本号）');
+      }
+      if (body.base_truth_version !== project.truth_head_version) {
+        throw new ApiError(409, 'VERSION_CONFLICT',
+          `事实版本已更新到 v${project.truth_head_version}，旧变更单不能覆盖新确认版本，请基于最新版本重新预检`, {
+            current_version: project.truth_head_version,
+          });
+      }
+      const oldTruth = truthVersionOf(data, project, body.base_truth_version);
+      if (!oldTruth) throw new ApiError(404, 'NOT_FOUND', '基准事实版本不存在');
+      const { truthPayload, skuPayload } = parseChangePayload(data, ctx, project, body, { confirm: true });
+      const diff = diffTruth(oldTruth, { ...truthPayload, changed_asset_ids: body.changed_asset_ids, brand_kit_changed: body.brand_kit_changed });
+      const oldSkus = headSkuProfileOf(data, project)?.skus ?? [];
+      const skuDiff = skuPayload ? diffSkuProfiles(oldSkus, skuPayload.skus) : [];
+      if (diffIsEmpty(diff, skuDiff)) {
+        throw new ApiError(409, 'NO_CHANGES', '本次提交与当前版本没有差异，未创建变更单');
+      }
+      // 同一 mutate 内先落新事实版本（乐观锁在 applyTruthVersionIn 内），再按需落 SKU 档案版本
+      const { record: truthRecord } = applyTruthVersionIn(data, ctx, project, truthPayload);
+      const skuRecord = skuPayload ? applySkuProfilesIn(data, ctx, project, skuPayload) : null;
+      const { items, quote } = computeChangeImpactIn(data, project, diff, skuDiff);
+      const timestamp = now();
+      const order = {
+        id: newId('chg'),
+        schema_version: 1,
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        base_truth_version: body.base_truth_version,
+        new_truth_version: truthRecord.version,
+        sku_profile_version: skuRecord?.version ?? null,
+        diff,
+        sku_diff: skuDiff,
+        status: 'confirmed',
+        impact_items: items.map(item => ({
+          ...item, status: 'pending', result_version_id: null, error: null, charged_credits: 0,
+        })),
+        quote,
+        idempotency_key: idempotencyKey,
+        idempotency_fingerprint: fingerprint,
+        created_by: ctx.actorId,
+        created_at: timestamp,
+        confirmed_at: timestamp,
+        finished_at: null,
+      };
+      data.change_orders[order.id] = order;
+      return { order, replayed: false };
+    });
+    send(outcome.replayed ? 200 : 201, {
+      change: presentChange(outcome.order),
+      replayed: outcome.replayed,
+    });
+  }
+
+  async function listChanges(ctx, projectId, send) {
+    const result = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const items = Object.values(data.change_orders ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === project.id)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+        .map(presentChange);
+      return { changes: items, total: items.length };
+    });
+    send(200, result);
+  }
+
+  /**
+   * 逐项状态回写（reconcile）：regenerate 项的异步子任务到终态后，把结果回写到变更项。
+   * 结果绑定该子任务的实际产物（源任务 regenerations 登记中的 adopted_version_id），
+   * 不以源交付物上任意 activeId 变化冒充本变更完成。
+   * 子任务完成且其产物已被选用 → done；完成但未自动选用（质检待复核）→ failed 且明确不必重试；
+   * 子任务失败/取消/超限 → failed（失败子任务已释放预留，重试才产生新预留）。
+   * running 但子任务缺失（如重启中断在认领与子任务创建之间）→ failed，可安全重试。
+   */
+  function reconcileChangeOrder(data, order) {
+    if (order.status === 'cancelled') return false;
+    // 不按整单状态白名单跳过：confirmed 单也可能存在中断遗留的 running 认领项，
+    // 只要读变更单就逐项核对子任务；收口后的整单状态由 finalizeChangeOrder 重算
+    let touched = false;
+    for (const item of order.impact_items ?? []) {
+      if (item.status !== 'running') continue;
+      const child = item.child_run_id ? data.runs?.[item.child_run_id] ?? null : null;
+      if (!child) {
+        // 已认领但子任务不存在：重启/中断恢复，按失败处理（预留未产生或已随子任务生命周期处理），可重试
+        touched = true;
+        item.status = 'failed';
+        item.error = '执行中断（服务重启或子任务缺失），未产生有效生成；可重试，重试才产生新预留';
+        item.error_code = 'EXECUTION_INTERRUPTED';
+        continue;
+      }
+      if (!TERMINAL_STATES.has(child.status)) continue;
+      touched = true;
+      if (child.status === 'completed') {
+        const sourceRun = data.runs?.[item.run_id] ?? null;
+        const target = sourceRun?.deliverables?.find(entry => entry.deliverable_id === item.deliverable_id) ?? null;
+        const registration = (sourceRun?.regenerations ?? []).find(entry => entry.run_id === child.id) ?? null;
+        const adoptedId = registration?.adopted_version_id ?? null;
+        if (adoptedId && target?.active_version_id === adoptedId) {
+          item.status = 'done';
+          item.result_version_id = adoptedId;
+          item.error = null;
+        } else {
+          item.status = 'failed';
+          item.error = '重生成完成但新版本质检待人工复核，未自动选用；请在任务详情复核放行，无需重试扣费';
+          item.error_code = 'REGENERATION_NEEDS_REVIEW';
+        }
+      } else {
+        item.status = 'failed';
+        item.error = `重生成子任务终态为 ${child.status}，预留额度已释放，可重试`;
+        item.error_code = 'REGENERATION_FAILED';
+      }
+    }
+    if (touched) finalizeChangeOrder(data, order);
+    return touched;
+  }
+
+  /** 按逐项状态推导整单状态；终态时生成替换待办（按旧版本匹配历史导出）。 */
+  function finalizeChangeOrder(data, order) {
+    if (order.status === 'cancelled') return order;
+    const derived = deriveChangeStatus(order.impact_items);
+    order.status = derived.status;
+    if (derived.status === 'completed' || derived.status === 'partial_failed'
+      || derived.status === 'awaiting_material' || derived.status === 'awaiting_review') {
+      order.finished_at ??= now();
+      createReplacementTodosIn(data, order);
+    }
+    return order;
+  }
+
+  function createReplacementTodosIn(data, order) {
+    const exportsOfProject = Object.values(data.exports ?? {})
+      .filter(item => item.tenant_id === order.tenant_id && item.project_id === order.project_id);
+    const existing = new Set(Object.values(data.replacement_todos ?? {})
+      .map(item => `${item.export_id}:${item.old_version_id}`));
+    for (const item of order.impact_items ?? []) {
+      if (item.status !== 'done' || !item.result_version_id) continue;
+      for (const exported of exportsOfProject) {
+        const hit = (exported.included ?? []).some(row =>
+          row.deliverable_id === item.deliverable_id && row.version_id === item.version_id);
+        if (!hit) continue;
+        const key = `${exported.id}:${item.version_id}`;
+        if (existing.has(key)) continue;
+        existing.add(key);
+        const todo = {
+          id: newId('rt'),
+          tenant_id: order.tenant_id,
+          project_id: order.project_id,
+          change_id: order.id,
+          export_id: exported.id,
+          channel_labels: [...(data.export_channels?.[exported.id]?.labels ?? [])],
+          deliverable_id: item.deliverable_id,
+          old_version_id: item.version_id,
+          new_version_id: item.result_version_id,
+          status: 'pending',
+          confirmed_by: null,
+          confirmed_at: null,
+          created_at: now(),
+        };
+        data.replacement_todos[todo.id] = todo;
+      }
+    }
+  }
+
+  async function getChange(ctx, changeId, send) {
+    const order = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      reconcileChangeOrder(data, found);
+      return found;
+    });
+    send(200, { change: presentChange(order) });
+  }
+
+  function mutateChangeItem(data, ctx, changeId, itemId, updater) {
+    const order = findChangeOrder(data, ctx, changeId);
+    const item = (order.impact_items ?? []).find(entry => entry.id === itemId) ?? null;
+    if (!item) throw new ApiError(404, 'NOT_FOUND', '变更项不存在');
+    updater(item, order);
+    return item;
+  }
+
+  /** 执行单个文字重合成项：免费路径，复用既有底图（或变更项登记的补拍新实拍）重合成 + 重跑质检。 */
+  async function runRecomposeItem(ctx, order, item) {
+    const factTexts = {};
+    for (const change of order.diff?.facts ?? []) {
+      if (change.change === 'removed' || !change.to) continue;
+      factTexts[change.key] = String(change.to.value ?? '');
+    }
+    const result = await jobs.recomposeVersionFacts({
+      ctx,
+      runId: item.run_id,
+      deliverableId: item.deliverable_id,
+      baseVersionId: item.version_id,
+      factTexts,
+      truthVersion: order.new_truth_version,
+      baseAssetId: item.material_asset_id ?? null,
+      note: `变更单 ${order.id} 文字重合成`,
+    });
+    await store.mutate(data => {
+      mutateChangeItem(data, ctx, order.id, item.id, target => {
+        target.result_version_id = result.version.id;
+        if (result.activated) {
+          target.status = 'done';
+          target.error = null;
+        } else if (result.report?.decision === 'blocked') {
+          // 硬失败：不能靠人工核对绕过，记为失败，可重试或改用重生成
+          target.status = 'failed';
+          target.error = '文字重合成后质检存在硬失败，新版本未选用且不能靠核对放行；请调整事实后重试或改用重生成';
+          target.error_code = 'RECOMPOSE_QA_BLOCKED';
+        } else {
+          // needs_review：新版本已生成但未自动选用。不算失败（无需重试、未产生费用），
+          // 改为要求人工视觉核对；核对通过时一并选用新版本（见 visualCheckItem）。
+          target.status = 'done';
+          target.error = null;
+          target.visual_check = 'required';
+          target.pending_adoption = true;
+        }
+        // 补拍素材作为新底图时，把素材关联写进新版本的依赖记录（人工关联档位，含依据）
+        if (item.material_asset_id) {
+          const depRecord = Object.values(data.image_dependencies ?? {}).find(entry =>
+            entry.run_id === item.run_id && entry.deliverable_id === item.deliverable_id
+            && entry.version_id === result.version.id) ?? null;
+          if (depRecord) {
+            depRecord.entries = mergeManualEntries(depRecord.entries ?? [], [{
+              kind: 'asset', ref: item.material_asset_id, evidence: 'manual', note: null,
+              reason: '变更单补拍新实拍素材作为底图', actor: ctx.actorId, at: now(),
+            }]);
+          }
+        }
+      });
+    });
+  }
+
+  /**
+   * 执行单个重生成项：幂等键绑定变更单项（重试加 :rN 后缀）。
+   * 与 M13 普通单张重做的差别：变更单重生成按「变更单的新事实版本」单独冻结一份
+   * 生产配置快照（新事实 / 当前 SKU 档案版本 / 品牌套件当前版本 / 模板平台沿用源 spec），
+   * 不复用源任务旧 spec 的内容语义；子任务输出、依赖与质检因此对齐新事实。
+   * 价格口径沿用源任务单张成品报价（changePriceOfItem）；新 spec 实际报价超出确认价时拒绝执行。
+   */
+  async function runRegenerateItem(ctx, order, item, retryNo, { expectedCredits = null } = {}) {
+    const key = retryNo > 0
+      ? `chg:${order.id}:${item.id}:r${retryNo}`
+      : `chg:${order.id}:${item.id}`;
+    // 同一 mutate 内冻结新事实快照 spec（版本只增，乐观锁沿用 spec_head_version）
+    const specVersion = await store.mutate(data => {
+      const project = findProject(data, ctx, order.project_id);
+      const sourceRun = data.runs?.[item.run_id] ?? null;
+      if (!sourceRun) throw new ApiError(404, 'NOT_FOUND', '源任务不存在');
+      const sourceSpec = resolveSpecRecord(data, project.id, sourceRun.spec_ref?.version);
+      // 沿用源 spec 已裁决的冲突处理（商家在源任务冻结时已做选择）；新事实若引入新冲突，
+      // buildSpecDraft 会抛 SPEC_CONFLICTS_PENDING，该项如实失败并提示人工处理，不静默放行
+      const sourceResolutions = Object.fromEntries(
+        (sourceSpec.provenance?.resolutions ?? []).map(entry => [entry.key, entry.option]));
+      const draft = buildSpecDraft(data, ctx, project.id, {
+        template_id: sourceSpec.template?.id,
+        platform: sourceSpec.channel?.platform ?? project.platform,
+        brand_kit_id: sourceSpec.brand_kit?.id ?? null,
+        conflict_resolutions: sourceResolutions,
+        base_version: project.spec_head_version,
+      }, { persist: true, truthVersion: order.new_truth_version });
+      const timestamp = now();
+      const version = project.spec_head_version + 1;
+      const previous = resolveSpecRecord(data, project.id, project.spec_head_version);
+      const record = {
+        id: newId('spec'),
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        version,
+        base_version: project.spec_head_version,
+        ...draft.payload,
+        requires_requote: previous ? previous.deliverable_hash !== draft.payload.deliverable_hash : false,
+        deliverable_changes: previous ? diffDeliverables(previous.deliverables, draft.payload.deliverables) : [],
+        content_hash: specContentHash(draft.payload),
+        created_by: ctx.actorId,
+        created_at: timestamp,
+        change_id: order.id,
+        change_item_id: item.id,
+        note: `变更单 ${order.id} 按事实 v${order.new_truth_version} 冻结的重生成快照`,
+      };
+      data.specs[record.id] = record;
+      project.spec_head_version = version;
+      project.updated_at = timestamp;
+      return record.version;
+    });
+    const { created, prepared } = await launchRegeneration({
+      ctx,
+      sourceRunId: item.run_id,
+      deliverableId: item.deliverable_id,
+      sourceVersionId: item.version_id,
+      idempotencyKey: key,
+      specVersion,
+      expectedCredits,
+    });
+    await store.mutate(data => {
+      mutateChangeItem(data, ctx, order.id, item.id, target => {
+        target.status = 'running';
+        target.child_run_id = created.run.id;
+        target.charged_credits = prepared.quote.estimated_credits ?? 0;
+        target.retry_count = retryNo;
+        target.spec_version = specVersion;
+        target.error = null;
+        target.error_code = null;
+      });
+    });
+  }
+
+  async function markItemFailed(ctx, orderId, itemId, error) {
+    await store.mutate(data => {
+      mutateChangeItem(data, ctx, orderId, itemId, target => {
+        target.status = 'failed';
+        target.error = error instanceof ApiError ? error.message : `执行失败：${error?.message ?? '未知错误'}`;
+        target.error_code = error instanceof ApiError ? error.code : null;
+      });
+    });
+  }
+
+  /**
+   * 执行变更单。body: {
+   *   item_ids?: [...],                                   // 限定本次执行的项
+   *   actions?: { [item_id]: 'text_recompose'|'regenerate'|'skip' },  // 商家对单项动作的明确选定
+   *   override_reasons?: { [item_id]: string },           // needs_review 项覆盖动作的确切依据（必填）
+   *   quote_confirm?: { price_version, estimated_credits } // 含重生成项时必须与服务器当前报价一致
+   * }
+   * 原子性：认领在同一 mutate 内完成（pending→running / skipped），并发重复执行只会成功一次；
+   * 重生成在扣费前校验确认报价，余额不足 402 在认领前拒绝，不产生任何预留。
+   */
+  async function executeChange(ctx, req, changeId, send) {
+    const body = await readJson(req).catch(() => ({}));
+    const itemIds = Array.isArray(body?.item_ids) ? body.item_ids.map(String) : null;
+    const actionOverrides = body?.actions && typeof body.actions === 'object' && !Array.isArray(body.actions)
+      ? body.actions : {};
+    const overrideReasons = body?.override_reasons && typeof body.override_reasons === 'object' && !Array.isArray(body.override_reasons)
+      ? body.override_reasons : {};
+
+    const claim = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      reconcileChangeOrder(data, found);
+      if (found.status === 'cancelled') {
+        throw new ApiError(409, 'CHANGE_CANCELLED', '变更单已取消，不能执行');
+      }
+      if (!['confirmed', 'partial_failed', 'executing', 'awaiting_material', 'awaiting_review', 'completed'].includes(found.status)) {
+        throw new ApiError(409, 'CHANGE_NOT_EXECUTABLE', `变更单当前状态为 ${found.status}，不能执行`, { status: found.status });
+      }
+      const items = found.impact_items ?? [];
+      if (itemIds) {
+        const known = new Set(items.map(item => item.id));
+        const missing = itemIds.filter(id => !known.has(id));
+        if (missing.length > 0) throw new ApiError(404, 'NOT_FOUND', `变更项不存在：${missing.join('、')}`);
+      }
+      for (const [itemId, action] of Object.entries(actionOverrides)) {
+        if (!['text_recompose', 'regenerate', 'skip'].includes(action)) {
+          throw new ApiError(422, 'INVALID_FIELD', `actions.${itemId} 只能是 text_recompose / regenerate / skip`);
+        }
+      }
+      // 可执行候选：pending；或 awaiting 的跳过项且商家本次给出明确动作（补资料后继续处理）。
+      // 商家看过原因后显式选 skip：转为 user 跳过（知情放弃），不再阻塞整单完成。
+      const candidates = items.filter(item => {
+        if (itemIds && !itemIds.includes(item.id)) return false;
+        if (item.status === 'pending') return true;
+        if (item.status === 'skipped' && (item.awaiting === 'material' || item.awaiting === 'review')
+          && actionOverrides[item.id]) {
+          if (actionOverrides[item.id] === 'skip') return true;
+          if (item.awaiting === 'material' && !item.material_asset_id) return false; // 缺新实拍不能执行
+          return true;
+        }
+        return false;
+      });
+      if (candidates.length === 0) {
+        throw new ApiError(409, 'NO_EXECUTABLE_ITEMS', '没有可执行的待处理变更项（可能都已处理或不在本次选择内）');
+      }
+
+      // 覆盖守卫：硬冲突（必须新实拍）不能靠选「改文字/重生成」绕过；未知项覆盖必须有确切依据
+      const timestamp = now();
+      const plan = candidates.map(item => {
+        const action = actionOverrides[item.id] ?? item.action;
+        if (item.action === 'needs_new_photo' && (action === 'text_recompose' || action === 'regenerate') && !item.material_asset_id) {
+          throw new ApiError(409, 'HARD_OVERRIDE_BLOCKED',
+            '该项实物已变化（如换包装），必须先补新实拍素材；不能用改文字或重绘冒充实物变化', { item_id: item.id });
+        }
+        if (item.action === 'needs_review' && action !== item.action && action !== 'skip') {
+          const reason = typeof overrideReasons[item.id] === 'string' ? overrideReasons[item.id].trim() : '';
+          if (reason === '') {
+            throw new ApiError(422, 'OVERRIDE_REASON_REQUIRED',
+              '该项证据不足（未知/待核对）：选择处理动作时必须给出确切依据，不能靠选择动作绕过人工判断', { item_id: item.id });
+          }
+          if (reason.length > 300) throw new ApiError(422, 'INVALID_FIELD', 'override_reasons 每项不能超过 300 个字符');
+        }
+        return { item, action };
+      });
+
+      // 重生成报价确认：预览默认 0 额度，商家选定重生成后必须确认最终报价（冻结口径）
+      const regenPlan = plan.filter(entry => entry.action === 'regenerate');
+      if (regenPlan.length > 0) {
+        const priceOfItem = changePriceOfItem(data, findProject(data, ctx, found.project_id));
+        const lines = regenPlan.map(entry => ({
+          item_id: entry.item.id,
+          run_id: entry.item.run_id,
+          deliverable_id: entry.item.deliverable_id,
+          credits: Math.max(0, Number(priceOfItem(entry.item)) || 0),
+        }));
+        const estimated = lines.reduce((sum, line) => sum + line.credits, 0);
+        const serverQuote = { price_version: 'finished-image.1', estimated_credits: estimated, lines };
+        const confirmQuote = body?.quote_confirm;
+        if (!confirmQuote || typeof confirmQuote !== 'object') {
+          throw new ApiError(409, 'QUOTE_CONFIRMATION_REQUIRED',
+            '本次执行包含重生成项：请先确认最终报价（quote_confirm）后再执行', { quote: serverQuote });
+        }
+        if (confirmQuote.price_version !== serverQuote.price_version
+          || Number(confirmQuote.estimated_credits) !== serverQuote.estimated_credits) {
+          throw new ApiError(409, 'QUOTE_STALE',
+            '报价已变化或与服务端不一致，请按最新报价重新确认', { quote: serverQuote });
+        }
+        const balance = balanceOf(data, ctx.tenantId, { initialCredits });
+        if (balance.available < estimated) {
+          throw new ApiError(402, 'INSUFFICIENT_CREDITS',
+            `可用额度 ${balance.available} 不足以支付本次重生成 ${estimated}，请先充值或调整执行范围`, {
+              available: balance.available, required: estimated,
+            });
+        }
+        found.quote_confirm = { ...serverQuote, confirmed_by: ctx.actorId, confirmed_at: timestamp };
+      }
+
+      // 原子认领：同一 mutate 内逐项落定状态，并发重复执行只会有一批认领成功
+      const claimed = [];
+      for (const { item, action } of plan) {
+        const autoSkip = action === 'skip'
+          || (action === item.action && (item.action === 'needs_new_photo' || item.action === 'needs_review'));
+        if (autoSkip) {
+          item.status = 'skipped';
+          item.skip_reason = action === 'skip'
+            ? '商家选择跳过该项'
+            : item.action === 'needs_new_photo'
+              ? '需要重新实拍照片：请上传新实拍素材后继续处理'
+              : '证据不足需人工核对，本流程不自动执行';
+          item.awaiting = action === 'skip' ? 'user' : item.action === 'needs_new_photo' ? 'material' : 'review';
+          item.executed_action = null;
+          continue;
+        }
+        item.status = 'running';
+        item.executed_action = action;
+        item.claimed_at = timestamp;
+        item.claimed_by = ctx.actorId;
+        if (item.action === 'needs_review' && action !== item.action) {
+          item.override_reason = String(overrideReasons[item.id]).trim();
+          item.override_by = ctx.actorId;
+          item.override_at = timestamp;
+        }
+        item.error = null;
+        item.error_code = null;
+        claimed.push({ itemId: item.id, action, run_id: item.run_id, deliverable_id: item.deliverable_id, version_id: item.version_id });
+      }
+      finalizeChangeOrder(data, found);
+      return { order: found, claimed };
+    });
+
+    // 认领成功后逐项执行（重合成同步、重生成异步子任务）；单项失败不拖垮其他项
+    for (const entry of claim.claimed) {
+      const item = claim.order.impact_items.find(candidate => candidate.id === entry.itemId);
+      try {
+        if (entry.action === 'text_recompose') await runRecomposeItem(ctx, claim.order, item);
+        else if (entry.action === 'regenerate') {
+          await runRegenerateItem(ctx, claim.order, item, item.retry_count ?? 0, {
+            expectedCredits: claim.order.quote_confirm?.lines?.find(line => line.item_id === item.id)?.credits ?? null,
+          });
+        }
+      } catch (error) {
+        await markItemFailed(ctx, claim.order.id, entry.itemId, error);
+      }
+    }
+
+    const finalOrder = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      reconcileChangeOrder(data, found);
+      return finalizeChangeOrder(data, found);
+    });
+    send(200, {
+      change: presentChange(finalOrder),
+      balance: await store.read(data => balanceOf(data, ctx.tenantId, { initialCredits })),
+    });
+  }
+
+  /** 只重试 failed 项：文字重合成不产生费用；重生成用 :rN 新幂等键，失败子任务已释放预留，成功只结算一次。 */
+  async function retryChange(ctx, req, changeId, send) {
+    await readJson(req).catch(() => ({}));
+    // 原子认领失败项（failed→running），并发重复重试只会成功认领一次
+    const claim = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      reconcileChangeOrder(data, found);
+      if (found.status !== 'partial_failed') {
+        throw new ApiError(409, 'CHANGE_NOT_RETRYABLE', `变更单当前状态为 ${found.status}，只有部分失败的变更单才能重试`, { status: found.status });
+      }
+      // 排除 REGENERATION_NEEDS_REVIEW：子任务已 completed 但版本未选用，其预留仍冻结待人工复核释放，
+      // 若重试会按新幂等键再预留一次造成泄漏；该类项应走任务详情人重复核放行，不在这里重试扣费。
+      const failed = found.impact_items.filter(item =>
+        item.status === 'failed'
+        && ['text_recompose', 'regenerate'].includes(item.executed_action ?? item.action)
+        && item.error_code !== 'REGENERATION_NEEDS_REVIEW');
+      if (failed.length === 0) {
+        throw new ApiError(409, 'NO_RETRYABLE_ITEMS', '没有可重试的失败项（质检待复核的项请走人工复核，不要重试）');
+      }
+      const timestamp = now();
+      for (const item of failed) {
+        item.status = 'running';
+        item.claimed_at = timestamp;
+        item.claimed_by = ctx.actorId;
+        item.error = null;
+        item.error_code = null;
+      }
+      finalizeChangeOrder(data, found);
+      return { order: found, items: failed.map(item => ({ id: item.id, action: item.executed_action ?? item.action })) };
+    });
+    for (const entry of claim.items) {
+      const item = claim.order.impact_items.find(candidate => candidate.id === entry.id);
+      try {
+        if (entry.action === 'text_recompose') await runRecomposeItem(ctx, claim.order, item);
+        else await runRegenerateItem(ctx, claim.order, item, (item.retry_count ?? 0) + 1, {
+          // 仅对「已实际发生过预留」的项校验确认价；从未扣到费的项（如中断恢复）按当前报价重新预留
+          expectedCredits: Number(item.charged_credits) > 0 ? item.charged_credits : null,
+        });
+      } catch (error) {
+        await markItemFailed(ctx, claim.order.id, entry.id, error);
+      }
+    }
+    const finalOrder = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      reconcileChangeOrder(data, found);
+      return finalizeChangeOrder(data, found);
+    });
+    send(200, {
+      change: presentChange(finalOrder),
+      balance: await store.read(data => balanceOf(data, ctx.tenantId, { initialCredits })),
+    });
+  }
+
+  /**
+   * 取消变更单：仅 confirmed/partial_failed/awaiting_* 可取消；运行中的重生成子任务一并请求取消
+   * （取消走 jobs.cancelRun，预留额度随子任务终态释放；重复取消幂等）。
+   */
+  async function cancelChange(ctx, req, changeId, send) {
+    const body = await readJson(req).catch(() => ({}));
+    const reason = typeof body?.reason === 'string' && body.reason.trim() !== ''
+      ? body.reason.trim().slice(0, 300) : '商家取消';
+    const order = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      reconcileChangeOrder(data, found);
+      if (found.status === 'cancelled') return found; // 重复取消幂等
+      if (!['confirmed', 'partial_failed', 'awaiting_material', 'awaiting_review', 'executing'].includes(found.status)) {
+        throw new ApiError(409, 'CHANGE_NOT_CANCELLABLE', `变更单当前状态为 ${found.status}，不能取消`, { status: found.status });
+      }
+      if ((found.impact_items ?? []).some(item => item.status === 'running' && !item.child_run_id)) {
+        throw new ApiError(409, 'CHANGE_ITEMS_CLAIMED', '存在正在同步执行的变更项，请稍后待其落定后再取消');
+      }
+      return found;
+    });
+    // 取消运行中的重生成子任务（在锁外逐个请求，取消结果由 reconcile 回收）
+    for (const item of order.impact_items ?? []) {
+      if (item.status !== 'running' || !item.child_run_id) continue;
+      try {
+        await jobs.cancelRun({ ctx, runId: item.child_run_id, reason: `change_order_cancelled:${order.id}` });
+      } catch { /* 子任务可能已到终态，取消失败不阻断整单取消 */ }
+    }
+    const cancelled = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      if (found.status === 'cancelled') return found;
+      const timestamp = now();
+      for (const item of found.impact_items ?? []) {
+        if (item.status === 'pending' || item.status === 'running') {
+          item.status = 'skipped';
+          item.skip_reason = '已随变更单取消';
+          item.awaiting = null;
+          item.executed_action = null;
+        }
+      }
+      found.status = 'cancelled';
+      found.cancelled_at = timestamp;
+      found.cancelled_by = ctx.actorId;
+      found.cancel_reason = reason;
+      return found;
+    });
+    send(200, {
+      change: presentChange(cancelled),
+      note: '变更单已取消；运行中的重生成子任务已请求取消，其预留额度随子任务终态释放，不会重复扣费',
+    });
+  }
+
+  /**
+   * 补拍素材登记：needs_new_photo 跳过项（awaiting=material）上传新实拍后，项恢复为可执行的
+   * 文字重合成（以新素材为底图）；不伪造「实物已由模型更新」。
+   */
+  async function attachChangeItemMaterial(ctx, req, changeId, itemId, send) {
+    const body = await readJson(req);
+    const assetId = typeof body?.asset_id === 'string' ? body.asset_id.trim() : '';
+    if (assetId === '') throw new ApiError(422, 'INVALID_FIELD', 'asset_id 必填：请上传新实拍照片并登记其素材 ID');
+    const order = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      reconcileChangeOrder(data, found);
+      if (found.status === 'cancelled') throw new ApiError(409, 'CHANGE_CANCELLED', '变更单已取消');
+      const asset = data.assets?.[assetId] ?? null;
+      if (!asset || asset.tenant_id !== ctx.tenantId || asset.project_id !== found.project_id) {
+        throw new ApiError(404, 'NOT_FOUND', '素材不存在或不属于该项目');
+      }
+      if (asset.role_status !== 'active') {
+        throw new ApiError(409, 'ASSET_INACTIVE', '该素材已被替换，请使用当前有效素材');
+      }
+      mutateChangeItem(data, ctx, changeId, itemId, item => {
+        if (item.status !== 'skipped' || item.awaiting !== 'material') {
+          throw new ApiError(409, 'ITEM_NOT_AWAITING_MATERIAL', '该项当前不处于待补实拍状态', { status: item.status, awaiting: item.awaiting ?? null });
+        }
+        item.material_asset_id = assetId;
+        item.material_added_by = ctx.actorId;
+        item.material_added_at = now();
+        // 恢复为可执行：以新实拍为底图重合成文字层（数量类视觉核对要求保留）
+        item.status = 'pending';
+        item.action = 'text_recompose';
+        item.awaiting = null;
+        item.skip_reason = null;
+      });
+      return finalizeChangeOrder(data, found);
+    });
+    send(200, { change: presentChange(order) });
+  }
+
+  /** 数量/套装类变化的人工视觉核对：未确认前整单不允许 completed。
+   *  重合成质检 needs_review 的项（pending_adoption=true）：核对通过即选用新版本；
+   *  若报告存在硬失败（blocked）则拒绝——质检硬失败不能靠人工核对放行。 */
+  async function visualCheckItem(ctx, req, changeId, itemId, send) {
+    const body = await readJson(req);
+    const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
+    if (reason === '') throw new ApiError(422, 'INVALID_FIELD', 'reason 必填：请说明视觉数量核对结论');
+    if (reason.length > 300) throw new ApiError(422, 'INVALID_FIELD', 'reason 不能超过 300 个字符');
+    // 预检：判断核对通过时是否需要一并选用重合成产生的新版本
+    const precheck = await store.read(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      const item = (found.impact_items ?? []).find(entry => entry.id === itemId) ?? null;
+      if (!item) throw new ApiError(404, 'NOT_FOUND', '变更项不存在');
+      if (item.status !== 'done' || item.visual_check !== 'required') {
+        throw new ApiError(409, 'VISUAL_CHECK_NOT_REQUIRED', '该项无需视觉数量核对，或尚未执行完成');
+      }
+      if (!item.pending_adoption) return { adopt: false };
+      const run = data.runs?.[item.run_id] ?? null;
+      const version = run?.versions?.find(entry => entry.id === item.result_version_id) ?? null;
+      if (!run || !version) {
+        throw new ApiError(409, 'ADOPTION_STATE_INVALID', '重合成结果版本已不可用，请重试该项');
+      }
+      const deliverable = run.deliverables.find(entry => entry.deliverable_id === version.deliverable_id);
+      if (deliverable?.active_version_id === version.id) return { adopt: false };
+      const report = version.report_id ? data.quality_reports?.[version.report_id] ?? null : null;
+      if (!report) {
+        throw new ApiError(409, 'VERSION_REPORT_MISSING', '新版本没有关联的质量报告，不能选用；请重试该项');
+      }
+      if (report.decision === 'blocked') {
+        throw new ApiError(409, 'QA_BLOCKED_NOT_ADOPTABLE',
+          '新版本质检存在硬失败，不能靠人工核对放行；请改用重生成或调整事实后重试');
+      }
+      return { adopt: true, run_id: item.run_id, version_id: version.id };
+    });
+    if (precheck.adopt) {
+      await jobs.activateVersion(ctx, precheck.run_id, precheck.version_id);
+    }
+    const order = await store.mutate(data => {
+      const found = findChangeOrder(data, ctx, changeId);
+      mutateChangeItem(data, ctx, changeId, itemId, item => {
+        if (item.status !== 'done' || item.visual_check !== 'required') {
+          throw new ApiError(409, 'VISUAL_CHECK_NOT_REQUIRED', '该项无需视觉数量核对，或尚未执行完成');
+        }
+        item.visual_check = 'passed';
+        item.visual_check_by = ctx.actorId;
+        item.visual_check_at = now();
+        item.visual_check_reason = reason;
+        item.pending_adoption = false;
+      });
+      return finalizeChangeOrder(data, found);
+    });
+    send(200, { change: presentChange(order) });
+  }
+
+  async function listReplacementTodos(ctx, query, send) {
+    const projectId = String(query?.get('project_id') ?? '').trim() || null;
+    const result = await store.read(data => {
+      if (projectId) findProject(data, ctx, projectId);
+      const items = Object.values(data.replacement_todos ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId)
+        .filter(item => !projectId || item.project_id === projectId)
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
+      return { replacement_todos: items, total: items.length };
+    });
+    send(200, result);
+  }
+
+  /** 只记录「商家确认已在各渠道完成替换」；不接平台回执，绝不写「店铺同步成功」。 */
+  async function confirmReplacementTodo(ctx, req, todoId, send) {
+    const body = await readJson(req).catch(() => ({}));
+    const todo = await store.mutate(data => {
+      const found = data.replacement_todos?.[todoId] ?? null;
+      if (!found || found.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '替换待办不存在');
+      if (found.status === 'replaced') return found; // 重复确认幂等
+      found.status = 'replaced';
+      found.confirmed_by = ctx.actorId;
+      found.confirmed_at = now();
+      const note = typeof body?.note === 'string' ? body.note.trim() : '';
+      if (note) found.note = note.slice(0, 300);
+      return found;
+    });
+    send(200, { replacement_todo: todo });
+  }
+
   async function getReadiness(ctx, projectId, send) {
     const readiness = await store.read(data => {
       const project = findProject(data, ctx, projectId);
@@ -2102,12 +3006,18 @@ export function createApi({
     send(200, payload);
   }
 
-  /** 组装 draft 并做齐全部校验；persist 区分预览与冻结。 */
-  function buildSpecDraft(data, ctx, projectId, body, { persist }) {
+  /** 组装 draft 并做齐全部校验；persist 区分预览与冻结；truthVersion 指定冻结的事实版本（默认当前 head）。 */
+  function buildSpecDraft(data, ctx, projectId, body, { persist, truthVersion = null }) {
     const project = findProject(data, ctx, projectId);
     const assets = Object.values(data.assets)
       .filter(asset => asset.project_id === project.id && asset.tenant_id === ctx.tenantId);
-    const truth = latestTruth(data, project.id);
+    const truth = truthVersion === null || truthVersion === undefined
+      ? latestTruth(data, project.id)
+      : Object.values(data.truth_versions ?? {}).find(item =>
+          item.tenant_id === ctx.tenantId && item.project_id === project.id && item.version === Number(truthVersion)) ?? null;
+    if (truthVersion !== null && truthVersion !== undefined && !truth) {
+      throw new ApiError(404, 'NOT_FOUND', `指定事实版本 v${truthVersion} 不存在`);
+    }
     const readiness = computeReadiness(project, assets, truth);
     if (!truth) {
       throw new ApiError(409, 'READINESS_BLOCKED', '尚未确认商品事实，无法冻结生产配置', { blockers: readiness.blockers });
@@ -2352,31 +3262,26 @@ export function createApi({
     return jobs.listRuns(ctx, projectId).then(result => send(200, result));
   }
 
-  // M13（模块 05）：指定图片重生成。服务端从源 run 恢复冻结 spec 并自算单张报价，
-  // 客户端不需要（也不允许）先建报价；required 与 optional 交付物都可重生成。
-  async function regenerateRunRoute(ctx, req, runId, send) {
-    const body = await readJson(req);
-    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
-    if (idempotencyKey === '') {
-      throw new ApiError(400, 'MISSING_IDEMPOTENCY_KEY', '重生成必须带 Idempotency-Key，避免重复提交产生重复费用');
-    }
-    const deliverableId = String(body?.deliverable_id ?? '').trim();
-    if (deliverableId === '') {
-      throw new ApiError(422, 'DELIVERABLE_REQUIRED', '必须指定要重生成的交付物');
-    }
-    const sourceVersionId = typeof body?.source_version_id === 'string' && body.source_version_id.trim() !== ''
-      ? body.source_version_id.trim() : null;
+  /**
+   * 指定图片重生成发起核心：从源 run 恢复冻结 spec 并自算单张报价。
+   * M13 路由与 E03 变更单执行共用；幂等键由调用方给出。
+   * specVersion（E03）：变更单重生成使用按新事实冻结的快照，而非源任务旧 spec。
+   * expectedCredits（E03）：实际报价高于已确认报价时拒绝（在预留额度之前）。
+   */
+  async function launchRegeneration({ ctx, sourceRunId, deliverableId, sourceVersionId = null, idempotencyKey, specVersion = null, expectedCredits = null }) {
     const prepared = await store.read(data => {
       const sourceRun = Object.values(data.runs ?? {})
-        .find(item => item.tenant_id === ctx.tenantId && item.id === runId);
+        .find(item => item.tenant_id === ctx.tenantId && item.id === sourceRunId);
       if (!sourceRun) throw new ApiError(404, 'NOT_FOUND', '源任务不存在');
       const project = data.projects?.[sourceRun.project_id];
       if (!project || project.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '源任务所属项目不存在');
       if (!sourceRun.deliverables.some(item => item.deliverable_id === deliverableId)) {
         throw new ApiError(404, 'NOT_FOUND', '源任务中不存在该交付物');
       }
-      // 用源任务创建时冻结的 spec 版本，配置不会漂移
-      const spec = resolveSpecRecord(data, project.id, sourceRun.spec_ref?.version);
+      // 默认用源任务创建时冻结的 spec 版本，配置不会漂移；E03 变更单重生成用显式指定的新快照
+      const spec = specVersion === null || specVersion === undefined
+        ? resolveSpecRecord(data, project.id, sourceRun.spec_ref?.version)
+        : resolveSpecRecord(data, project.id, specVersion);
       let quote;
       try {
         quote = quoteFromSpec({
@@ -2388,6 +3293,13 @@ export function createApi({
         });
       } catch (error) {
         throw new ApiError(404, 'NOT_FOUND', `该交付物无法单独计价：${error.message}`);
+      }
+      if (expectedCredits !== null && expectedCredits !== undefined
+        && (quote.estimated_credits ?? 0) > expectedCredits) {
+        throw new ApiError(409, 'QUOTE_STALE',
+          `重生成实际报价 ${quote.estimated_credits} 超出已确认报价 ${expectedCredits}，请刷新报价并重新确认后再执行`, {
+            confirmed_credits: expectedCredits, actual_credits: quote.estimated_credits,
+          });
       }
       return { project, spec, quote };
     });
@@ -2405,17 +3317,39 @@ export function createApi({
       scenario,
       fingerprint: fingerprintOf({
         kind: 'regeneration',
-        source_run_id: runId,
+        source_run_id: sourceRunId,
         deliverable_id: deliverableId,
         source_version_id: sourceVersionId,
         spec_version: prepared.spec.version,
         scenario,
       }),
       regeneration: {
-        source_run_id: runId,
+        source_run_id: sourceRunId,
         deliverable_id: deliverableId,
         source_version_id: sourceVersionId,
+        // E03：变更单重生成显式冻结了新 spec 快照，报价一致性对照新快照而非源任务旧 spec
+        spec_override: specVersion != null,
       },
+    });
+    return { created, prepared };
+  }
+
+  // M13（模块 05）：指定图片重生成。服务端从源 run 恢复冻结 spec 并自算单张报价，
+  // 客户端不需要（也不允许）先建报价；required 与 optional 交付物都可重生成。
+  async function regenerateRunRoute(ctx, req, runId, send) {
+    const body = await readJson(req);
+    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+    if (idempotencyKey === '') {
+      throw new ApiError(400, 'MISSING_IDEMPOTENCY_KEY', '重生成必须带 Idempotency-Key，避免重复提交产生重复费用');
+    }
+    const deliverableId = String(body?.deliverable_id ?? '').trim();
+    if (deliverableId === '') {
+      throw new ApiError(422, 'DELIVERABLE_REQUIRED', '必须指定要重生成的交付物');
+    }
+    const sourceVersionId = typeof body?.source_version_id === 'string' && body.source_version_id.trim() !== ''
+      ? body.source_version_id.trim() : null;
+    const { created, prepared } = await launchRegeneration({
+      ctx, sourceRunId: runId, deliverableId, sourceVersionId, idempotencyKey,
     });
     send(created.replayed ? 200 : 201, {
       run: created.run,

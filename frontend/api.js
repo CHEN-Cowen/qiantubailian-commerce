@@ -230,4 +230,33 @@ export const api = {
   downloadExportUrl: exportId => `/api/exports/${encodeURIComponent(exportId)}/download`,
   listGenerationRecords: runId => call(`/api/runs/${encodeURIComponent(runId)}/generation-records`),
   reconcileRun: (runId, body) => call(`/api/runs/${encodeURIComponent(runId)}/reconcile`, { method: 'POST', json: body }),
+  // E03：商品变更更新助手（预览不落库；确认必须带 Idempotency-Key + base_truth_version 乐观锁）
+  previewChange: (projectId, body) => call(
+    `/api/projects/${encodeURIComponent(projectId)}/changes/preview`, { method: 'POST', json: body }),
+  confirmChange: (projectId, body, idempotencyKey) => call(
+    `/api/projects/${encodeURIComponent(projectId)}/changes`,
+    { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, json: body }),
+  listChanges: projectId => call(`/api/projects/${encodeURIComponent(projectId)}/changes`),
+  getChange: changeId => call(`/api/changes/${encodeURIComponent(changeId)}`),
+  executeChange: (changeId, body = {}) => call(
+    `/api/changes/${encodeURIComponent(changeId)}/execute`, { method: 'POST', json: body }),
+  retryChange: (changeId, body = {}) => call(
+    `/api/changes/${encodeURIComponent(changeId)}/retry`, { method: 'POST', json: body }),
+  cancelChange: (changeId, body = {}) => call(
+    `/api/changes/${encodeURIComponent(changeId)}/cancel`, { method: 'POST', json: body }),
+  visualCheckItem: (changeId, itemId, body) => call(
+    `/api/changes/${encodeURIComponent(changeId)}/items/${encodeURIComponent(itemId)}/visual-check`,
+    { method: 'POST', json: body }),
+  attachChangeItemMaterial: (changeId, itemId, body) => call(
+    `/api/changes/${encodeURIComponent(changeId)}/items/${encodeURIComponent(itemId)}/material`,
+    { method: 'POST', json: body }),
+  listReplacementTodos: ({ projectId } = {}) => {
+    const query = new URLSearchParams();
+    if (projectId) query.set('project_id', String(projectId));
+    const suffix = query.toString() ? `?${query}` : '';
+    return call(`/api/replacement-todos${suffix}`);
+  },
+  /** 只登记「商家确认已在各渠道手动替换旧图」，不代表平台已同步。 */
+  confirmReplacementTodo: (todoId, body = {}) => call(
+    `/api/replacement-todos/${encodeURIComponent(todoId)}/confirm`, { method: 'POST', json: body }),
 };
