@@ -29,6 +29,10 @@ import {
   validateResolveInput,
 } from './skucheck.mjs';
 import {
+  OUT_OF_SCOPE_CATEGORIES, QUESTION_CATEGORIES, QUESTION_RESULTS, QUESTION_LIMITS,
+  analyzeQuestion, presentQuestionGroup, suggestCategory, validateQuestionInput,
+} from './question.mjs';
+import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
 import { PRICE_VERSION, quoteFromSpec, quoteMatchesSpec, quoteStatus } from './pricing.mjs';
@@ -611,6 +615,18 @@ export function createApi({
       }
       throw new ApiError(404, 'NOT_FOUND', '接口不存在');
     }
+    // E05：售前问题组（归类改正/确认；确认不等于事实已补齐）
+    if (resource === 'question-groups') {
+      if (rest.length === 2) {
+        requireMethod(method, ['GET', 'HEAD']);
+        return getQuestionGroup(ctx, rest[1], send);
+      }
+      if (rest.length === 3 && rest[2] === 'review') {
+        requireMethod(method, ['POST']);
+        return reviewQuestionGroup(ctx, req, rest[1], send);
+      }
+      throw new ApiError(404, 'NOT_FOUND', '接口不存在');
+    }
     if (resource !== 'projects') throw new ApiError(404, 'NOT_FOUND', '接口不存在');
 
     if (rest.length === 1) {
@@ -666,6 +682,15 @@ export function createApi({
       if (method === 'POST') return createSkuExportRoute(ctx, req, projectId, send);
       requireMethod(method, ['GET', 'HEAD', 'POST']);
       return listSkuExportsRoute(ctx, projectId, send);
+    }
+    // E05：售前问题分析（幂等入库）与问题组列表
+    if (rest.length === 4 && section === 'questions' && third === 'analyze') {
+      requireMethod(method, ['POST']);
+      return analyzeQuestionRoute(ctx, req, projectId, send);
+    }
+    if (rest.length === 3 && section === 'question-groups') {
+      requireMethod(method, ['GET', 'HEAD']);
+      return listQuestionGroups(ctx, projectId, query, send);
     }
     if (rest.length === 3 && section === 'readiness') {
       requireMethod(method, ['GET', 'HEAD']);
@@ -870,6 +895,8 @@ export function createApi({
         return write ? 'project:write' : 'project:read';
       // E04：核对问题查询走 project:read；人工复核/更正归属是内容写操作
       case 'check-issues': return write ? 'project:write' : 'project:read';
+      // E05：售前问题组查询走 project:read；分析入库/归类改正/确认是内容写操作
+      case 'question-groups': return write ? 'project:write' : 'project:read';
       case 'projects': {
         if (second === undefined) return write ? 'project:create' : 'project:read';
         if (third === 'assets') return write ? 'asset:write' : 'project:read';
@@ -1876,6 +1903,233 @@ export function createApi({
   async function listSkuExportsRoute(ctx, projectId, send) {
     const result = await jobs.listExports(ctx, { projectId });
     send(200, { ...result, exports: result.exports.filter(item => item.kind === 'sku_export') });
+  }
+
+  // ---------- E05：售前问题分流 ----------
+
+  /**
+   * 问题组引用的 SKU 在当前档案里重新定位。档案更新会重生成 SKU id，
+   * 因此 id 失效时按商家 SKU 编号回落；都找不到返回 null（不伪造归属）。
+   */
+  function resolveQuestionSku(profile, group) {
+    const skus = profile?.skus ?? [];
+    const byId = group.sku_id ? skus.find(item => item.id === group.sku_id) ?? null : null;
+    if (byId) return byId;
+    if (group.sku_code) return skus.find(item => item.sku_code === group.sku_code) ?? null;
+    return null;
+  }
+
+  /** 复用候选只取当前通过全部导出闸口的版本；非商品图问题与无 SKU 问题不列。 */
+  async function reusableVersionsFor(ctx, projectId, skuId, category) {
+    if (!skuId || OUT_OF_SCOPE_CATEGORIES.includes(category)) return [];
+    const plan = await jobs.planSkuAvailability(ctx, projectId, skuId);
+    return plan.ok ? plan.included : [];
+  }
+
+  /** 分析结果绑定的档案/事实版本；之后任一版本更新都提示需要重新分析，旧确认不自动放行。 */
+  function questionStale(data, project, group) {
+    const truth = headTruthOf(data, project);
+    if ((group.facts_snapshot?.truth_version ?? null) !== (truth?.version ?? null)) return true;
+    if (!group.sku_id) return false;
+    const profile = headSkuProfileOf(data, project);
+    return (group.facts_snapshot?.sku_profile_version ?? null) !== (profile?.version ?? null);
+  }
+
+  /**
+   * 分析售前问题：输入先脱敏校验（含个人信息直接拒绝入库），再按当前 SKU/事实做五类分流。
+   * 幂等键必填：同一键重放返回原问题组；键被不同请求复用 → 409。
+   * 分析入库不消耗生图额度，也不自动补事实。
+   */
+  async function analyzeQuestionRoute(ctx, req, projectId, send) {
+    const body = await readJson(req);
+    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+    if (idempotencyKey === '') {
+      throw new ApiError(400, 'MISSING_IDEMPOTENCY_KEY', '分析售前问题必须带 Idempotency-Key，避免同一问题重复入库');
+    }
+    const input = validateQuestionInput(body);
+    const fingerprint = fingerprintOf({ project_id: projectId, body });
+    // 先只读确认项目与 SKU 身份，再用导出闸口算出「已有图可复用」候选
+    const scoped = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const profile = headSkuProfileOf(data, project);
+      let sku = null;
+      if (input.skuId) {
+        sku = (profile?.skus ?? []).find(item => item.id === input.skuId) ?? null;
+        if (!sku) throw new ApiError(404, 'NOT_FOUND', '指定的 SKU 不在当前档案内');
+      }
+      return { projectId: project.id, sku };
+    });
+    const category = suggestCategory(input.text);
+    const reusableVersions = await reusableVersionsFor(ctx, scoped.projectId, scoped.sku?.id ?? null, category);
+    const outcome = await store.mutate(data => {
+      const project = findProject(data, ctx, projectId);
+      const existing = Object.values(data.question_groups ?? {}).find(item =>
+        item.tenant_id === ctx.tenantId && item.idempotency_key === idempotencyKey) ?? null;
+      if (existing) {
+        if (existing.idempotency_fingerprint !== fingerprint) {
+          throw new ApiError(409, 'IDEMPOTENCY_KEY_CONFLICT',
+            '该 Idempotency-Key 已用于另一条不同的问题，请更换后再提交', { group_id: existing.id });
+        }
+        return { group: existing, replayed: true };
+      }
+      const profile = headSkuProfileOf(data, project);
+      const truth = headTruthOf(data, project);
+      const sku = input.skuId ? (profile?.skus ?? []).find(item => item.id === input.skuId) ?? null : null;
+      if (input.skuId && !sku) throw new ApiError(404, 'NOT_FOUND', '指定的 SKU 不在当前档案内');
+      const analysis = analyzeQuestion({ category, sku, skuProfile: profile, truth, reusableVersions });
+      // 同一项目同一问题文本再次出现：关联到最近一条，提示先看现有适用图（不合并、不覆盖历史）
+      const prior = Object.values(data.question_groups ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === project.id
+          && item.text.trim() === input.text)
+        .sort((left, right) => String(right.created_at ?? '').localeCompare(String(left.created_at ?? '')))[0] ?? null;
+      const id = newId('qg');
+      const timestamp = now();
+      const record = {
+        id,
+        tenant_id: ctx.tenantId,
+        project_id: project.id,
+        text: input.text,
+        sku_id: sku?.id ?? null,
+        sku_code: sku?.sku_code ?? null,
+        category_suggested: category,
+        category_final: category,
+        frequency: input.frequency,
+        frequency_source: input.frequency ? 'manual' : null,
+        result: analysis.result,
+        detail: analysis.detail,
+        duplicate_of: prior?.id ?? null,
+        facts_snapshot: {
+          truth_version: truth?.version ?? null,
+          sku_profile_version: profile?.version ?? null,
+        },
+        status: 'open',
+        confirmed_at: null,
+        confirmed_by: null,
+        review_history: [],
+        idempotency_key: idempotencyKey,
+        idempotency_fingerprint: fingerprint,
+        created_by: ctx.actorId,
+        created_at: timestamp,
+        updated_at: timestamp,
+      };
+      data.question_groups[id] = record;
+      return { group: record, replayed: false, stale: false };
+    });
+    send(outcome.replayed ? 200 : 201, {
+      group: presentQuestionGroup(outcome.group),
+      facts_stale: outcome.stale ?? false,
+      replayed: outcome.replayed,
+    });
+  }
+
+  async function listQuestionGroups(ctx, projectId, query, send) {
+    const result = await store.read(data => {
+      const project = findProject(data, ctx, projectId);
+      const statusFilter = typeof query?.get === 'function' ? query.get('status') ?? null : null;
+      const groups = Object.values(data.question_groups ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.project_id === project.id)
+        .filter(item => !statusFilter || item.status === statusFilter)
+        .sort((left, right) => String(right.created_at ?? '').localeCompare(String(left.created_at ?? '')))
+        .map(item => ({
+          ...presentQuestionGroup(item),
+          facts_stale: questionStale(data, project, item),
+        }));
+      const summary = {
+        total: groups.length,
+        open: groups.filter(item => item.status === 'open').length,
+        confirmed: groups.filter(item => item.status === 'confirmed').length,
+        by_result: Object.fromEntries(QUESTION_RESULTS.map(key =>
+          [key, groups.filter(item => item.result === key).length])),
+      };
+      return { project_id: project.id, groups, summary };
+    });
+    send(200, result);
+  }
+
+  async function getQuestionGroup(ctx, groupId, send) {
+    const result = await store.read(data => {
+      const group = data.question_groups?.[groupId] ?? null;
+      if (!group || group.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '售前问题不存在');
+      const project = data.projects?.[group.project_id] ?? null;
+      if (!project) throw new ApiError(404, 'NOT_FOUND', '售前问题所属项目不存在');
+      return {
+        group: presentQuestionGroup(group),
+        facts_stale: questionStale(data, project, group),
+      };
+    });
+    send(200, result);
+  }
+
+  /**
+   * 归类改正 / 确认结果：
+   * - correct：按当前档案与事实重跑确定性分析（商家可改正系统归类），并清掉旧确认；
+   * - confirm：确认推荐图种与提纲；分析所依据的档案/事实已更新（stale）时拒绝确认，要求重新分析。
+   */
+  async function reviewQuestionGroup(ctx, req, groupId, send) {
+    const body = await readJson(req);
+    const action = String(body?.action ?? '').trim();
+    if (action !== 'confirm' && action !== 'correct') {
+      throw new ApiError(422, 'INVALID_FIELD', 'action 必须为 confirm（确认结果）或 correct（改正归类）');
+    }
+    const allowed = [...QUESTION_CATEGORIES, ...OUT_OF_SCOPE_CATEGORIES];
+    let category = null;
+    if (action === 'correct') {
+      category = String(body?.category ?? '').trim();
+      if (!allowed.includes(category)) {
+        throw new ApiError(422, 'INVALID_FIELD', `category 必须为 ${allowed.join(' / ')} 之一`, { allowed });
+      }
+    }
+    const scoped = await store.read(data => {
+      const group = data.question_groups?.[groupId] ?? null;
+      if (!group || group.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '售前问题不存在');
+      const project = data.projects?.[group.project_id] ?? null;
+      if (!project) throw new ApiError(404, 'NOT_FOUND', '售前问题所属项目不存在');
+      const sku = resolveQuestionSku(headSkuProfileOf(data, project), group);
+      return { projectId: project.id, sku, group };
+    });
+    const reusableVersions = action === 'correct'
+      ? await reusableVersionsFor(ctx, scoped.projectId, scoped.sku?.id ?? null, category)
+      : [];
+    const outcome = await store.mutate(data => {
+      const group = data.question_groups?.[groupId] ?? null;
+      if (!group || group.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '售前问题不存在');
+      const project = findProject(data, ctx, group.project_id);
+      if (action === 'confirm' && questionStale(data, project, group)) {
+        throw new ApiError(409, 'QUESTION_STALE',
+          '该问题的分析基于旧的档案/事实版本，确认已不可信；请改正归类以按当前版本重新分析', {
+            facts_snapshot: group.facts_snapshot ?? null,
+          });
+      }
+      const timestamp = now();
+      if (action === 'correct') {
+        const profile = headSkuProfileOf(data, project);
+        const truth = headTruthOf(data, project);
+        const sku = resolveQuestionSku(profile, group);
+        const analysis = analyzeQuestion({ category, sku, skuProfile: profile, truth, reusableVersions });
+        group.category_final = category;
+        group.result = analysis.result;
+        group.detail = analysis.detail;
+        group.sku_id = sku?.id ?? group.sku_id ?? null;
+        group.sku_code = sku?.sku_code ?? group.sku_code ?? null;
+        group.facts_snapshot = {
+          truth_version: truth?.version ?? null,
+          sku_profile_version: profile?.version ?? null,
+        };
+        group.status = 'open';
+        group.confirmed_at = null;
+        group.confirmed_by = null;
+      } else {
+        group.status = 'confirmed';
+        group.confirmed_at = timestamp;
+        group.confirmed_by = ctx.actorId;
+      }
+      group.review_history = [...(group.review_history ?? []).slice(-9), {
+        action, category, actor: ctx.actorId, at: timestamp, result: group.result,
+      }];
+      group.updated_at = timestamp;
+      return { group: { ...group }, stale: questionStale(data, project, group) };
+    });
+    send(200, { group: presentQuestionGroup(outcome.group), facts_stale: outcome.stale });
   }
 
   // ---------- E02：图片版本依赖与导出渠道 ----------

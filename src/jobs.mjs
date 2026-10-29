@@ -3396,6 +3396,48 @@ export function createJobs({
   }
 
   /**
+   * 收集质量报告与当前有效性。导出闸口与售前复用判定共用同一份有效性口径，
+   * 避免「导出被排除、售前却宣称可复用」这类自相矛盾。
+   */
+  async function collectReportValidities(data, runs) {
+    const reports = {};
+    const validities = {};
+    for (const run of runs) {
+      for (const version of run.versions ?? []) {
+        const report = data.quality_reports?.[version.report_id] ?? null;
+        if (report && !reports[report.id]) {
+          reports[report.id] = report;
+          validities[report.id] = await reportValidityIn(data, report);
+        }
+      }
+    }
+    return { reports, validities };
+  }
+
+  /**
+   * E05：只读地判定某 SKU 当前可复用的版本（与按 SKU 导出同一闸口）。
+   * 不落库、不结算、不扣额度；失效或未过闸口的旧版本不会出现在 included 里。
+   */
+  async function planSkuAvailability(ctx, projectId, skuId) {
+    if (!skuId) return { ok: false, code: 'SKU_REQUIRED', included: [], excluded: [] };
+    return store.read(async data => {
+      const project = findProjectIn(data, ctx, projectId);
+      const skuProfile = Object.values(data.sku_profiles ?? {})
+        .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id)
+        .sort((left, right) => right.version - left.version)[0] ?? null;
+      if (!skuProfile) return { ok: false, code: 'NO_SKU_PROFILE', included: [], excluded: [] };
+      const runs = Object.values(data.runs ?? {})
+        .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+      const dependencies = Object.values(data.image_dependencies ?? {})
+        .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+      const issues = Object.values(data.check_issues ?? {})
+        .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
+      const { reports, validities } = await collectReportValidities(data, runs);
+      return planSkuExport({ project, skuId, skuProfile, runs, dependencies, issues, reports, validities });
+    });
+  }
+
+  /**
    * E04：按 SKU 导出。闸口由 planSkuExport 统一判定：生效归属、当前选用、报告可发布且有效、
    * 无未解除阻断级问题、成品权益已结算。归属其他 SKU 的版本绝不混入包内；
    * 归属不明与被闸口排除的版本列入 missing（附原因），不用抽检替代硬检查。
@@ -3419,21 +3461,11 @@ export function createJobs({
           settleFinishedImages(data, run, at);
         }
       }
+      const { reports, validities } = await collectReportValidities(data, runs);
       const dependencies = Object.values(data.image_dependencies ?? {})
         .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
       const issues = Object.values(data.check_issues ?? {})
         .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id);
-      const reports = {};
-      const validities = {};
-      for (const run of runs) {
-        for (const version of run.versions ?? []) {
-          const report = data.quality_reports?.[version.report_id] ?? null;
-          if (report && !reports[report.id]) {
-            reports[report.id] = report;
-            validities[report.id] = await reportValidityIn(data, report);
-          }
-        }
-      }
       const plan = planSkuExport({ project, skuId, skuProfile, runs, dependencies, issues, reports, validities });
       if (!plan.ok) {
         throw new ApiError(plan.code === 'SKU_NOT_FOUND' ? 404 : 409, plan.code, plan.message, {
@@ -3514,7 +3546,7 @@ export function createJobs({
     listRunVersions, readVersionContent, activateVersion, createExport, listExports, getExport, readExportPackage,
     textLayersOfDeliverable, editDeliverableText, recomposeVersionFacts,
     createVideoPlan, listVideoPlans, getVideoPlan, evaluateVideoPlanFrames, generateVideo,
-    createJointExport, createBatchExport, createSkuExport,
+    createJointExport, createBatchExport, createSkuExport, planSkuAvailability,
     get activeSubscriptions() { return listeners.size; },
   };
 }

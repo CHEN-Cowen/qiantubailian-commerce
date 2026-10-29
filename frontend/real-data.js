@@ -356,12 +356,16 @@ function renderTruth() {
     <section class="truth-section" id="check-section">
       ${renderCheckSection()}
     </section>
+    <section class="truth-section" id="question-section">
+      ${renderQuestionSection()}
+    </section>
     <section class="truth-section">
       <h3>版本历史</h3>
       ${history ? `<ul class="truth-history">${history}</ul>` : '<p class="truth-empty">尚无事实版本。</p>'}
     </section>`;
   void loadChanges(project.id);
   void loadSkuChecks(project.id);
+  void loadQuestions(project.id);
 }
 
 // ---------- E01：SKU 档案板块 ----------
@@ -1499,6 +1503,258 @@ async function onCheckClick(action, trigger) {
   }
 }
 
+// ---------- E05：售前问题分流与补图建议 ----------
+
+const QUESTION_CATEGORY_LABELS = {
+  quantity: '数量/包含物', size: '尺寸', spec_diff: '规格差别', usage: '使用方式', other: '其他',
+  logistics: '物流/配送', payment: '支付/退款', inventory: '库存/缺货', theme: '店铺主题/页面',
+};
+const QUESTION_CATEGORY_OPTIONS = [
+  'quantity', 'size', 'spec_diff', 'usage', 'other', 'logistics', 'payment', 'inventory', 'theme',
+];
+const QUESTION_RESULT_META = {
+  reuse_existing: { label: '已有内容可复用', tone: 'ok' },
+  missing_facts: { label: '缺少依据', tone: 'amber' },
+  text_suggestion: { label: '文字/位置建议', tone: 'neutral' },
+  needs_explainer: { label: '需要补图', tone: 'amber' },
+  out_of_scope: { label: '不属于商品图问题', tone: 'neutral' },
+};
+
+function emptyQuestionState(projectId) {
+  return {
+    projectId, loading: true, error: '', notice: '', groups: [], summary: {},
+    submitting: false, busyId: '',
+    draft: { text: '', skuId: '', count: '', source: '' },
+  };
+}
+
+function newQuestionIdempotencyKey() {
+  return `q-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+}
+
+async function loadQuestions(projectId) {
+  if (!state.questions || state.questions.projectId !== projectId) {
+    state.questions = emptyQuestionState(projectId);
+  }
+  const area = state.questions;
+  area.loading = true;
+  area.error = '';
+  rerenderQuestionSection();
+  try {
+    const result = await api.listQuestionGroups(projectId);
+    if (state.questions !== area) return; // 已切换项目，丢弃过期结果
+    area.groups = result.groups ?? [];
+    area.summary = result.summary ?? {};
+    area.loading = false;
+  } catch (error) {
+    if (state.questions !== area) return;
+    area.loading = false;
+    area.error = errorText(error);
+  }
+  rerenderQuestionSection();
+}
+
+/** 重渲染前把输入中的内容收回草稿，避免刷新结果时丢掉商家正在填的问题。 */
+function collectQuestionDraft() {
+  const area = state.questions;
+  if (!area) return;
+  const text = $('#q-text');
+  if (text) area.draft.text = text.value;
+  const sku = $('#q-sku');
+  if (sku) area.draft.skuId = sku.value;
+  const count = $('#q-count');
+  if (count) area.draft.count = count.value;
+  const source = $('#q-source');
+  if (source) area.draft.source = source.value;
+}
+
+function rerenderQuestionSection() {
+  const node = $('#question-section');
+  if (!node) return;
+  collectQuestionDraft();
+  node.innerHTML = renderQuestionSection();
+}
+
+function renderQuestionSection() {
+  const area = state.questions;
+  if (!area || area.projectId !== state.detail?.project?.id) {
+    return '<h3>售前问题与补图建议</h3><p class="truth-hint">正在读取售前问题…</p>';
+  }
+  const parts = ['<h3>售前问题与补图建议</h3>'];
+  parts.push('<p class="truth-hint">只支持手动填写/粘贴已脱敏的问题；不接客服账号、不导入聊天记录。请输入前去掉姓名、电话、地址与订单号。没有真实频次就留空：系统只显示「输入的问题」，不会标注高频。分析不消耗生图额度，也不会替你补事实。</p>');
+  if (area.error) parts.push(`<p class="truth-error" role="alert">${escapeHtml(area.error)}</p>`);
+  if (area.notice) parts.push(`<p class="truth-hint chg-notice">${escapeHtml(area.notice)}</p>`);
+  parts.push(renderQuestionForm(area));
+  if (area.loading) parts.push('<div class="loading-line"></div>');
+  else parts.push(renderQuestionGroups(area));
+  return parts.join('');
+}
+
+function renderQuestionForm(area) {
+  const skus = state.detail?.skuData?.profile?.skus ?? [];
+  const draft = area.draft ?? {};
+  const skuOptions = ['<option value="">不指定 SKU（数量/尺寸/规格问题需指定）</option>']
+    .concat(skus.map(sku => `<option value="${escapeHtml(sku.id)}"${draft.skuId === sku.id ? ' selected' : ''}>${escapeHtml(sku.sku_code)} ${escapeHtml(sku.label)}</option>`));
+  return `<div class="q-form">
+    <textarea id="q-text" rows="3" maxlength="500" placeholder="例如：收到之后到底有几个？配件都包含哪些？">${escapeHtml(draft.text ?? '')}</textarea>
+    <div class="q-form-row">
+      <select id="q-sku">${skuOptions.join('')}</select>
+      <details class="q-freq"><summary>人工频次（可选）</summary>
+        <p class="chg-meta">仅在你有真实来源时填写；系统会标注「人工提供」，不猜测频率。</p>
+        <label>次数<input id="q-count" type="number" min="1" max="9999" step="1" value="${escapeHtml(String(draft.count ?? ''))}"></label>
+        <label>来源<input id="q-source" type="text" maxlength="50" placeholder="如：人工翻看客服记录" value="${escapeHtml(draft.source ?? '')}"></label>
+      </details>
+      <button type="button" class="text-button" data-action="q-analyze"${area.submitting ? ' disabled' : ''}>${area.submitting ? '分析中…' : '分析问题'}</button>
+      <button type="button" class="text-button" data-action="q-refresh">刷新</button>
+    </div>
+  </div>`;
+}
+
+function renderQuestionGroups(area) {
+  if (area.groups.length === 0) return '<p class="truth-empty">尚无售前问题。输入一条顾客反复问到的问题，看看能否用现有图或已确认事实回答。</p>';
+  const summary = area.summary ?? {};
+  const summaryLine = Object.entries(QUESTION_RESULT_META).map(([key, meta]) =>
+    `<span class="wb-status ${meta.tone}">${escapeHtml(meta.label)}：${summary.by_result?.[key] ?? 0}</span>`).join('');
+  const rows = area.groups.map(group => renderQuestionGroup(area, group)).join('');
+  return `<div class="skc-summary">${summaryLine}</div><ul class="chg-items q-list">${rows}</ul>`;
+}
+
+function renderQuestionGroup(area, group) {
+  const meta = QUESTION_RESULT_META[group.result] ?? { label: group.result, tone: 'neutral' };
+  const confirmed = group.status === 'confirmed';
+  const stale = group.facts_stale === true;
+  const statusTone = confirmed ? 'ok' : (stale ? 'bad' : 'amber');
+  const statusLabel = confirmed ? '已确认' : (stale ? '分析已过期' : '待确认');
+  const categoryOptions = QUESTION_CATEGORY_OPTIONS.map(key =>
+    `<option value="${key}"${key === group.category_final ? ' selected' : ''}>${escapeHtml(QUESTION_CATEGORY_LABELS[key] ?? key)}</option>`).join('');
+  const head = `<div class="q-head">
+    <span class="wb-status ${statusTone}">${statusLabel}</span>
+    <span class="wb-status ${meta.tone}">${escapeHtml(group.result_label ?? meta.label)}</span>
+    <span class="wb-status neutral">${escapeHtml(group.category_label ?? QUESTION_CATEGORY_LABELS[group.category_final] ?? group.category_final)}</span>
+    <span class="chg-meta">${escapeHtml(group.frequency_label ?? '')}${group.sku_code ? ` · SKU ${escapeHtml(group.sku_code)}` : ''} · ${escapeHtml(formatTime(group.created_at))}</span>
+  </div>
+  <p class="q-text-line">${escapeHtml(group.text)}</p>`;
+  const detail = renderQuestionDetail(group);
+  const actions = `<div class="q-form-row">
+    <select class="q-cat">${categoryOptions}</select>
+    <button type="button" class="text-button" data-action="q-correct" data-group-id="${escapeHtml(group.id)}"${area.busyId === group.id ? ' disabled' : ''}>改正归类并重新分析</button>
+    <button type="button" class="text-button" data-action="q-confirm" data-group-id="${escapeHtml(group.id)}"${(confirmed || stale) ? ' disabled' : ''}>${confirmed ? '已确认' : (stale ? '需先重新分析' : '确认图种与提纲')}</button>
+  </div>`;
+  const dup = group.duplicate_of
+    ? `<p class="truth-hint">该问题此前出现过（${escapeHtml(group.duplicate_of)}）：先看现有适用图，再决定是否重复补图。</p>`
+    : '';
+  return `<li class="chg-item q-group" data-group-id="${escapeHtml(group.id)}">${head}${dup}${detail}${actions}</li>`;
+}
+
+function renderQuestionDetail(group) {
+  const detail = group.detail ?? {};
+  if (group.result === 'out_of_scope') {
+    return `<p class="skc-message">${escapeHtml(detail.scope_note ?? '该问题不属于商品图范围。')}</p>`;
+  }
+  if (group.result === 'missing_facts') {
+    const items = (detail.missing ?? []).map(item => `<li>${escapeHtml(item.message ?? item.code)}</li>`).join('');
+    return `<div class="q-block"><b>需要先补齐的资料</b><ul class="truth-warnings">${items}</ul>
+      <p class="chg-meta">补齐后请改正归类触发重新分析；系统不会替你推测尺寸、用法或适配结论。</p></div>`;
+  }
+  if (group.result === 'reuse_existing') {
+    const cards = (detail.reusable ?? []).map(item => `<li>
+      <button type="button" class="text-button" data-action="q-open-workbench" data-run-id="${escapeHtml(item.run_id ?? '')}">${escapeHtml(item.deliverable_label ?? item.deliverable_id)} · v${escapeHtml(String(item.version_number ?? '—'))}</button>
+      ${item.run_id && item.version_id ? `<img class="skc-preview" src="${workVersionImageUrl(item.run_id, item.version_id)}" alt="可复用版本图（服务端按结算状态加水印）" loading="lazy">` : ''}
+    </li>`).join('');
+    return `<div class="q-block"><b>现有可用图片</b><ul class="q-reuse">${cards}</ul>
+      <p class="chg-meta">${escapeHtml(detail.note ?? '')}</p></div>`;
+  }
+  if (group.result === 'text_suggestion') {
+    const texts = (detail.suggestion?.texts ?? []).map(text => `<li>${escapeHtml(text)}</li>`).join('');
+    return `<div class="q-block"><b>可直接使用的文字（逐字引用已确认事实）</b><ul>${texts}</ul>
+      <p class="chg-meta">位置建议：${escapeHtml(detail.suggestion?.position ?? '')}</p>
+      <p class="chg-meta">${escapeHtml(detail.suggestion?.note ?? '')}</p></div>`;
+  }
+  if (group.result === 'needs_explainer') {
+    const outline = (detail.outline ?? []).map(line => `<li>${escapeHtml(line)}</li>`).join('');
+    return `<div class="q-block"><b>建议补图：${escapeHtml(detail.explainer_kind_label ?? detail.explainer_kind ?? '说明图')}</b>
+      <ul>${outline || '<li>暂无可引用的档案条目</li>'}</ul>
+      <p class="chg-meta">${escapeHtml(detail.note ?? '')}</p></div>`;
+  }
+  return '';
+}
+
+async function onQuestionClick(action, trigger) {
+  const project = state.detail?.project;
+  if (!project) return;
+  if (!state.questions || state.questions.projectId !== project.id) state.questions = emptyQuestionState(project.id);
+  const area = state.questions;
+  if (action === 'q-refresh') { await loadQuestions(project.id); return; }
+  if (action === 'q-open-workbench') {
+    window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: project.id, runId: trigger.dataset.runId } }));
+    return;
+  }
+  if (action === 'q-analyze') {
+    collectQuestionDraft();
+    const text = String(area.draft.text ?? '').trim();
+    if (!text) { area.error = '请先输入一条顾客问题'; rerenderQuestionSection(); return; }
+    const count = String(area.draft.count ?? '').trim();
+    const source = String(area.draft.source ?? '').trim();
+    if (Boolean(count) !== Boolean(source)) {
+      area.error = '人工频次需要同时填写次数与来源；没有真实频次请全部留空，系统会如实标注「未提供频次」';
+      rerenderQuestionSection();
+      return;
+    }
+    const body = { text };
+    if (area.draft.skuId) body.sku_id = area.draft.skuId;
+    if (count && source) body.frequency = { count: Number(count), source };
+    area.submitting = true;
+    area.error = '';
+    area.notice = '';
+    rerenderQuestionSection();
+    try {
+      const result = await api.analyzeQuestion(project.id, body, newQuestionIdempotencyKey());
+      if (state.questions !== area) return;
+      area.draft = { text: '', skuId: area.draft.skuId, count: '', source: '' };
+      area.notice = `已分析：${result.group?.result_label ?? ''}`;
+      await loadQuestions(project.id);
+    } catch (error) {
+      if (state.questions !== area) return;
+      area.error = errorText(error); // 如实展示 PII_DETECTED / INVALID_FIELD / MISSING_IDEMPOTENCY_KEY 等
+    }
+    if (state.questions !== area) return;
+    area.submitting = false;
+    rerenderQuestionSection();
+    return;
+  }
+  if (action === 'q-correct') {
+    const row = trigger.closest('.q-group');
+    const category = row?.querySelector('.q-cat')?.value ?? '';
+    area.busyId = trigger.dataset.groupId;
+    area.error = '';
+    try {
+      await api.reviewQuestionGroup(trigger.dataset.groupId, { action: 'correct', category });
+      state.toast('已按改正后的归类重新分析');
+      await loadQuestions(project.id);
+    } catch (error) {
+      if (state.questions !== area) return;
+      area.error = errorText(error);
+      rerenderQuestionSection();
+    }
+    if (state.questions === area) area.busyId = '';
+    return;
+  }
+  if (action === 'q-confirm') {
+    area.busyId = trigger.dataset.groupId;
+    area.error = '';
+    try {
+      await api.reviewQuestionGroup(trigger.dataset.groupId, { action: 'confirm' });
+      state.toast('已确认（绑定当前档案与事实版本）');
+      await loadQuestions(project.id);
+    } catch (error) {
+      if (state.questions !== area) return;
+      area.error = errorText(error); // 如实展示 QUESTION_STALE 等
+      rerenderQuestionSection();
+    }
+    if (state.questions === area) area.busyId = '';
+  }
+}
+
 function onTruthClick(event) {
   const trigger = event.target.closest('[data-action]');
   if (!trigger) return;
@@ -1509,6 +1765,10 @@ function onTruthClick(event) {
   }
   if (action.startsWith('skc-')) {
     void onCheckClick(action, trigger);
+    return;
+  }
+  if (action.startsWith('q-')) {
+    void onQuestionClick(action, trigger);
     return;
   }
   if (action.startsWith('sku-')) {

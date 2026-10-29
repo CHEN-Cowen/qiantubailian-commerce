@@ -216,3 +216,46 @@
 ### 提交与推送
 
 - 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。
+
+## 模块 E05：售前疑问补图助手（问题分流与最小必要修改）
+
+### 目标
+
+商家手动输入/粘贴已脱敏的顾客问题（不接客服账号、不导聊天记录），系统给出可改正的归类、频次来源口径与五类分流结果：已有内容可复用 / 缺少依据（附具体补充清单）/ 文字与位置建议 / 需要补图（图种+可编辑提纲）/ 不属于商品图问题（物流、支付、库存、主题页面故障）。旧失效作品不能当作当前可用复用结果；问题组与引用均鉴权、输入限长、日志不落原文。
+
+### 实际实现
+
+1. 新增 `src/question.mjs`（纯函数，无 IO）：
+   - 输入校验：text 必填且 ≤500 字符；明显个人信息（手机号/身份证/12 位以上长数字/邮箱/地址关键词）→ 422 `PII_DETECTED`，message 只列类型、不回显原文；`frequency` 必须 `{count: 1..9999 整数, source: ≤50 必填}` 同时出现。
+   - 频次口径：`frequencyLabelOf` 只输出「人工提供：N 次（来源：xxx）」或「输入的问题（未提供频次）」，绝不生成「高频」。
+   - 归类建议 `suggestCategory`：物流/支付/库存/主题优先识别，避免被商品关键词吞掉；其余按数量、尺寸、规格差别、使用方式兜底 other。规则只给建议，商家可改正。
+   - 缺口判定 `missingFactsFor`：数量查 SKU 包含物（included），尺寸查 SKU 属性与已确认尺寸事实，规格差别要求 ≥2 SKU 且存在差异属性，使用方式查「使用/用法」类事实，other 要求事实非空；需要 SKU 的三类先给补 SKU 指引。缺口文案具体到「哪条资料、什么单位/口径」。
+   - 五类分流 `analyzeQuestion`：out_of_scope 给处理边界（不强行生图）→ missing_facts → reuse_existing（调用方传入经导出闸口筛选的版本）→ 使用/其他走 text_suggestion（文案逐字引用事实，给位置建议，不扩写）→ needs_explainer（packing_list/size/sku_compare + 提纲；尺寸提纲注明不能断言适配所有场景）。
+2. `src/store.mjs`：追加 `question_groups` 表（旧数据缺表按空表迁移）。
+3. `src/jobs.mjs`：抽出 `collectReportValidities`（导出闸口与售前复用共用同一有效性口径），新增只读的 `planSkuAvailability`（不落库、不结算、不扣额度，直接复用 `planSkuExport` 全部闸口）。
+4. `src/api.mjs`：路由 `POST /api/projects/:id/questions/analyze`（Idempotency-Key 必填，幂等重放 200/新入库 201，同键不同请求 409）、`GET /api/projects/:id/question-groups`（可按 status 过滤，含五类结果汇总）、`GET /api/question-groups/:id`、`POST /api/question-groups/:id/review`（confirm/correct）；权限 question-groups→project:write/read，projects 段 questions/question-groups 走默认 project:read/write。分析入库时记录 `facts_snapshot`（事实版本+档案版本）、`duplicate_of`（同项目同文本最近一条）与 `review_history`；改正归类按当前档案/事实重跑确定性分析并清掉旧确认；确认时若分析所依据版本已更新 → 409 `QUESTION_STALE`（一次确认不永久放行后续版本）。SKU 引用 id 失效时按商家 SKU 编号回落（档案更新重生成 id）。
+5. 前端：商品事实弹窗新增「售前问题与补图建议」区块 `#question-section`（脱敏/频次提示、问题输入 + SKU 选择 + 可选人工频次、五类结果徽章汇总、问题卡片（结果/归类/频次口径/过期状态、缺资料清单、可复用图片预览、文字建议、补图提纲、重复问题提示）、改正归类并重新分析、确认图种与提纲）；`api.js` +4 方法；`workbench.css` +`.q-*` 与移动端布局。
+
+### 本轮调试修复
+
+1. 归类规则漏「怎么使用」→ usage 关键词补 `怎么使用`（纯函数测试暴露）。
+2. 测试预期计数错误（列表 summary.total 应为 5 条：PII 拒绝与幂等重放不入库）。
+3. 复用文案加诚实边界：系统只按归属与导出闸口筛选，不判断图片是否直接回答该问题，需商家确认后才可作为复用依据。
+
+### 测试证据（Node 22.22.2）
+
+- `node --test test/e05.js`：4/4 通过（纯函数 2：脱敏/限长/频次口径与五类分流；集成 2：五类分流+归类改正+频次标签+幂等键重放与冲突+确认绑定版本/QUESTION_STALE+跨租户 404+个人信息不入库、已有成品 reuse_existing 与事实更新后旧图不再列为可用）。
+- 回归 `node --test test/e01.js test/e02.js test/e03.js test/e04.js test/e05.js test/ui-contract.js`：51/51 通过（ui-contract 含 E05 契约 1 项）。
+- `npm run check`：85 个文件通过。
+
+### 未验证 / 边界
+
+- 不接客服账号、不抓取店铺、不导入聊天记录；频次只能人工提供，无真实店铺频次来源。
+- 关键词归类不等于语义理解，商家必须核对/改正；系统不自动补事实，也不推测尺寸、用法与适配结论。
+- 真实 OCR/视觉与真实生图模型仍未配置：可复用判定只基于既有 fixture 产物与导出闸口，真实成品效果列入 E08 未验收项。
+- 补图执行（三种说明图）属 E06，本轮只给图种与提纲。
+
+### 提交与推送
+
+- E04 提交：`4f516ec`（feat(sku-check): E04 SKU 防串图与包含物核对），已推送并在远端核验。
+- E05 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。

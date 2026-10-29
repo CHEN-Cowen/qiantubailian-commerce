@@ -270,4 +270,12 @@ export const api = {
   createSkuExport: (projectId, body) => call(
     `/api/projects/${encodeURIComponent(projectId)}/sku-exports`, { method: 'POST', json: body }),
   listSkuExports: projectId => call(`/api/projects/${encodeURIComponent(projectId)}/sku-exports`),
+  // E05：售前问题分流（分析入库必须带 Idempotency-Key；改正归类后由服务端重跑确定性分析）
+  analyzeQuestion: (projectId, body, idempotencyKey) => call(
+    `/api/projects/${encodeURIComponent(projectId)}/questions/analyze`,
+    { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, json: body }),
+  listQuestionGroups: projectId => call(`/api/projects/${encodeURIComponent(projectId)}/question-groups`),
+  getQuestionGroup: groupId => call(`/api/question-groups/${encodeURIComponent(groupId)}`),
+  reviewQuestionGroup: (groupId, body) => call(
+    `/api/question-groups/${encodeURIComponent(groupId)}/review`, { method: 'POST', json: body }),
 };

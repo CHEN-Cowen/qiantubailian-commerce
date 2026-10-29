@@ -420,3 +420,47 @@ test('E04 SKU 核对：项目页核对区块、api 端点方法、三层分列�
   assert.match(workbenchCss, /\.skc-form\s*\{/);
   assert.match(workbenchCss, /\.skc-exports\s*\{/);
 });
+
+// 模块E05：售前问题分流前端契约（输入脱敏提示、五类结果、归类改正、频次来源）
+test('E05 售前问题：项目页区块、api 端点、五类结果与诚实文案', async () => {
+  const [realData, api, workbenchCss] = await Promise.all([
+    read('real-data.js'), read('api.js'), read('workbench.css'),
+  ]);
+  assert.match(realData, /id="question-section"/, 'real-data.js 缺少售前问题区块 #question-section');
+  // api.js：E05 端点方法
+  for (const fn of ['analyzeQuestion', 'listQuestionGroups', 'getQuestionGroup', 'reviewQuestionGroup']) {
+    assert.match(api, new RegExp(`${fn}`), `api.js 缺少方法 ${fn}`);
+  }
+  assert.match(api, /\/questions\/analyze/);
+  assert.match(api, /\/question-groups/);
+  assert.match(api, /Idempotency-Key/);
+  // real-data.js：关键函数与真实 API 接线
+  for (const fn of ['loadQuestions', 'renderQuestionSection', 'renderQuestionGroups', 'renderQuestionDetail', 'onQuestionClick']) {
+    assert.match(realData, new RegExp(`function ${fn}\\(`), `real-data.js 缺少函数 ${fn}`);
+  }
+  assert.match(realData, /api\.analyzeQuestion\(/);
+  assert.match(realData, /api\.listQuestionGroups\(/);
+  assert.match(realData, /api\.reviewQuestionGroup\(/);
+  assert.match(realData, /data-action="q-analyze"/);
+  assert.match(realData, /data-action="q-correct"/);
+  assert.match(realData, /data-action="q-confirm"/);
+  // 五类结果与归类
+  for (const text of ['已有内容可复用', '缺少依据', '文字/位置建议', '需要补图', '不属于商品图问题']) {
+    assert.match(realData, new RegExp(text), `缺少结果类型文案：${text}`);
+  }
+  for (const text of ['数量/包含物', '尺寸', '规格差别', '使用方式', '物流/配送', '支付/退款', '库存/缺货', '店铺主题/页面']) {
+    assert.match(realData, new RegExp(text), `缺少归类文案：${text}`);
+  }
+  // 诚实文案：脱敏提示、不伪造高频、不推测、确认绑定版本
+  assert.match(realData, /不接客服账号/);
+  assert.match(realData, /不会标注高频/);
+  assert.match(realData, /不消耗生图额度/);
+  assert.match(realData, /不会替你推测尺寸、用法或适配结论/);
+  assert.match(realData, /PII_DETECTED/);
+  assert.match(realData, /QUESTION_STALE/);
+  assert.match(realData, /逐字引用已确认事实/);
+  // 区块样式
+  assert.match(workbenchCss, /\.q-form\s*\{/);
+  assert.match(workbenchCss, /\.q-head\s*\{/);
+  assert.match(workbenchCss, /\.q-block\s*\{/);
+});

@@ -38,6 +38,8 @@ const TABLES = Object.freeze([
   'change_orders', 'replacement_todos',
   // E04：SKU 核对问题（三层：ownership/structure/visual；复核绑定版本；旧数据按空表迁移）
   'check_issues',
+  // E05：售前问题组（脱敏输入、归类、频次来源、五类分流结果与信息缺口；旧数据按空表迁移）
+  'question_groups',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -54,6 +56,7 @@ const EMPTY_DATA = () => ({
   image_dependencies: {}, export_channels: {},
   change_orders: {}, replacement_todos: {},
   check_issues: {},
+  question_groups: {},
 });
 
 function normalize(raw) {

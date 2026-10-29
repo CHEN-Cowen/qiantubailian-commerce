@@ -388,7 +388,24 @@
 .skc-exports { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
 .skc-exports h4 { margin: 0 0 8px; font-size: 13px; }
 .wb-status.bad { background: #FBEAEA; color: #B42318; }
+
+/* E05 售前问题与补图建议 */
+.q-form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.q-form textarea { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #DFE5DC; border-radius: 6px; font-size: 13px; font-family: inherit; }
+.q-form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.q-form-row select, .q-freq input { padding: 6px 8px; border: 1px solid #DFE5DC; border-radius: 6px; font-size: 12px; font-family: inherit; }
+.q-freq { font-size: 12px; }
+.q-freq summary { cursor: pointer; color: #5F6B62; }
+.q-freq label { display: inline-flex; gap: 6px; align-items: center; margin: 6px 8px 0 0; }
+.q-list { margin-bottom: 12px; }
+.q-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.q-text-line { margin: 6px 0 0; font-size: 13px; font-weight: 600; }
+.q-block { margin-top: 8px; font-size: 13px; }
+.q-block ul { margin: 6px 0; padding-left: 20px; }
+.q-reuse { list-style: none; padding-left: 0; }
 @media (max-width: 720px) {
   .skc-form { flex-direction: column; align-items: stretch; }
   .skc-form .skc-reason, .skc-form select { width: 100%; box-sizing: border-box; }
+  .q-form-row { flex-direction: column; align-items: stretch; }
+  .q-form-row select { width: 100%; box-sizing: border-box; }
 }
