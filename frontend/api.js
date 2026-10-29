@@ -301,4 +301,22 @@ export const api = {
     `/api/explainers/${encodeURIComponent(explainerId)}/feedback`, { method: 'POST', json: body }),
   explainerPackage: explainerId => call(
     `/api/explainers/${encodeURIComponent(explainerId)}/package`, { method: 'POST', json: {} }),
+  // E07：首页待办聚合（按未知/失败/待复核/已采用分组，附服务限制与额度）
+  todos: () => call('/api/todos'),
+  // E02：作品依赖（版本级；deterministic 由系统编译，manual 由商家补关联）
+  listRunDependencies: runId => call(`/api/runs/${encodeURIComponent(runId)}/dependencies`),
+  listDeliverableDependencies: (runId, deliverableId) => call(
+    `/api/runs/${encodeURIComponent(runId)}/deliverables/${encodeURIComponent(deliverableId)}/dependencies`),
+  /** 人工关联必须带 reason；ref 必须是项目内真实存在的对象。 */
+  addManualDependency: (runId, deliverableId, body) => call(
+    `/api/runs/${encodeURIComponent(runId)}/deliverables/${encodeURIComponent(deliverableId)}/dependencies`,
+    { method: 'POST', json: body }),
+  /** 删除人工关联必须带 reason；系统编译的依赖会被服务端拒绝（DEPENDENCY_LOCKED）。 */
+  removeManualDependency: (runId, deliverableId, kind, ref, reason) => {
+    const query = new URLSearchParams({ reason });
+    const encoded = encodeURIComponent(`${kind}:${ref}`);
+    return call(
+      `/api/runs/${encodeURIComponent(runId)}/deliverables/${encodeURIComponent(deliverableId)}/dependencies/${encoded}?${query}`,
+      { method: 'DELETE' });
+  },
 };

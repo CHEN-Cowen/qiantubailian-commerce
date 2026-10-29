@@ -533,3 +533,72 @@ test('E06 说明图：项目页区块、api 端点方法、三种图种与诚实
   assert.match(workbenchCss, /\.ex-op-row\s*\{/);
   assert.match(workbenchCss, /\.ex-form, \.ex-op-row \{ flex-direction: column/);
 });
+
+// 模块E07：跨模块待办聚合（未知/失败/待复核/已采用分开）与作品依赖前端契约
+test('E07 待办与依赖：首页待办四分组、检查导航、依赖面板与诚实文案', async () => {
+  const [html, realData, api, workbench, workbenchCss] = await Promise.all([
+    read('index.html'), read('real-data.js'), read('api.js'), read('workbench.js'), read('workbench.css'),
+  ]);
+  // 首页待办区块与刷新入口
+  assert.match(html, /id="home-todos"/, '首页缺少待办容器 #home-todos');
+  assert.match(html, /id="todo-refresh"/, '首页缺少待办刷新入口 #todo-refresh');
+  assert.match(html, /id="wb-dep-body"/, '工作台缺少依赖面板容器 #wb-dep-body');
+  // real-data.js：加载、渲染、点击入口
+  for (const fn of ['loadTodos', 'renderTodos', 'onTodoClick']) {
+    assert.match(realData, new RegExp(`function ${fn}\\(`), `real-data.js 缺少函数 ${fn}`);
+  }
+  assert.match(realData, /api\.todos\(\)/);
+  assert.match(realData, /data-group="\$\{escapeHtml\(group\.key\)\}"/);
+  assert.match(realData, /data-proj="\$\{escapeHtml\(item\.project_id\)\}"/);
+  assert.match(realData, /qb:open-workbench/, '工作台类待办必须复用真实工作台入口');
+  assert.match(realData, /openTruthDialog\(projectId, \{ section:/, '事实类待办必须带分组锚点');
+  // 四组标签与"分开显示"语义
+  for (const text of ['未知', '失败', '待复核', '已采用']) {
+    assert.match(realData, new RegExp(text), `缺少待办分组文案：${text}`);
+  }
+  // 商品事实弹窗的「检查与更新」导航，四个区块可达
+  assert.match(realData, /class="truth-nav"/);
+  for (const target of ['change-section', 'check-section', 'question-section', 'explainer-section']) {
+    assert.match(realData, new RegExp(`data-action="jump" data-target="${target}"`), `缺少导航入口 ${target}`);
+  }
+  assert.ok(realData.includes("action === 'jump'"), '导航跳转必须落在 onTruthClick 的 jump 分支');
+  // 服务限制与额度如实来自服务端，不前端硬编码
+  assert.match(realData, /const limits = payload\.limits \?\? \{\};/);
+  assert.match(realData, /tenant_concurrency/);
+  assert.match(realData, /revision_max_rounds/);
+  assert.match(realData, /const budget = payload\.budget \?\? \{\};/);
+  // 诚实文案：不伪装通过、重试不重复扣费、采用不代表平台曝光
+  assert.match(realData, /不伪装已通过/);
+  assert.match(realData, /重试只处理未成功项，不重复扣费/);
+  assert.match(realData, /不代表平台曝光或转化/);
+  // api.js：待办与依赖端点方法
+  for (const fn of ['todos', 'listRunDependencies', 'listDeliverableDependencies',
+    'addManualDependency', 'removeManualDependency']) {
+    assert.match(api, new RegExp(`${fn}`), `api.js 缺少方法 ${fn}`);
+  }
+  assert.match(api, /\/api\/todos/);
+  assert.match(api, /\/dependencies/);
+  // workbench.js：依赖面板加载/渲染/人工增删
+  for (const fn of ['loadDependencies', 'renderDependencies', 'renderDependencyVersion',
+    'onDependencyClick', 'onDependencySubmit', 'removeManualDependency']) {
+    assert.match(workbench, new RegExp(`(async )?function ${fn}\\(`), `workbench.js 缺少函数 ${fn}`);
+  }
+  assert.match(workbench, /api\.listDeliverableDependencies\(/);
+  assert.match(workbench, /api\.addManualDependency\(/);
+  assert.match(workbench, /api\.removeManualDependency\(/);
+  assert.match(workbench, /data-dep-form/);
+  assert.match(workbench, /data-dep-remove=/);
+  assert.match(workbench, /data-dep-reload/);
+  // 系统依赖不可删由服务端拒绝（DEPENDENCY_LOCKED），前端如实显示服务端错误
+  assert.match(api, /DEPENDENCY_LOCKED/);
+  assert.match(workbench, /系统编译，不可删除/);
+  assert.match(workbench, /只登记关联，不改图、不扣费/);
+  assert.match(workbench, /移除这条人工关联必须写明依据/);
+  // 区块样式与 720px 移动端适配
+  for (const selector of ['todo-block', 'todo-summary', 'todo-group', 'todo-item', 'truth-nav',
+    'dep-version', 'dep-entry', 'dep-form', 'dep-error']) {
+    assert.match(workbenchCss, new RegExp(`\\.${selector}\\s*\\{`), `缺少样式 .${selector}`);
+  }
+  assert.match(workbenchCss, /@media \(max-width: 720px\) \{[\s\S]*\.todo-groups \{ grid-template-columns: 1fr; \}/);
+  assert.match(workbenchCss, /@media \(max-width: 720px\) \{[\s\S]*\.dep-form-row \{ flex-direction: column; \}/);
+});

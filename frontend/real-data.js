@@ -49,6 +49,9 @@ export function initRealData({ toast } = {}) {
   $('#upload-replace')?.addEventListener('click', () => void submitUpload(true));
   $('#real-list')?.addEventListener('click', onRealListClick);
   $('#truth-body')?.addEventListener('click', onTruthClick);
+  // E07：首页待办刷新（聚合未知/失败/待复核/已采用）
+  $('#todo-refresh')?.addEventListener('click', () => void loadTodos());
+  $('#home-todos')?.addEventListener('click', onTodoClick);
   // E06：切换说明图类型时重建表单（对比图才显示「对比 SKU」）
   $('#truth-body')?.addEventListener('change', event => {
     if (event.target?.id === 'ex-kind') rerenderExplainerSection();
@@ -251,7 +254,7 @@ function onRealListClick(event) {
 // R05：导出给 workbench / 其它模块调用
 export { openTruthDialog, openUploadDialog, refresh as refreshProjects };
 
-async function openTruthDialog(projectId) {
+async function openTruthDialog(projectId, { section } = {}) {
   try {
     const detail = await api.getProject(projectId);
     const versions = await api.listTruthVersions(projectId);
@@ -264,6 +267,8 @@ async function openTruthDialog(projectId) {
     renderTruth();
     const dialog = $('#truth-dialog');
     if (!dialog.open) dialog.showModal();
+    // E07：从首页待办进入时直接定位到「变更 / SKU / 问题 / 说明图」区块
+    if (section) document.getElementById(section)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (error) {
     // 区分"接口失败"与"界面脚本异常"，避免把前端 bug 说成连不上服务
     if (error instanceof ApiFailure) state.toast(errorText(error));
@@ -325,6 +330,13 @@ function renderTruth() {
       </div>
       <span class="real-state ${readiness.can_start_production ? 'ok' : 'block'}">${readiness.can_start_production ? '可开始生产' : `阻断 ${readiness.blocker_count} 项`}</span>
     </div>
+    <nav class="truth-nav" aria-label="检查与更新">
+      <b>检查与更新</b>
+      <button type="button" class="text-button" data-action="jump" data-target="change-section">变更</button>
+      <button type="button" class="text-button" data-action="jump" data-target="check-section">SKU 核对</button>
+      <button type="button" class="text-button" data-action="jump" data-target="question-section">售前问题</button>
+      <button type="button" class="text-button" data-action="jump" data-target="explainer-section">说明图</button>
+    </nav>
     <section class="truth-section">
       <h3>生产闸口</h3>
       ${renderBlockers(readiness.blockers)}
@@ -1767,6 +1779,10 @@ function onTruthClick(event) {
   const trigger = event.target.closest('[data-action]');
   if (!trigger) return;
   const action = trigger.dataset.action;
+  if (action === 'jump') {
+    document.getElementById(trigger.dataset.target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
   if (action.startsWith('chg-')) {
     void onChangeClick(action, trigger);
     return;
@@ -2256,6 +2272,75 @@ async function onExplainerClick(action, trigger) {
   if (state.explainers === area) area.busyId = '';
 }
 
+// ---------- E07：首页待办（跨模块聚合） ----------
+
+const TODO_GROUP_HINT = {
+  unknown: '未知、待补资料或进行中；不确定的一律留在这里，不伪装已通过',
+  failed: '失败与部分失败；重试只处理未成功项，不重复扣费',
+  awaiting_review: '需要你复核或确认；通过后才会进入采用',
+  adopted: '已采用与已完成；仅代表本服务内状态，不代表平台曝光或转化',
+};
+
+async function loadTodos() {
+  const holder = $('#home-todos');
+  if (!holder) return;
+  try {
+    renderTodos(await api.todos());
+  } catch (error) {
+    holder.innerHTML = `<p class="real-empty real-error">${escapeHtml(errorText(error))}</p>`;
+  }
+}
+
+function renderTodos(payload) {
+  const holder = $('#home-todos');
+  if (!holder) return;
+  const summary = payload.summary ?? {};
+  const chips = `<div class="todo-summary">
+    <span class="todo-chip unknown">未知 ${summary.unknown ?? 0}</span>
+    <span class="todo-chip failed">失败 ${summary.failed ?? 0}</span>
+    <span class="todo-chip review">待复核 ${summary.awaiting_review ?? 0}</span>
+    <span class="todo-chip adopted">已采用 ${summary.adopted ?? 0}</span>
+  </div>`;
+  const limits = payload.limits ?? {};
+  const budget = payload.budget ?? {};
+  const limitsHtml = `<details class="todo-limits">
+    <summary>服务限制、并发与额度（如实来自当前服务配置）</summary>
+    <p>上传单张 ≤ ${Math.round((limits.max_upload_bytes ?? 0) / 1024 / 1024)} MB · 每项目素材 ≤ ${limits.max_assets_per_project ?? '—'} · 每版本事实 ≤ ${limits.max_facts ?? '—'}</p>
+    <p>并发上限：工作线程 ${limits.worker_concurrency ?? '—'} · 单租户 ${limits.tenant_concurrency ?? '—'} · 供应商 ${limits.provider_concurrency ?? '—'}；自动修订最多 ${limits.revision_max_rounds ?? '—'} 轮</p>
+    <p>${escapeHtml(limits.note ?? '')}</p>
+    <p>可用额度 ${budget.available ?? 0} 张（预留 ${budget.reserved ?? 0} 张）。额度不足时不会入队，也不调用供应商。</p>
+  </details>`;
+  const groups = (payload.groups ?? []).filter(group => group.total > 0);
+  if (groups.length === 0) {
+    holder.innerHTML = `${chips}<p class="real-empty">当前没有待办。未知、失败与待复核都是 0；新任务可从「开始制作」或项目页进入。</p>${limitsHtml}`;
+    return;
+  }
+  holder.innerHTML = `${chips}<div class="todo-groups">${groups.map(group => `
+    <div class="todo-group" data-group="${escapeHtml(group.key)}">
+      <div class="todo-group-head"><h3>${escapeHtml(group.label)}</h3><span>${group.total}</span></div>
+      <p class="todo-group-hint">${escapeHtml(TODO_GROUP_HINT[group.key] ?? '')}</p>
+      <ul class="todo-items">${group.items.map(item => `<li>
+        <button type="button" class="todo-item" data-proj="${escapeHtml(item.project_id)}" data-action="${escapeHtml(item.action)}" data-section="${escapeHtml(item.section ?? '')}">
+          <b>${escapeHtml(item.title)}</b>
+          <span>${escapeHtml(item.project_name)}</span>
+          <small>${escapeHtml(item.detail ?? '')}</small>
+        </button>
+      </li>`).join('')}</ul>
+    </div>`).join('')}</div>${limitsHtml}`;
+}
+
+function onTodoClick(event) {
+  const item = event.target.closest('.todo-item');
+  if (!item) return;
+  const projectId = item.dataset.proj;
+  if (!projectId) return;
+  if (item.dataset.action === 'workbench') {
+    window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId } }));
+    return;
+  }
+  void openTruthDialog(projectId, { section: item.dataset.section || undefined });
+}
+
 async function renderAccountData() {
   const [runs, credits, exported] = await Promise.all([api.listRuns(), api.credits(), api.listExports({})]);
   const list = runs.runs ?? [], balance = credits.balance ?? {};
@@ -2266,6 +2351,8 @@ async function renderAccountData() {
     ['可用额度', balance.available ?? 0, '预留 ' + (balance.reserved ?? 0) + ' 张'],
   ];
   $('.metric-strip').innerHTML = summaries.map(([label, value, note]) => '<div class="metric"><span>'+label+'</span><strong>'+value+'</strong><small>'+note+'</small></div>').join('');
+  // E07：首页待办聚合；失败时如实显示原因，不用空数据冒充“没有待办”
+  void loadTodos();
   // 顶栏额度常驻：与额度弹窗同源（服务端账本），不写死也不四舍五入成好看的数字
   const creditValue = $('#topbar-credit-value');
   if (creditValue) creditValue.textContent = String(balance.available ?? 0);

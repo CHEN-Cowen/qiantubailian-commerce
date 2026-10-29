@@ -225,7 +225,9 @@ async function startFailure(env) {
   let output = '';
   child.stdout.on('data', data => { output += data; });
   child.stderr.on('data', data => { output += data; });
-  const timer = setTimeout(() => child.kill('SIGKILL'), 5_000);
+  // 全量套件并行运行时线程池被 sharp/文件读写占用，非法主机的 DNS 解析可能明显变慢；
+  // 这里放宽到 20 秒只覆盖"等待子进程自行报错退出"的时间，断言仍是必须 code=1 且输出脱敏。
+  const timer = setTimeout(() => child.kill('SIGKILL'), 20_000);
   const [code, signal] = await once(child, 'exit');
   clearTimeout(timer);
   assert.equal(code, 1);

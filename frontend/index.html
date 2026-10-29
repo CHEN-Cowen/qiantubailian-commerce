@@ -64,6 +64,13 @@
             </div>
           </section>
           <section class="metric-strip" aria-label="工作概览"><p>正在读取你的工作概览…</p></section>
+          <section class="section-block todo-block" aria-label="待办与检查">
+            <div class="section-title">
+              <div><h2>检查与更新</h2><p>未知、失败、待复核与已采用分开显示；点击条目进入对应项目或工作台</p></div>
+              <button class="text-button" id="todo-refresh">刷新</button>
+            </div>
+            <div id="home-todos" class="home-todos"><p class="real-empty">正在读取待办…</p></div>
+          </section>
           <section class="section-block projects-block">
             <div class="section-title"><div><h2>继续制作</h2><p>回到最近的商品项目</p></div><button class="text-button" data-view="projects">查看全部 <span>→</span></button></div>
             <div id="home-real-projects"><p class="real-empty">还没有真实项目。点击「新建商品项目」开始你的第一个商品。</p></div>
@@ -348,6 +355,12 @@
                   <button class="primary" data-review-decision="publishable">通过</button>
                 </div>
               </div>
+            </div>
+
+            <div class="wb-section wb-section-deps">
+              <div class="wb-section-title">作品依赖</div>
+              <p class="real-note">系统按事实、素材与文字层编译的依赖不可删除；人工补充关联必须写明依据。删除人工关联也会留痕。</p>
+              <div id="wb-dep-body"><p class="real-hint">选中交付项后，这里显示该图版本的依赖来源与人工关联。</p></div>
             </div>
 
             <div class="wb-section wb-section-advanced">

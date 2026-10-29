@@ -305,3 +305,48 @@
 ### 提交与推送
 
 - 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。
+
+## 模块 E07：跨模块待办聚合、检查与更新入口、作品依赖面板
+
+### 目标
+
+把变更单、替换待办、SKU 核对问题、售前问题组、说明图与任务状态统一成一份按租户隔离的待办视图：未知 / 失败 / 待复核 / 已采用严格分开，不把未完成伪装成已通过；每条都从真实入口进入对应项目区块或工作台；同时补齐 E02 前端欠项（作品依赖的人工增删，系统依赖不可删）并把服务限制、并发与额度如实展示给商家。
+
+### 实际实现
+
+1. `GET /api/todos`（`src/api.mjs`）：只读聚合，权限 `project:read`；四组固定键序 unknown / failed / awaiting_review / adopted，`summary.total` 与各组计数一致；每组最多返回 20 条并按最近更新时间排序。
+   - `change_orders`：partial_failed→failed，awaiting_material→unknown，awaiting_review→awaiting_review，completed→adopted。
+   - `replacement_todos`：pending→awaiting_review，replaced→adopted。
+   - `check_issues`：status=open 时 blocker→failed，其余→unknown。
+   - `question_groups`：open→unknown，confirmed→adopted。
+   - `explainers`：用 `presentExplainer` 派生状态——awaiting_review→待复核；stale/needs_review→未知；active→已采用；其余→待复核。
+   - `runs`：ACTIVE_STATES→unknown；failed/cancelled/needs_attention→failed；quality_status needs_review/blocked→unknown；completed→adopted。
+   - 每条条目带 `kind`、`record_id`、`project_id`、`project_name`、`status`、`action`（truth/workbench）、`section`、`title`、`detail`、`created_at`；跨租户项目直接过滤，不泄露名称与计数。
+   - `limits` 直接取自当前服务配置（上传字节、素材/事实上限、工作线程/租户/供应商并发、修订轮数、排队与重试说明），`budget` 复用 `balanceOf`，前端不硬编码。
+2. 前端首页（`frontend/index.html` + `frontend/real-data.js`）：新增 `#home-todos` 待办区块与 `#todo-refresh` 刷新入口；四色计数 chips + 分组卡片（每组附口径说明）+ `details` 展示服务限制/并发/额度/预留；空态明确「当前没有待办」；条目点击按 `action` 复用真实入口——`workbench` 走既有 `qb:open-workbench` 事件，其余走 `openTruthDialog(projectId,{section})`。
+3. 商品事实弹窗（`frontend/real-data.js`）：新增 `.truth-nav`「检查与更新」导航，四个按钮分别跳到 `#change-section`、`#check-section`、`#question-section`、`#explainer-section`；`openTruthDialog` 支持传入 `section` 并在渲染后 `scrollIntoView`。
+4. 工作台作品依赖（E02 前端欠项，`frontend/index.html` + `frontend/workbench.js` + `frontend/api.js`）：新增「作品依赖」面板 `#wb-dep-body`，选中交付项时按版本拉取依赖并区分「系统编译（不可删）」与「人工关联」；人工关联表单要求版本、类型、引用与依据（reason 必填），备注可选；移除人工关联必须填写依据，服务端拒绝系统依赖（`DEPENDENCY_LOCKED`）时如实显示服务端文案；读取失败提供重试入口；文案明确「只登记关联，不改图、不扣费」。
+5. `frontend/api.js`：新增 `todos`、`listRunDependencies`、`listDeliverableDependencies`、`addManualDependency`、`removeManualDependency` 五个方法。
+6. 样式（`frontend/workbench.css`）：`.todo-*`、`.truth-nav`、`.dep-*` 与 720px 媒体查询（待办单列、依赖表单纵向、导航间距收紧）。
+
+### 本轮调试修复
+
+1. **契约断言放错文件**：`DEPENDENCY_LOCKED` 只出现在 `api.js` 注释与后端错误码，`workbench.js` 通过 `ApiFailure.message` 展示服务端文案；契约改为断言 `api.js`，前端断言保留「系统编译，不可删除」。
+2. **全量并行下既有启动失败测试偶发超时**：`test/index.js` 的 `startFailure` 原先 5 秒即 SIGKILL 子进程，全量套件并行时线程池被 sharp/文件读写占用，非法主机 DNS 解析可能超过 5 秒（单跑通过）。放宽到 20 秒只覆盖等待子进程自行退出的时间，`code=1`、`signal=null`、输出脱敏断言不变，不弱化规则。
+
+### 测试证据（Node 22.22.2）
+
+- `node --test test/e07.js`：1/1 通过（空工作区四组键序与限制/额度；售前问题 open→待复核确认→已采用；说明图待复核→确认→已采用；所有条目带真实入口与项目名；乙店 `GET /api/todos` 全组为空）。
+- `node --test test/ui-contract.js`：14/14 通过（含新增 E07 契约：首页待办容器、检查导航四锚点、依赖面板表单/移除/重试、五个 API 方法、四组文案、诚实文案与 720px 样式）。
+- 全量 `npm test`：299 项，298 通过 / 0 失败 / 1 跳过（既有符号链接项）。
+- `node scripts/check.mjs`：88 个文件语法检查通过。
+
+### 未验证 / 边界
+
+- 真实外部服务（生图模型、OCR、视觉评审、支付、平台同步）未配置：E07 聚合只读既有记录，不做外部同步；「已采用」仅代表本服务内状态，不代表平台曝光或转化。
+- 待办条目每组最多 20 条，超出部分不展开（总数在各组标题与 `summary` 中如实给出）。
+- 真实浏览器桌面/手机截图验收与 15 类端到端场景统一在 E08 执行。
+
+### 提交与推送
+
+- 提交：见下方 git 记录（本节在提交前写入，提交号以实际为准并在推送后核验远端）。

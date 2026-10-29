@@ -285,6 +285,11 @@ export function createApi({
       requireMethod(method, ['GET', 'HEAD']);
       return getCredits(ctx, send);
     }
+    // E07：首页待办聚合（变更 / 替换 / 核对 / 问题 / 说明图 / 任务），按未知、失败、待复核、已采用分组
+    if (resource === 'todos' && rest.length === 1) {
+      requireMethod(method, ['GET', 'HEAD']);
+      return listTodos(ctx, send);
+    }
     if (resource === 'quotes') {
       if (rest.length === 1 && method === 'POST') return createQuote(ctx, req, send);
       if (rest.length === 1) { requireMethod(method, ['GET', 'HEAD', 'POST']); return listQuotes(ctx, send); }
@@ -952,6 +957,8 @@ export function createApi({
       case 'question-groups': return write ? 'project:write' : 'project:read';
       // E06：说明图查询走 project:read；生成/改版/复核/选版/反馈是内容写操作
       case 'explainers': return write ? 'project:write' : 'project:read';
+      // E07：跨模块待办聚合只读
+      case 'todos': return 'project:read';
       case 'projects': {
         if (second === undefined) return write ? 'project:create' : 'project:read';
         if (third === 'assets') return write ? 'asset:write' : 'project:read';
@@ -3923,6 +3930,157 @@ export function createApi({
         .filter(item => !projectId || item.project_id === projectId)
         .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)));
       return { replacement_todos: items, total: items.length };
+    });
+    send(200, result);
+  }
+
+  /**
+   * E07：跨模块待办聚合。
+   * 只读、按租户过滤；四组分开：未知 / 失败 / 待复核 / 已采用。
+   * 每条都带真实入口（项目详情对应区块或工作台），不做“假按钮”。
+   */
+  async function listTodos(ctx, send) {
+    const result = await store.read(data => {
+      const projectOf = id => {
+        const project = data.projects?.[id] ?? null;
+        return project && project.tenant_id === ctx.tenantId ? project : null;
+      };
+      const groups = { unknown: [], failed: [], awaiting_review: [], adopted: [] };
+      const push = (group, item) => {
+        const project = projectOf(item.project_id);
+        if (!project) return; // 跨租户或已删除项目不进入任何人的待办
+        groups[group].push({ ...item, project_name: project.name });
+      };
+      const stamp = item => String(item.updated_at ?? item.created_at ?? '');
+
+      // E03：变更单
+      for (const order of Object.values(data.change_orders ?? {})) {
+        if (order.tenant_id !== ctx.tenantId) continue;
+        const pending = (order.impact_items ?? []).filter(item => ['pending', 'running', 'failed'].includes(item.status)).length;
+        const base = {
+          kind: 'change', record_id: order.id, project_id: order.project_id, status: order.status,
+          action: 'truth', section: 'change-section', created_at: stamp(order),
+        };
+        if (order.status === 'partial_failed') {
+          push('failed', { ...base, title: '变更单部分失败', detail: `${pending} 项待处理；重试只做未成功项，成功项不会重复扣费` });
+        } else if (order.status === 'awaiting_material') {
+          push('unknown', { ...base, title: '变更项缺实拍素材', detail: '补齐素材后才继续；其余项不受影响' });
+        } else if (order.status === 'awaiting_review') {
+          push('awaiting_review', { ...base, title: '变更结果待人工复核', detail: '需对照补图确认后才进入采用' });
+        } else if (order.status === 'completed') {
+          push('adopted', { ...base, title: '变更单已完成', detail: '旧图仍需你在各渠道手动替换并确认' });
+        }
+      }
+      // E03：旧导出替换待办
+      for (const todo of Object.values(data.replacement_todos ?? {})) {
+        if (todo.tenant_id !== ctx.tenantId) continue;
+        const base = {
+          kind: 'replacement', record_id: todo.id, project_id: todo.project_id, status: todo.status,
+          action: 'truth', section: 'change-section', created_at: stamp(todo),
+        };
+        if (todo.status === 'pending') {
+          push('awaiting_review', { ...base, title: '旧图需要你在各渠道手动替换', detail: '确认已替换后才算完成；系统不会自动同步平台' });
+        } else {
+          push('adopted', { ...base, title: '旧图替换已由你确认', detail: '确认记录不代表平台回执' });
+        }
+      }
+      // E04：未解决的核对问题（已复核的 resolved 不再列为待办）
+      for (const issue of Object.values(data.check_issues ?? {})) {
+        if (issue.tenant_id !== ctx.tenantId || issue.status !== 'open') continue;
+        push(issue.severity === 'blocker' ? 'failed' : 'unknown', {
+          kind: 'check', record_id: issue.id, project_id: issue.project_id, status: issue.status,
+          action: 'truth', section: 'check-section', created_at: stamp(issue),
+          title: issue.severity === 'blocker' ? 'SKU 核对存在阻断项' : 'SKU 核对存在未知项',
+          detail: issue.message ?? '需核对归属或包含物后处理',
+        });
+      }
+      // E05：售前问题组
+      for (const group of Object.values(data.question_groups ?? {})) {
+        if (group.tenant_id !== ctx.tenantId) continue;
+        const base = {
+          kind: 'question', record_id: group.id, project_id: group.project_id, status: group.status,
+          action: 'truth', section: 'question-section', created_at: stamp(group),
+        };
+        const excerpt = String(group.text ?? '').slice(0, 40);
+        if (group.status === 'open') {
+          push('unknown', { ...base, title: '售前问题待确认归类', detail: excerpt || '先核对归类；缺资料时不会用推测补上' });
+        } else {
+          push('adopted', { ...base, title: '售前问题分流已确认', detail: '确认不等于事实已补齐' });
+        }
+      }
+      // E06：说明图
+      for (const record of Object.values(data.explainers ?? {})) {
+        if (record.tenant_id !== ctx.tenantId) continue;
+        const project = projectOf(record.project_id);
+        if (!project) continue;
+        const presented = presentExplainer({
+          record, skuProfile: headSkuProfileOf(data, project), truth: headTruthOf(data, project),
+        });
+        const label = `${record.kind_label ?? record.kind}${record.sku?.sku_code ? ` · ${record.sku.sku_code}` : ''}`;
+        const base = {
+          kind: 'explainer', record_id: record.id, project_id: record.project_id, status: presented.status,
+          action: 'truth', section: 'explainer-section', created_at: stamp(record),
+        };
+        if (presented.status === 'awaiting_review') {
+          push('awaiting_review', { ...base, title: `说明图待复核：${label}`, detail: '复核必须留下依据；通过后才能选版与下载' });
+        } else if (presented.status === 'stale' || presented.status === 'needs_review') {
+          push('unknown', {
+            ...base, title: `说明图需要更新：${label}`,
+            detail: presented.status === 'stale' ? '事实或档案已变化，可免费确定性重排' : '事实审计未通过，先修正事实再重排',
+          });
+        } else if (presented.status === 'active') {
+          push('adopted', { ...base, title: `说明图已采用：${label}`, detail: '下载包可直接使用；平台同步需你手动完成' });
+        } else {
+          push('awaiting_review', { ...base, title: `说明图已通过、待选用：${label}`, detail: '选定要发布的版本后才会标记为已采用' });
+        }
+      }
+      // 制作任务：进行中可恢复；失败如实列出；检查未过单独提示
+      for (const run of Object.values(data.runs ?? {})) {
+        if (run.tenant_id !== ctx.tenantId) continue;
+        const base = {
+          kind: 'run', record_id: run.id, project_id: run.project_id, status: run.status,
+          quality_status: run.quality_status ?? null, action: 'workbench', section: null, created_at: stamp(run),
+        };
+        if (ACTIVE_STATES.has(run.status)) {
+          push('unknown', { ...base, title: '制作任务进行中', detail: '可回到工作台继续查看；刷新或重启后仍会恢复状态' });
+        } else if (['failed', 'cancelled', 'needs_attention'].includes(run.status)) {
+          push('failed', { ...base, title: `制作任务未完成（${run.status}）`, detail: '失败或取消的预留额度会释放，未成功项不重复扣费' });
+        } else if (run.quality_status === 'needs_review' || run.quality_status === 'blocked') {
+          push('unknown', { ...base, title: '成图检查未通过或待确认', detail: '需人工复核或修订后才能导出' });
+        } else if (run.status === 'completed') {
+          push('adopted', { ...base, title: '制作任务已完成', detail: '检查通过的版本可导出；过期报告不能当有效交付' });
+        }
+      }
+
+      const labels = {
+        unknown: '未知 / 待补资料', failed: '失败 / 待重试',
+        awaiting_review: '待复核', adopted: '已采用 / 已完成',
+      };
+      const summary = Object.fromEntries(Object.entries(groups).map(([key, list]) => [key, list.length]));
+      return {
+        generated_at: now(),
+        summary: { total: Object.values(groups).reduce((sum, list) => sum + list.length, 0), ...summary },
+        groups: Object.entries(groups).map(([key, list]) => ({
+          key,
+          label: labels[key],
+          total: list.length,
+          items: [...list]
+            .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+            .slice(0, 20),
+        })),
+        // E07：批量规模 / 并发 / 服务预算限制，如实取自当前服务配置
+        limits: {
+          max_upload_bytes: maxUploadBytes,
+          max_assets_per_project: LIMITS.maxAssetsPerProject,
+          max_facts: LIMITS.maxFacts,
+          worker_concurrency: maxConcurrency,
+          tenant_concurrency: tenantMaxConcurrency,
+          provider_concurrency: providerMaxConcurrency,
+          revision_max_rounds: revisionMaxRounds,
+          note: '超过并发上限的任务排队执行；批量逐项保留状态与费用，重试只处理未成功项',
+        },
+        budget: balanceOf(data, ctx.tenantId, { initialCredits }),
+      };
     });
     send(200, result);
   }

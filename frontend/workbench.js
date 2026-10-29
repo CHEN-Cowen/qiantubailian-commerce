@@ -69,6 +69,8 @@ const state = {
   },
   // 新建 run 时的幂等键（工作台生命周期内固定，离开就重置）
   idempotencyKey: null,
+  // E02：当前交付物的版本依赖（系统编译 + 人工关联）
+  deps: { deliverableId: null, payload: null, error: null, loading: false },
 };
 
 // ---------- 初始化 ----------
@@ -110,6 +112,9 @@ export function initWorkbench({ toast } = {}) {
     }
   });
   $('#wb-edit-layers')?.addEventListener('input', updateApplyState);
+  // E02：作品依赖面板（人工增删都需 reason，系统依赖不可删）
+  $('#wb-dep-body')?.addEventListener('submit', event => void onDependencySubmit(event));
+  $('#wb-dep-body')?.addEventListener('click', onDependencyClick);
   document.addEventListener('click', onDeliverableClick);
   document.addEventListener('click', onReviewDecisionClick);
   window.addEventListener('beforeunload', () => persistSelection());
@@ -183,6 +188,7 @@ export async function openWorkbench(projectId) {
       renderQA();
       renderAdvanced();
       renderExport();
+      void loadDependencies();
     } else {
       // 没有 run：只渲染步骤引导
       renderDeliverables(true); // 显示空态引导
@@ -190,6 +196,7 @@ export async function openWorkbench(projectId) {
       renderQA(true);
       renderAdvanced(true);
       renderExport(true);
+      renderDependencies(true);
     }
 
     $('#wb-project-subtitle').textContent = state.activeRun
@@ -404,6 +411,7 @@ function selectDeliverable(deliverableId) {
   renderDeliverables();
   renderCenter();
   renderQA();
+  void loadDependencies();
   persistSelection();
 }
 
@@ -685,6 +693,171 @@ function renderAdvanced(empty = false) {
   eventLog.innerHTML = tail.map(e => `<li>#${e.sequence ?? '—'} <b>${escapeHtml(e.stage)}</b> · ${escapeHtml(e.status)} · ${formatTime(e.timestamp)}</li>`).join('');
   if (state.eventsInProgress?.length) {
     eventLog.innerHTML += state.eventsInProgress.map(e => `<li class="running">#${e.sequence} <b>${escapeHtml(e.stage)}</b> · ${escapeHtml(e.status)}</li>`).join('');
+  }
+}
+
+// ---------- E02：作品依赖 ----------
+const DEP_KIND_LABELS = {
+  fact: '事实', asset: '素材', sku: 'SKU', brand: '品牌套件', text_layer: '文字层',
+};
+
+async function loadDependencies() {
+  const run = state.activeRun;
+  const deliverableId = state.selectedDeliverableId;
+  if (!run || !deliverableId) {
+    state.deps = { deliverableId: null, payload: null, error: null, loading: false };
+    renderDependencies(true);
+    return;
+  }
+  const keepPayload = state.deps.deliverableId === deliverableId ? state.deps.payload : null;
+  state.deps = { deliverableId, payload: keepPayload, error: null, loading: true };
+  renderDependencies();
+  try {
+    const payload = await api.listDeliverableDependencies(run.id, deliverableId);
+    if (state.activeRun?.id !== run.id || state.selectedDeliverableId !== deliverableId) return;
+    state.deps = { deliverableId, payload, error: null, loading: false };
+  } catch (error) {
+    if (state.selectedDeliverableId !== deliverableId) return;
+    state.deps = {
+      deliverableId, payload: null, loading: false,
+      error: { code: error?.code ?? 'REQUEST_FAILED', message: error instanceof ApiFailure ? error.message : String(error) },
+    };
+  }
+  renderDependencies();
+}
+
+function renderDependencies(empty = false) {
+  const holder = $('#wb-dep-body');
+  if (!holder) return;
+  if (empty || !state.activeRun || !state.selectedDeliverableId) {
+    holder.innerHTML = '<p class="real-hint">选中交付项后，这里显示该图版本的依赖来源与人工关联。</p>';
+    return;
+  }
+  const deps = state.deps;
+  if (deps.deliverableId !== state.selectedDeliverableId) {
+    holder.innerHTML = '<div class="loading-line"></div><p class="real-hint">正在读取依赖…</p>';
+    return;
+  }
+  if (deps.error) {
+    holder.innerHTML = `<div class="state-note danger"><div><b>无法读取依赖</b><br>${escapeHtml(deps.error.message ?? '')}
+      <div class="state-actions"><button type="button" class="secondary" data-dep-reload>重试</button></div></div></div>`;
+    return;
+  }
+  if (deps.loading && !deps.payload) {
+    holder.innerHTML = '<div class="loading-line"></div><p class="real-hint">正在读取依赖…</p>';
+    return;
+  }
+  const payload = deps.payload;
+  if (!payload) {
+    holder.innerHTML = '<p class="real-hint">还没有读取到依赖记录。</p>';
+    return;
+  }
+  const versions = payload.versions ?? [];
+  if (versions.length === 0) {
+    holder.innerHTML = '<p class="real-hint">该交付物还没有版本，暂无依赖记录。</p>';
+    return;
+  }
+  const options = versions.map(version =>
+    `<option value="${escapeHtml(version.version_id)}"${version.version_id === payload.active_version_id ? ' selected' : ''}>V${version.number}${version.active ? '（当前选用）' : ''}</option>`).join('');
+  holder.innerHTML = `${versions.map(version => renderDependencyVersion(version)).join('')}
+    <form class="dep-form" data-dep-form>
+      <div class="dep-form-row">
+        <label>版本<select name="version_id">${options}</select></label>
+        <label>类型<select name="kind">${Object.entries(DEP_KIND_LABELS).map(([value, label]) =>
+          `<option value="${escapeHtml(value)}">${escapeHtml(label)}</option>`).join('')}</select></label>
+        <label>引用<input name="ref" maxlength="200" placeholder="事实键 / 素材ID / SKU ID / 品牌套件ID / 文字层ID"></label>
+      </div>
+      <label>依据（必填）<input name="reason" maxlength="300" placeholder="为什么这张图与它有关，例如：包装同色系需沿用同一素材"></label>
+      <label>备注<input name="note" maxlength="300" placeholder="可选"></label>
+      <div class="dep-form-actions">
+        <button type="submit" class="secondary">添加人工关联</button>
+        <span class="real-hint">只登记关联，不改图、不扣费</span>
+      </div>
+    </form>
+    <p class="dep-error" id="wb-dep-error" role="alert"></p>`;
+}
+
+function renderDependencyVersion(version) {
+  const evidenceLabel = version.evidence === 'deterministic' ? '系统编译'
+    : version.evidence === 'manual' ? '人工关联' : '未记录';
+  const entries = (version.entries ?? []).map(entry => `<li class="dep-entry">
+      <span class="dep-kind">${escapeHtml(DEP_KIND_LABELS[entry.kind] ?? entry.kind)}</span>
+      <code>${escapeHtml(entry.ref)}</code>
+      <span class="dep-evidence ${entry.evidence === 'deterministic' ? 'system' : 'manual'}">${entry.evidence === 'deterministic' ? '系统' : '人工'}</span>
+      ${entry.note ? `<small>${escapeHtml(entry.note)}</small>` : ''}
+      ${entry.reason ? `<small class="dep-reason">依据：${escapeHtml(entry.reason)}</small>` : ''}
+      ${entry.evidence === 'manual'
+        ? `<button type="button" class="text-button" data-dep-remove="${escapeHtml(`${entry.kind}:${entry.ref}`)}">移除</button>`
+        : '<small class="dep-locked">系统编译，不可删除</small>'}
+    </li>`).join('');
+  return `<div class="dep-version${version.active ? ' active' : ''}">
+    <div class="dep-version-head">
+      <b>V${version.number}${version.active ? ' · 当前选用' : ''}</b>
+      <span class="dep-evidence ${version.evidence === 'deterministic' ? 'system' : 'manual'}">${escapeHtml(evidenceLabel)}</span>
+      <small>${formatTime(version.created_at)}</small>
+    </div>
+    ${entries ? `<ul class="dep-entries">${entries}</ul>` : '<p class="real-hint">该版本没有依赖记录（生成路径未提供）。</p>'}
+  </div>`;
+}
+
+function onDependencyClick(event) {
+  if (event.target.closest('[data-dep-reload]')) { void loadDependencies(); return; }
+  const btn = event.target.closest('[data-dep-remove]');
+  if (!btn) return;
+  void removeManualDependency(btn);
+}
+
+async function removeManualDependency(btn) {
+  const run = state.activeRun;
+  const deliverableId = state.selectedDeliverableId;
+  if (!run || !deliverableId) return;
+  const raw = String(btn.dataset.depRemove ?? '');
+  const sep = raw.indexOf(':');
+  const kind = sep >= 0 ? raw.slice(0, sep) : raw;
+  const ref = sep >= 0 ? raw.slice(sep + 1) : '';
+  const reason = window.prompt('移除这条人工关联必须写明依据（不超过 300 字）：')?.trim();
+  if (!reason) return;
+  btn.disabled = true;
+  try {
+    await api.removeManualDependency(run.id, deliverableId, kind, ref, reason);
+    state.toast('已移除人工关联；移除记录会保留');
+    await loadDependencies();
+  } catch (error) {
+    const node = $('#wb-dep-error');
+    if (node) node.textContent = error instanceof ApiFailure ? error.message : String(error);
+    btn.disabled = false;
+  }
+}
+
+async function onDependencySubmit(event) {
+  const form = event.target;
+  if (!form.matches?.('[data-dep-form]')) return;
+  event.preventDefault();
+  const run = state.activeRun;
+  const deliverableId = state.selectedDeliverableId;
+  if (!run || !deliverableId) return;
+  const node = $('#wb-dep-error');
+  if (node) node.textContent = '';
+  const versionId = form.version_id.value;
+  const kind = form.kind.value;
+  const ref = form.ref.value.trim();
+  const reason = form.reason.value.trim();
+  const note = form.note.value.trim();
+  if (!versionId || !ref) { if (node) node.textContent = '请选择版本并填写引用对象。'; return; }
+  if (!reason) { if (node) node.textContent = '人工关联必须写明依据（reason）。'; return; }
+  const btn = form.querySelector('button[type="submit"]');
+  if (btn) btn.disabled = true;
+  try {
+    await api.addManualDependency(run.id, deliverableId, {
+      version_id: versionId,
+      reason,
+      entries: [{ kind, ref, ...(note ? { note } : {}) }],
+    });
+    state.toast('已添加人工关联');
+    await loadDependencies();
+  } catch (error) {
+    if (node) node.textContent = error instanceof ApiFailure ? error.message : String(error);
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -1346,6 +1519,7 @@ async function refreshRun(runId, { keepSSE = false } = {}) {
     renderQA();
     renderAdvanced();
     renderExport();
+    void loadDependencies();
     // 模块06：修改面板打开时同步缩略条/预览/历史版本（不重画文字层输入，避免清掉未应用的编辑）
     if (state.edit.open) {
       renderEditThumbs();
