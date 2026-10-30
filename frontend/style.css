@@ -198,6 +198,12 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .wiz-done{border:1px solid var(--brand-line);background:var(--brand-soft);border-radius:var(--radius-sm);padding:14px 16px}
 .wiz-done p{margin:0 0 8px;font-size:12px;color:var(--brand-strong);line-height:1.6}
 .wiz-done b{font-size:13px}
+/* 演示素材样例：真实模型生成，仅作展示，不参与真实商品与交付 */
+.sample-sheet{margin-top:12px;border:1px solid var(--line,#E1E6D9);border-radius:10px;padding:10px 14px;background:#fff}
+.sample-sheet summary{cursor:pointer;font-size:12px;color:var(--muted,#62705C)}
+.sample-sheet-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:10px}
+.sample-sheet-grid .tiny-cover{min-height:88px}
+@media(max-width:760px){.sample-sheet-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:760px){
   .wiz-panel{padding:16px}
   .wiz-steps{gap:6px}

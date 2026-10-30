@@ -68,12 +68,15 @@ function closeDrawer() {
 function showHelp() { $('#help-dialog').showModal(); }
 
 $$('[data-view]').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
+// 首页等模块通过事件切换视图，避免直接依赖 app.js 内部函数
+window.addEventListener('qb:navigate', event => {
+  const view = event.detail?.view;
+  if (['home', 'projects', 'create', 'assets', 'library', 'workbench'].includes(view)) setView(view);
+});
 $$('[data-open-project]').forEach(card => {
   card.addEventListener('click', activateProject);
   card.addEventListener('keydown', activateProject);
 });
-$('#quick-start').addEventListener('click', () => document.querySelector('#import-button')?.click());
-$('#background-task').addEventListener('click', () => toast('此为演示入口；请在「商品项目」中打开真实项目使用仅换背景'));
 $('#back-home').addEventListener('click', closeProject);
 $('#start-generation').addEventListener('click', startWizard);
 $('#project-settings').addEventListener('click', () => toast('此页为演示项目，不会保存；真实项目请在「商品项目」页打开'));
@@ -213,4 +216,3 @@ initRealData({ toast });
 function openCreateWizard() { setView('create'); }
 $$('.js-new-project').forEach(button => button.addEventListener('click', openCreateWizard));
 $('#projects-new')?.addEventListener('click', openCreateWizard);
-$('#import-button')?.addEventListener('click', openCreateWizard);

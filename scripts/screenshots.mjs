@@ -368,9 +368,9 @@ async function main() {
       throw new Error(`导航失败：${target}（${lastError.message}）`);
     };
 
-    const shoot = async (file, { view, mobile = false, script, settle = 1_400 }) => {
+    const shoot = async (file, { view, mobile = false, width, height, script, settle = 1_400 }) => {
       await cdp.send('Emulation.setDeviceMetricsOverride', {
-        width: mobile ? 390 : 1440, height: mobile ? 844 : 1_080,
+        width: width ?? (mobile ? 390 : 1440), height: height ?? (mobile ? 844 : 1_080),
         deviceScaleFactor: 1, mobile,
       });
       await navigate(`${base}/#${view}`);
@@ -388,6 +388,10 @@ async function main() {
     };
 
     await shoot('01-home-desktop.png', { view: 'home' });
+    await shoot('22-work-delivery.png', {
+      view: 'home', settle: 1_800,
+      script: `document.getElementById('work-delivery')?.scrollIntoView({ block: 'start' })`,
+    });
     await shoot('02-create-wizard.png', { view: 'create' });
     await shoot('03-projects.png', { view: 'projects' });
     await shoot('04-workspace.png', { view: 'assets' });
@@ -482,6 +486,20 @@ async function main() {
     const authShot = await cdp.send('Page.captureScreenshot', { format: 'png' });
     await writeFile(path.join(SHOTS, '10-auth-required.png'), Buffer.from(authShot.data, 'base64'));
     console.log('已截图 10-auth-required.png');
+
+    // 未登录新用户首页：桌面、手机与 320px 窄屏，以及四步演示结束后的演示包弹窗
+    await shoot('18-guest-home-desktop.png', { view: 'home' });
+    await shoot('19-guest-home-mobile.png', { view: 'home', mobile: true });
+    await shoot('20-guest-home-320.png', { view: 'home', mobile: true, width: 320, height: 844 });
+    await shoot('21-guest-demo-package.png', {
+      view: 'home',
+      settle: 1_800,
+      script: `(async () => {
+        const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+        for (let i = 0; i < 4; i += 1) { document.querySelector('#hp-next')?.click(); await wait(300); }
+        await wait(400);
+      })()`,
+    });
 
     console.log(`\n截图完成：${SHOTS}`);
     console.log(`预览入口（截图时使用的本地地址，服务已关闭）：${base}/#home`);

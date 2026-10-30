@@ -12,9 +12,10 @@
   <link rel="stylesheet" href="workbench.css">
   <link rel="stylesheet" href="pricing.css">
   <link rel="stylesheet" href="viewport.css">
+  <link rel="stylesheet" href="home.css">
   <link rel="icon" href="icon.svg">
 </head>
-<body>
+<body class="auth-pending">
   <div class="app-shell">
     <header class="topbar">
       <a class="brand" href="#home" data-view="home" aria-label="千图百炼首页">
@@ -33,68 +34,170 @@
         <button class="icon-button" id="help-button" aria-label="查看说明" title="查看说明">?</button>
         <button class="avatar" aria-label="账户菜单">我</button>
       </div>
+      <nav class="hp-nav" aria-label="首页导航">
+        <button type="button" data-hp-scroll="scenes">使用场景</button>
+        <button type="button" data-hp-scroll="evidence">功能介绍</button>
+        <button type="button" data-hp-scroll="start">开始使用</button>
+      </nav>
+      <div class="hp-guest-actions">
+        <button type="button" class="hp-menu-toggle" id="hp-menu-toggle" aria-expanded="false" aria-controls="hp-mobile-menu">导航</button>
+        <button type="button" class="hp-login" id="hp-login">登录 / 注册</button>
+      </div>
     </header>
+    <div class="hp-mobile-menu" id="hp-mobile-menu" hidden>
+      <button type="button" data-hp-scroll="scenes">使用场景</button>
+      <button type="button" data-hp-scroll="evidence">功能介绍</button>
+      <button type="button" data-hp-scroll="start">开始使用</button>
+    </div>
 
     <main>
       <section class="view active" id="home-view" data-view-panel="home">
-        <div class="page-heading">
-          <div><p class="eyebrow">快捷创意工厂</p><h1>把新品，做成一套<span class="h1-accent">能上架的视觉资产</span>。</h1><p class="heading-note">上传商品图、确认必要信息、选择风格与交付即可开始；费用在生成前明确说明。</p></div>
-          <div class="heading-actions"><button class="secondary" id="import-button">导入商品资料</button><button class="primary js-new-project" id="new-project-button"><span>＋</span> 开始制作</button></div>
-        </div>
-        <div class="home-grid">
-          <section class="section-block showcase-block" aria-label="效果展示">
-            <div class="showcase-copy">
-              <p class="eyebrow">为什么是千图百炼</p>
-              <h2>不止生成好看的图，更交付能上架的图</h2>
-              <ul class="showcase-points">
-                <li><span class="point-icon">✓</span>商品主体保护：支持主体区域检查与本地合成，实际效果需验收</li>
-                <li><span class="point-icon">✓</span>候选文字由你核对确认，品牌 Logo 使用上传原图叠加</li>
-                <li><span class="point-icon">✓</span>按已覆盖的平台规则逐项检查，未核验项如实说明，不强求「一定能上架」</li>
-              </ul>
-              <button class="primary js-new-project"><span>＋</span> 创建新品上架包</button>
-            </div>
-            <div class="showcase-demo">
-              <div class="compare-row">
-                <figure class="compare-item"><div class="compare-thumb cover-skin"><img class="sample-photo" src="./assets/demo/sample-cream-original.jpg" loading="lazy" alt="原图素材样例：象牙白面霜罐随拍照" onerror="this.style.display='none'"><div class="cover-product"></div></div><figcaption>原图素材</figcaption></figure>
-                <span class="compare-arrow" aria-hidden="true">→</span>
-                <figure class="compare-item"><div class="compare-thumb scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="生成图样例：晨间窗台场景面霜图" onerror="this.style.display='none'"><div class="jar small"></div><span class="scene-leaf">◒</span></div><figcaption>生成图</figcaption></figure>
+        <div class="home-loading" id="home-loading">正在确认登录状态…</div>
+
+        <!-- 未登录：新用户首页（A 页头在 header 内，B-G 见下） -->
+        <div class="home-landing" id="guest-home" hidden>
+          <section class="hp-hero" aria-label="更新或首次制作商品图">
+            <div class="hp-hero-text">
+              <p class="hp-eyebrow">商品图 · 持续更新</p>
+              <h1>商品变了，<br><em>图片跟上。</em></h1>
+              <p class="hp-lead">改规格、换包装，找到该改的图。</p>
+              <div class="hp-actions">
+                <button class="hp-entry" id="hp-update" type="button">更新商品图</button>
+                <button class="hp-entry" id="hp-create" type="button">首次制作商品图</button>
               </div>
-              <div class="qa-badges"><span class="qa-badge">效果示例 · 当前任务需独立检查</span></div>
-              <p class="showcase-note">流程示意 · 图片为真实模型生成样例</p>
+              <p class="hp-micro">免费改字 · 保留满意版本</p>
+            </div>
+            <div class="hp-hero-side">
+              <div class="hp-demo" id="hp-demo" aria-label="商品变化四步演示">
+                <div class="hp-demo-head"><strong>一次更新，四步完成</strong><span class="hp-tag">示例演示</span></div>
+                <div class="hp-demo-body">
+                  <div class="hp-steps" id="hp-steps"></div>
+                  <div class="hp-product-area">
+                    <div class="hp-pack" id="hp-pack"></div>
+                    <div class="hp-product-info">
+                      <span class="hp-eyebrow">青禾 · 日常护理</span>
+                      <strong>植萃护手霜</strong>
+                      <div class="hp-spec" id="hp-spec"></div>
+                      <span class="hp-tag" id="hp-version"></span>
+                    </div>
+                  </div>
+                  <div class="hp-change" id="hp-change"></div>
+                  <div class="hp-results" id="hp-results"></div>
+                  <div class="hp-demo-foot">
+                    <p id="hp-note"></p>
+                    <button class="hp-demo-next" id="hp-next" type="button"></button>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
-          <section class="metric-strip" aria-label="工作概览"><p>正在读取你的工作概览…</p></section>
-          <section class="section-block todo-block" aria-label="待办与检查">
-            <div class="section-title">
-              <div><h2>检查与更新</h2><p>未知、失败、待复核与已采用分开显示；点击条目进入对应项目或工作台</p></div>
-              <button class="text-button" id="todo-refresh">刷新</button>
+
+          <section class="hp-section" id="scenes" aria-label="日常维护场景">
+            <div class="hp-section-head">
+              <div><span class="hp-eyebrow">日常维护</span><h2>变了，也不用重来。</h2></div>
+              <p>改规格、分 SKU、补说明。</p>
             </div>
-            <div id="home-todos" class="home-todos"><p class="real-empty">正在读取待办…</p></div>
-          </section>
-          <section class="section-block projects-block">
-            <div class="section-title"><div><h2>继续制作</h2><p>回到最近的商品项目</p></div><button class="text-button" data-view="projects">查看全部 <span>→</span></button></div>
-            <div id="home-real-projects"><p class="real-empty">还没有真实项目。点击「新建商品项目」开始你的第一个商品。</p></div>
-            <div class="project-list" id="home-demo-projects" hidden>
-              <article class="project-card featured" data-open-project="skin" role="button" tabindex="0" aria-label="打开月光舒缓面霜项目">
-                <div class="project-cover cover-skin"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="月光舒缓面霜主图样例" onerror="this.style.display='none'"><span class="cover-tag">新品上架包</span><div class="cover-product"><span>MOON<br><b>CALM</b></span></div></div>
-                <div class="project-info"><div class="project-line"><h3>月光舒缓面霜</h3><span class="status-pill amber">待复核</span></div><p>天猫 · 5 件交付物 · 更新于 12 分钟前</p><div class="project-progress"><span><i style="width:72%"></i></span><b>72%</b></div><div class="project-foot"><span>3 个素材已通过</span><span class="arrow-button" aria-hidden="true">→</span></div></div>
+            <div class="hp-grid">
+              <article class="hp-card">
+                <span class="hp-number">01 / 商品变了</span>
+                <div class="hp-diagram"><span class="hp-tile">50g × 1</span><span aria-hidden="true">→</span><span class="hp-tile">50g × 2</span></div>
+                <h3>改规格</h3>
+                <p>找到受影响图片，其余保留。</p>
+                <button class="hp-card-link" type="button" data-hp-scene="impact"><span>查看影响清单</span><span aria-hidden="true">→</span></button>
               </article>
-              <article class="project-card" data-open-project="lamp" role="button" tabindex="0" aria-label="查看雾白便携台灯状态">
-                <div class="project-cover cover-lamp"><img class="sample-photo" src="./assets/demo/sample-lamp-hero.jpg" loading="lazy" alt="雾白便携台灯主图样例" onerror="this.style.display='none'"><span class="cover-tag">进行中</span><div class="lamp-object"></div></div>
-                <div class="project-info"><div class="project-line"><h3>雾白便携台灯</h3><span class="status-pill blue">制作中</span></div><p>京东 · 3 件交付物 · 更新于昨天</p><div class="project-progress"><span><i style="width:38%"></i></span><b>38%</b></div><div class="project-foot"><span>等待商品事实确认</span><span class="arrow-button" aria-hidden="true">→</span></div></div>
+              <article class="hp-card">
+                <span class="hp-number">02 / 规格多了</span>
+                <div class="hp-diagram"><span class="hp-tile">单支装</span><span class="hp-tile">双支装</span><span class="hp-tile">礼盒装</span></div>
+                <h3>分清 SKU</h3>
+                <p>按规格核对，分组导出。</p>
+                <button class="hp-card-link" type="button" data-hp-scene="compare"><span>查看核对过程</span><span aria-hidden="true">→</span></button>
+              </article>
+              <article class="hp-card">
+                <span class="hp-number">03 / 买家问了</span>
+                <div class="hp-diagram"><span class="hp-tile">“里面有几支？”</span><span aria-hidden="true">→</span><span class="hp-tile">清单图</span></div>
+                <h3>补张说明图</h3>
+                <p>尺寸、包含物、规格差别，一图说明。</p>
+                <button class="hp-card-link" type="button" data-hp-scene="question"><span>体验问题分流</span><span aria-hidden="true">→</span></button>
               </article>
             </div>
           </section>
-          <section class="section-block task-block">
-            <div class="section-title"><div><h2>从一个目标开始</h2><p>选择任务模板，快速进入生产</p></div></div>
-            <div class="task-grid">
-              <button class="task-card primary-task" id="quick-start"><span class="task-icon">✦</span><strong>新品上架包</strong><small>主图、卖点图、场景图</small><em>推荐</em></button>
-              <button class="task-card" id="background-task"><span class="task-icon">◐</span><strong>仅换背景</strong><small>保留商品主体与文字</small></button>
-              <button class="task-card disabled-task" disabled><span class="task-icon">▣</span><strong>短视频首帧</strong><small>后续阶段开放</small><em>后续阶段</em></button>
-              <button class="task-card disabled-task" disabled><span class="task-icon">▤</span><strong>详情页模块</strong><small>后续阶段开放</small><em>后续阶段</em></button>
+
+          <section class="hp-evidence" id="evidence" aria-label="功能依据">
+            <div class="hp-evidence-intro">
+              <span class="hp-eyebrow">看得见的处理依据</span>
+              <h2>改哪里，<br>一眼清楚。</h2>
+              <p>有依据地更新，确认后再交付。</p>
+              <span class="hp-tag">流程说明 · 非真实经营数据</span>
+              <p class="hp-honest">主体区域检查与本地合成只能约束可验证的部分，实际效果需验收；平台规则未核验项如实说明，不强求「一定能上架」。</p>
+            </div>
+            <div class="hp-proof-list">
+              <div class="hp-proof"><b>↗ 找到关联图片</b><small>按已记录的关联查找，旧图需核对。</small></div>
+              <div class="hp-proof"><b>◎ 保留满意版本</b><small>只更新选中的图片。</small></div>
+              <div class="hp-proof"><b>✎ 区分免费与付费</b><small>改字免费，生成前确认报价。</small></div>
+              <div class="hp-proof"><b>✓ 复核后整理导出</b><small>附替换清单，手动更新店铺。</small></div>
             </div>
           </section>
-          <section class="section-block delivery-block"><div class="section-title"><div><h2>最近交付</h2><p>可发布状态一目了然</p></div><button class="text-button" data-view="assets">查看交付记录 <span>→</span></button></div><div class="delivery-table" hidden><div class="delivery-row header"><span>商品项目</span><span>交付物</span><span>质量状态</span><span>更新时间</span></div><div class="delivery-row"><span><b>云杉洁面泡沫</b><small>淘宝 · 主图</small></span><span>1 个素材</span><span class="pass-text">● 可发布</span><span>今天 10:42</span></div><div class="delivery-row"><span><b>月光舒缓面霜</b><small>天猫 · 卖点图 02</small></span><span>1 个素材</span><span class="review-text">● 待复核</span><span>今天 09:18</span></div></div></section>
+
+          <section class="hp-cta" id="start" aria-label="开始使用">
+            <span class="hp-eyebrow">现在开始</span>
+            <h2>让商品图，跟上每次变化。</h2>
+            <p>从一个商品开始。</p>
+            <button class="hp-cta-btn" id="hp-cta-update" type="button">更新商品图 ↗</button>
+          </section>
+
+          <footer class="hp-footer">
+            <div class="hp-footer-brand"><strong>千图百炼</strong><p>快捷创意 · 商品视觉工作台</p></div>
+            <div class="hp-footer-links">
+              <button type="button" data-hp-scroll="scenes">使用场景</button>
+              <button type="button" data-hp-scroll="evidence">功能介绍</button>
+              <button type="button" data-hp-scroll="start">开始使用</button>
+              <button type="button" id="hp-footer-login">登录 / 注册</button>
+            </div>
+            <p class="hp-footer-note">短视频首帧、详情页模块等能力将在后续阶段开放。示例演示不调用生成模型、不扣额度、不上传文件，也不写入真实商品。</p>
+          </footer>
+        </div>
+
+        <!-- 已登录：工作首页，数字与待办来自当前账户的真实数据 -->
+        <div class="work-home" id="work-home" hidden>
+          <div class="work-head">
+            <div>
+              <p class="hp-eyebrow">我的工作首页</p>
+              <h1>今天，先把这些图片处理好。</h1>
+              <p class="work-head-note">最近的商品变化与未完成事项，都在这里。</p>
+            </div>
+            <button class="work-new" id="work-new-project" type="button">＋ 制作新商品图</button>
+          </div>
+          <nav class="work-nav" aria-label="工作首页导航">
+            <button type="button" data-work-scroll="work-summary">工作概览</button>
+            <button type="button" data-work-scroll="work-todos">待办事项</button>
+            <button type="button" data-work-scroll="work-delivery">最近交付</button>
+          </nav>
+          <section id="work-summary" aria-label="工作概览">
+            <div class="metric-strip" id="home-metrics"><p>正在读取工作概览…</p></div>
+            <p class="work-metric-note" id="work-metrics-note">指标来自不同记录，可能重叠，不做合计。</p>
+          </section>
+          <section class="work-section" id="work-todos" aria-label="待办事项">
+            <div class="work-section-head">
+              <div><h2>继续处理</h2><p>按下一步行动排列；未知、失败、待复核与已采用分开显示。</p></div>
+              <button class="text-button" id="todo-refresh" type="button">刷新</button>
+            </div>
+            <div id="home-todos" class="home-todos" aria-live="polite"><p class="real-empty">正在读取待办…</p></div>
+          </section>
+          <section class="work-section" aria-label="最近商品">
+            <div class="work-section-head">
+              <div><h2>最近商品</h2><p>从最近的商品继续制作或查看商品事实。</p></div>
+              <button class="text-button" data-view="projects">查看全部 →</button>
+            </div>
+            <div id="home-real-projects"></div>
+            <div class="project-list" id="home-demo-projects" hidden></div>
+          </section>
+          <section class="work-section" id="work-delivery" aria-label="最近交付">
+            <div class="work-section-head">
+              <div><h2>最近交付</h2><p>已导出不等于已替换：导出包与店铺手动替换状态分开标注。</p></div>
+              <button class="text-button" data-view="assets">查看交付记录 →</button>
+            </div>
+            <div class="delivery-table" id="work-deliveries"><p class="real-empty">正在读取交付记录…</p></div>
+          </section>
         </div>
       </section>
 
@@ -113,6 +216,17 @@
         <div class="filter-bar"><div class="segmented"><button class="selected">全部项目 <b>2</b></button><button>进行中 <b>1</b></button><button>待复核 <b>1</b></button></div><label class="search"><span>⌕</span><input placeholder="搜索商品名称或 SKU" aria-label="搜索项目"></label></div>
         <div class="project-table" hidden><div class="table-head"><span>项目</span><span>目标平台</span><span>进度</span><span>质量状态</span><span>最近更新</span><span></span></div><div class="table-row" data-open-project="skin" role="button" tabindex="0" aria-label="打开月光舒缓面霜项目"><div class="table-project"><div class="tiny-cover cover-skin"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="月光舒缓面霜缩略图样例" onerror="this.style.display='none'"><div class="cover-product"></div></div><span><b>月光舒缓面霜</b><small>SKU MC-50 · 5 件交付物</small></span></div><span>天猫旗舰店</span><span><b>72%</b><small>3 / 5 已完成</small></span><span class="status-pill amber">待复核</span><span>12 分钟前</span><button class="row-arrow">→</button></div><div class="table-row" data-open-project="lamp" role="button" tabindex="0" aria-label="查看雾白便携台灯状态"><div class="table-project"><div class="tiny-cover cover-lamp"><img class="sample-photo" src="./assets/demo/sample-lamp-hero.jpg" loading="lazy" alt="雾白便携台灯缩略图样例" onerror="this.style.display='none'"><div class="lamp-object"></div></div><span><b>雾白便携台灯</b><small>SKU WL-08 · 3 件交付物</small></span></div><span>京东自营</span><span><b>38%</b><small>素材准备中</small></span><span class="status-pill blue">制作中</span><span>昨天</span><button class="row-arrow">→</button></div></div>
         <p class="sample-note">封面与素材图片为真实模型生成样例</p>
+        <details class="sample-sheet">
+          <summary>查看演示素材样例（真实模型生成，仅作展示）</summary>
+          <div class="sample-sheet-grid">
+            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-original.jpg" loading="lazy" alt="面霜原图样例" onerror="this.style.display='none'"></div>
+            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="面霜主图样例" onerror="this.style.display='none'"></div>
+            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="面霜场景图样例" onerror="this.style.display='none'"></div>
+            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="面霜卖点图样例" onerror="this.style.display='none'"></div>
+            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="面霜细节图样例" onerror="this.style.display='none'"></div>
+            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-lamp-hero.jpg" loading="lazy" alt="台灯主图样例" onerror="this.style.display='none'"></div>
+          </div>
+        </details>
       </section>
 
       <!-- 模块02：首次制作一页三步向导（上传商品 → 确认必要信息 → 风格与交付），取代旧 project-dialog 弹窗 -->
@@ -542,6 +656,20 @@
     </div>
   </dialog>
 
+  <dialog id="hp-dialog" class="hp-dialog" aria-labelledby="hp-dialog-title">
+    <div class="hp-dialog-inner">
+      <button class="hp-dialog-close" type="button" data-hp-close aria-label="关闭">×</button>
+      <p class="hp-eyebrow" id="hp-dialog-kicker">示例演示</p>
+      <h2 id="hp-dialog-title"></h2>
+      <div class="hp-dialog-body" id="hp-dialog-body"></div>
+      <p class="hp-dialog-note" id="hp-dialog-note"></p>
+      <div class="hp-dialog-foot">
+        <button class="hp-secondary" type="button" data-hp-close>关闭</button>
+        <button class="hp-primary" type="button" id="hp-dialog-action" hidden></button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- 模块02：旧 project-dialog 已由 create-view 一页三步向导取代；truth/spec/upload 弹窗保留给既有项目页 -->
   <script type="module" src="auth.js"></script>
   <script type="module" src="app.js"></script>
@@ -550,5 +678,6 @@
   <script type="module" src="workbench.js"></script>
   <script type="module" src="pricing.js"></script>
   <script type="module" src="wizard.js"></script>
+  <script type="module" src="home.js"></script>
 </body>
 </html>

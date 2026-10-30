@@ -2,15 +2,34 @@
  * R01 登录闸口。
  *
  * 行为约定：
- * - 会话已登录：写入 CSRF 令牌，页面正常进入。
- * - 未登录且服务端为演示模式：保持原有演示入口，不弹登录框（演示与生产隔离）。
- * - 未登录且服务端为生产口径：显示登录/注册闸口，业务请求在闸口通过前保持等待，
- *   不会以 401 空列表冒充“没有项目”。
+ * - 会话已登录：写入 CSRF 令牌，首页进入工作首页。
+ * - 未登录：首页进入新用户首页；服务端为演示模式时入口可直接演练，
+ *   生产口径下点击「更新 / 首次制作」才按需打开登录/注册闸口，并保留继续意图。
+ * - 闸口未通过前不发起业务写入，避免以 401 空列表冒充“没有项目”。
  */
 import { api, setSession } from './api.js';
 
 let releaseReady;
 window.__qtbAuthReady = new Promise(resolve => { releaseReady = resolve; });
+
+/**
+ * 登录状态：首页据此选择「新用户首页」或「工作首页」。
+ * 状态在会话确认后发布，未确认前页面保持 auth-pending 占位，避免先闪错页面。
+ */
+const authState = window.__qtbAuthState = { ready: false, authenticated: false, demoMode: false, session: null };
+let announceAuth;
+window.__qtbAuthStateReady = new Promise(resolve => { announceAuth = resolve; });
+
+function publishAuthState(session) {
+  authState.session = session ?? null;
+  authState.authenticated = Boolean(session?.authenticated);
+  authState.demoMode = Boolean(session?.demo_mode);
+  authState.ready = true;
+  announceAuth(authState);
+  window.dispatchEvent(new CustomEvent('qb:auth-state', { detail: authState }));
+}
+
+let gate = null;
 
 const stateLabel = text => text;
 
@@ -126,26 +145,33 @@ function accountChip(session) {
   });
 }
 
+/** 按需打开登录/注册闸口：未登录首页的入口先保留意图，再调用这里。 */
+export function openAuthGate(options = {}) {
+  if (gate?.isConnected) {
+    gate.querySelector('input[name="email"]')?.focus();
+    return gate;
+  }
+  gate = buildGate(options);
+  return gate;
+}
+
 async function boot() {
   let session;
   try {
     session = await api.session();
   } catch {
-    // 会话接口本身失败时不阻塞页面：由业务请求自行报错，避免白屏
+    // 会话接口本身失败时不阻塞页面：先发布未登录状态，由业务请求自行报错，避免白屏
+    publishAuthState(null);
     releaseReady();
     return;
   }
   if (session?.authenticated) {
     setSession(session);
     accountChip(session);
-    releaseReady();
-    return;
   }
-  if (session?.demo_mode) {
-    releaseReady();
-    return;
-  }
-  buildGate();
+  publishAuthState(session);
+  // 生产模式未登录不再自动弹闸口：首页先展示新用户首页，点击入口时再登录并继续
+  releaseReady();
 }
 
 void boot();

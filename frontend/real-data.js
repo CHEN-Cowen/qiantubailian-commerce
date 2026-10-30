@@ -52,6 +52,7 @@ export function initRealData({ toast } = {}) {
   // E07：首页待办刷新（聚合未知/失败/待复核/已采用）
   $('#todo-refresh')?.addEventListener('click', () => void loadTodos());
   $('#home-todos')?.addEventListener('click', onTodoClick);
+  $('#work-deliveries')?.addEventListener('click', onDeliveryClick);
   // E06：切换说明图类型时重建表单（对比图才显示「对比 SKU」）
   $('#truth-body')?.addEventListener('change', event => {
     if (event.target?.id === 'ex-kind') rerenderExplainerSection();
@@ -65,6 +66,8 @@ export function initRealData({ toast } = {}) {
 
 async function refresh() {
   const list = $('#real-list');
+  // 账户切换/刷新期间先清空旧账户的指标、待办与交付，避免把上一个账户的数字留在页面上
+  resetWorkHome();
   try {
     const payload = await api.listProjects();
     state.projects = payload.projects;
@@ -75,6 +78,7 @@ async function refresh() {
   } catch (error) {
     state.projects = [];
     if (list) list.innerHTML = `<p class="real-empty real-error">${escapeHtml(errorText(error))}</p>`;
+    renderWorkFailure(error);
   }
 }
 
@@ -85,7 +89,14 @@ function renderHomeRealProjects() {
   if (!holder) return;
   const projects = state.projects ?? [];
   if (projects.length === 0) {
-    holder.innerHTML = '<p class="real-empty">还没有真实项目。点击「新建商品项目」开始你的第一个商品。</p>';
+    holder.innerHTML = `<div class="empty-state">
+      <h3>还没有商品</h3>
+      <p>先建立商品档案并关联图片，才能查看变更影响、待办与交付记录。</p>
+      <div class="state-actions">
+        <button type="button" data-home-create>建立商品档案</button>
+        <button type="button" data-home-projects>查看我的商品</button>
+      </div>
+    </div>`;
     if (demo) demo.hidden = true;
     return;
   }
@@ -2281,13 +2292,58 @@ const TODO_GROUP_HINT = {
   adopted: '已采用与已完成；仅代表本服务内状态，不代表平台曝光或转化',
 };
 
+const TODO_RUN_STATUS = {
+  pending: '待开始', preparing: '准备中', generating: '生成中', qa: '检查中',
+  needs_review: '待复核', budget_confirmation: '待确认额度', completed: '已完成',
+  failed: '失败', cancelled: '已取消',
+};
+
+function todoStatusLabel(item, groupKey) {
+  if (item.kind === 'change') {
+    if (item.status === 'awaiting_material') return '待补图';
+    if (item.status === 'partial_failed') return '待重试';
+    if (item.status === 'awaiting_review') return '待复核';
+    if (item.status === 'completed') return '已采用';
+    return '待更新';
+  }
+  if (item.kind === 'replacement') return item.status === 'pending' ? '待替换' : '已替换';
+  if (item.kind === 'run') return TODO_RUN_STATUS[item.status] ?? '待处理';
+  if (item.kind === 'check') return '待核对';
+  if (item.kind === 'question') return '待回复';
+  if (item.kind === 'explainer') return '待确认';
+  return groupKey === 'adopted' ? '已采用' : '待处理';
+}
+
+function todoActionLabel(item) {
+  if (item.action === 'workbench' || item.kind === 'run') return '打开工作台';
+  if (item.kind === 'change') return '继续处理';
+  if (item.kind === 'replacement') return '查看替换清单';
+  if (item.kind === 'check') return '去核对';
+  if (item.kind === 'question') return '处理问题';
+  if (item.kind === 'explainer') return '查看说明图';
+  return '查看';
+}
+
+function workErrorMarkup(error, subject) {
+  const unauth = error instanceof ApiFailure && error.status === 401;
+  const forbidden = error instanceof ApiFailure && error.status === 403;
+  const title = unauth ? '登录状态已失效' : forbidden ? '没有权限读取当前工作区' : `读取${subject}失败`;
+  const detail = unauth
+    ? '请重新登录后继续；旧账户数据不会保留在页面上。'
+    : escapeHtml(errorText(error));
+  const action = unauth
+    ? '<button type="button" data-home-login>重新登录</button>'
+    : '<button type="button" data-retry-home>重试</button>';
+  return `<h3>${title}</h3><p>${detail}</p><div class="state-actions">${action}</div>`;
+}
+
 async function loadTodos() {
   const holder = $('#home-todos');
   if (!holder) return;
   try {
     renderTodos(await api.todos());
   } catch (error) {
-    holder.innerHTML = `<p class="real-empty real-error">${escapeHtml(errorText(error))}</p>`;
+    holder.innerHTML = `<div class="empty-state">${workErrorMarkup(error, '待办')}</div>`;
   }
 }
 
@@ -2312,20 +2368,36 @@ function renderTodos(payload) {
   </details>`;
   const groups = (payload.groups ?? []).filter(group => group.total > 0);
   if (groups.length === 0) {
-    holder.innerHTML = `${chips}<p class="real-empty">当前没有待办。未知、失败与待复核都是 0；新任务可从「开始制作」或项目页进入。</p>${limitsHtml}`;
+    holder.innerHTML = `${chips}<div class="empty-state">
+      <h3>当前没有待处理事项</h3>
+      <p>未知、失败与待复核都是 0；新任务可以从「制作新商品图」或商品页进入。</p>
+      <div class="state-actions">
+        <button type="button" data-home-create>制作新商品图</button>
+        <button type="button" data-home-projects>查看我的商品</button>
+      </div>
+    </div>${limitsHtml}`;
     return;
   }
+  const projects = state.projects ?? [];
   holder.innerHTML = `${chips}<div class="todo-groups">${groups.map(group => `
     <div class="todo-group" data-group="${escapeHtml(group.key)}">
       <div class="todo-group-head"><h3>${escapeHtml(group.label)}</h3><span>${group.total}</span></div>
       <p class="todo-group-hint">${escapeHtml(TODO_GROUP_HINT[group.key] ?? '')}</p>
-      <ul class="todo-items">${group.items.map(item => `<li>
+      <ul class="todo-items">${group.items.map(item => {
+        const project = projects.find(entry => entry.id === item.project_id);
+        const sku = project?.sku ? ` · ${escapeHtml(project.sku)}` : ' · SKU 未记录';
+        return `<li>
         <button type="button" class="todo-item" data-proj="${escapeHtml(item.project_id)}" data-action="${escapeHtml(item.action)}" data-section="${escapeHtml(item.section ?? '')}">
-          <b>${escapeHtml(item.title)}</b>
-          <span>${escapeHtml(item.project_name)}</span>
-          <small>${escapeHtml(item.detail ?? '')}</small>
+          <span class="todo-item-main">
+            <span class="hp-tag">${escapeHtml(todoStatusLabel(item, group.key))}</span>
+            <b class="todo-title">${escapeHtml(item.title)}</b>
+            <span class="todo-detail">${escapeHtml(item.project_name ?? '未知商品')}${sku} · ${escapeHtml(item.detail ?? '')}</span>
+            <span class="todo-time">${escapeHtml(formatTime(item.created_at))}</span>
+          </span>
+          <span class="todo-item-action">${escapeHtml(todoActionLabel(item))}</span>
         </button>
-      </li>`).join('')}</ul>
+      </li>`;
+      }).join('')}</ul>
     </div>`).join('')}</div>${limitsHtml}`;
 }
 
@@ -2341,24 +2413,185 @@ function onTodoClick(event) {
   void openTruthDialog(projectId, { section: item.dataset.section || undefined });
 }
 
+/* ---------- 工作首页：真实指标、待办与最近交付 ----------
+   四个指标分别来自变更单、待办聚合与替换待办，口径不同、可能重叠，不做合计。
+   任一接口失败时显示“—”与失败原因，不把 0 当成功，也不沿用上一个账户的旧数字。 */
+
+const WORK_METRICS = [
+  ['impacted', '受变更影响', '张', '未完成变更单里尚未完成、未跳过的图片'],
+  ['new_photo', '需要补实拍', '项', '实物已变化、必须补新实拍的未完成项'],
+  ['review', '待人工复核', '项', '待办聚合中的待复核项，需你确认后才会采用'],
+  ['replacement', '待店铺替换', '包', '已导出但尚未在店铺替换的包'],
+];
+
+const settled = async promise => {
+  try {
+    return { ok: true, value: await promise, error: null };
+  } catch (error) {
+    return { ok: false, value: null, error };
+  }
+};
+
+async function loadChangeStats(projects) {
+  if (projects.length === 0) return { impacted: 0, newPhoto: 0, failedProject: 0 };
+  const results = await Promise.allSettled(projects.map(project => api.listChanges(project.id)));
+  let impacted = 0, newPhoto = 0, failedProject = 0;
+  results.forEach(result => {
+    if (result.status !== 'fulfilled') { failedProject += 1; return; }
+    for (const change of result.value.changes ?? []) {
+      if (change.status === 'cancelled' || change.status === 'draft') continue;
+      for (const item of change.impact_items ?? []) {
+        if (item.status === 'done' || item.status === 'skipped') continue;
+        impacted += 1;
+        if (item.action === 'needs_new_photo') newPhoto += 1;
+      }
+    }
+  });
+  return { impacted, newPhoto, failedProject };
+}
+
+function resetWorkHome() {
+  const metrics = $('#home-metrics');
+  if (metrics) metrics.innerHTML = '<p>正在读取工作概览…</p>';
+  const note = $('#work-metrics-note');
+  if (note) note.textContent = '指标来自不同记录，可能重叠，不做合计。';
+  const todos = $('#home-todos');
+  if (todos) todos.innerHTML = '<p class="real-empty">正在读取待办…</p>';
+  const deliveries = $('#work-deliveries');
+  if (deliveries) deliveries.innerHTML = '<p class="real-empty">正在读取交付记录…</p>';
+  const homeProjects = $('#home-real-projects');
+  if (homeProjects) homeProjects.innerHTML = '';
+}
+
+function renderWorkFailure(error) {
+  const metrics = $('#home-metrics');
+  if (metrics) metrics.innerHTML = `<div class="empty-state">${workErrorMarkup(error, '工作概览')}</div>`;
+  const note = $('#work-metrics-note');
+  if (note) note.textContent = '无法读取当前账户数据，指标不以 0 代替。';
+  const todos = $('#home-todos');
+  if (todos) todos.innerHTML = `<div class="empty-state">${workErrorMarkup(error, '待办')}</div>`;
+  const deliveries = $('#work-deliveries');
+  if (deliveries) deliveries.innerHTML = `<div class="empty-state">${workErrorMarkup(error, '交付记录')}</div>`;
+  const homeProjects = $('#home-real-projects');
+  if (homeProjects) homeProjects.innerHTML = `<div class="empty-state">${workErrorMarkup(error, '商品')}</div>`;
+}
+
+function renderWorkMetrics(values, projectCount, changeStats) {
+  const holder = $('#home-metrics');
+  if (!holder) return;
+  holder.innerHTML = WORK_METRICS.map(([key, label, unit, note]) => {
+    const unknown = values[key] == null;
+    const value = unknown ? '—' : values[key];
+    const detail = unknown ? '读取失败，无法统计' : `${unit} · ${note}`;
+    return `<div class="metric${unknown ? ' is-unknown' : ''}"><span>${label}</span><strong>${value}</strong><small>${detail}</small></div>`;
+  }).join('');
+  const noteHolder = $('#work-metrics-note');
+  if (!noteHolder) return;
+  if (projectCount === 0) {
+    noteHolder.textContent = '当前工作区还没有商品，四项指标均为 0；先建立商品档案才会产生变更、待办与交付。';
+  } else if (changeStats.failedProject > 0) {
+    noteHolder.textContent = `有 ${changeStats.failedProject} 个商品的变更记录读取失败，受影响与补实拍指标不完整；指标来自不同记录，可能重叠，不做合计。`;
+  } else {
+    noteHolder.textContent = '指标来自不同记录，可能重叠，不做合计。';
+  }
+}
+
+function deliveryState(exp, replacementStatus) {
+  if (exp.complete !== true || exp.status !== 'PACKAGE_COMPLETE') {
+    const missing = (exp.missing ?? []).length;
+    return { className: 'is-warn', text: `导出不完整 · 缺 ${missing} 张，暂不可下载` };
+  }
+  if (replacementStatus === 'pending') return { className: 'is-neutral', text: '已导出 · 待你在店铺替换' };
+  if (replacementStatus === 'confirmed') return { className: 'is-neutral', text: '你已确认替换 · 非平台回执' };
+  return { className: 'is-neutral', text: '已导出 · 需在店铺手动替换' };
+}
+
+function renderDeliveries(exports, replacements, runs, error) {
+  const holder = $('#work-deliveries');
+  if (!holder) return;
+  if (error) {
+    holder.innerHTML = `<div class="empty-state">${workErrorMarkup(error, '交付记录')}</div>`;
+    return;
+  }
+  const rows = (exports ?? []).slice(0, 5);
+  if (rows.length === 0) {
+    holder.innerHTML = `<div class="empty-state">
+      <h3>还没有交付记录</h3>
+      <p>导出包生成后会出现在这里；导出只代表文件已打包，不代表店铺已替换。</p>
+      <div class="state-actions">
+        <button type="button" data-home-create>制作新商品图</button>
+        <button type="button" data-home-projects>查看我的商品</button>
+      </div>
+    </div>`;
+    return;
+  }
+  const projectOfRun = new Map((runs ?? []).map(run => [run.id, run.project_id]));
+  const projectMap = new Map((state.projects ?? []).map(project => [project.id, project]));
+  const replacementByExport = new Map();
+  for (const todo of replacements ?? []) {
+    const current = replacementByExport.get(todo.export_id);
+    if (current === 'pending') continue;
+    if (todo.status === 'pending' || current == null) replacementByExport.set(todo.export_id, todo.status);
+  }
+  holder.innerHTML = `<div class="delivery-head"><span>商品 / 导出包</span><span>交付状态</span><span>时间</span><span></span></div>${rows.map(exp => {
+    const project = projectMap.get(projectOfRun.get(exp.run_id));
+    const state = deliveryState(exp, replacementByExport.get(exp.id));
+    const canDownload = exp.complete === true && exp.status === 'PACKAGE_COMPLETE';
+    const sku = exp.sku_code ?? project?.sku ?? 'SKU 未记录';
+    return `<div class="delivery-item">
+      <span class="delivery-product"><b>${escapeHtml(project?.name ?? '未知商品')}</b><small>${escapeHtml(sku)} · ${escapeHtml(exp.package_filename ?? exp.id)}</small></span>
+      <span class="delivery-state ${state.className}">${escapeHtml(state.text)}</span>
+      <time>${escapeHtml(formatTime(exp.created_at))}</time>
+      <span class="delivery-actions">
+        ${canDownload ? `<a href="/api/exports/${encodeURIComponent(exp.id)}/download" download>下载导出包</a>` : '<span class="delivery-missing">未生成完整包</span>'}
+        ${project ? `<button type="button" data-delivery-open="${escapeHtml(project.id)}">打开工作台</button>` : ''}
+      </span>
+    </div>`;
+  }).join('')}${runs == null ? '<p class="delivery-missing">任务列表读取失败，商品名可能无法对应。</p>' : ''}`;
+}
+
+function onDeliveryClick(event) {
+  const trigger = event.target.closest('[data-delivery-open]');
+  if (!trigger) return;
+  window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: trigger.dataset.deliveryOpen } }));
+}
+
 async function renderAccountData() {
-  const [runs, credits, exported] = await Promise.all([api.listRuns(), api.credits(), api.listExports({})]);
-  const list = runs.runs ?? [], balance = credits.balance ?? {};
-  const summaries = [
-    ['商品项目', state.projects.length, '当前工作区'],
-    ['待复核任务', list.filter(r => r.quality_status === 'needs_review').length, '按任务统计'],
-    ['导出记录', (exported.exports ?? []).length, '当前工作区累计'],
-    ['可用额度', balance.available ?? 0, '预留 ' + (balance.reserved ?? 0) + ' 张'],
-  ];
-  $('.metric-strip').innerHTML = summaries.map(([label, value, note]) => '<div class="metric"><span>'+label+'</span><strong>'+value+'</strong><small>'+note+'</small></div>').join('');
-  // E07：首页待办聚合；失败时如实显示原因，不用空数据冒充“没有待办”
-  void loadTodos();
+  const projects = state.projects ?? [];
+  const [todosRes, replacementRes, exportsRes, runsRes, creditsRes, changeStats] = await Promise.all([
+    settled(api.todos()),
+    settled(api.listReplacementTodos({})),
+    settled(api.listExports({})),
+    settled(api.listRuns()),
+    settled(api.credits()),
+    loadChangeStats(projects),
+  ]);
+  // 四个指标：变更单、待办聚合与替换待办各自独立；读不到就是未知，不写 0
+  const failedChange = changeStats.failedProject > 0;
+  const values = {
+    impacted: failedChange ? null : changeStats.impacted,
+    new_photo: failedChange ? null : changeStats.newPhoto,
+    review: todosRes.ok ? (todosRes.value.summary?.awaiting_review ?? 0) : null,
+    replacement: replacementRes.ok
+      ? (replacementRes.value.replacement_todos ?? []).filter(item => item.status === 'pending').length
+      : null,
+  };
+  renderWorkMetrics(values, projects.length, changeStats);
+  // E07：待办聚合；失败时如实显示原因，不用空数据冒充“没有待办”
+  if (todosRes.ok) renderTodos(todosRes.value);
+  else {
+    const todos = $('#home-todos');
+    if (todos) todos.innerHTML = `<div class="empty-state">${workErrorMarkup(todosRes.error, '待办')}</div>`;
+  }
+  renderDeliveries(
+    exportsRes.ok ? exportsRes.value.exports ?? [] : [],
+    replacementRes.ok ? replacementRes.value.replacement_todos ?? [] : [],
+    runsRes.ok ? runsRes.value.runs ?? [] : null,
+    exportsRes.ok ? null : exportsRes.error,
+  );
   // 顶栏额度常驻：与额度弹窗同源（服务端账本），不写死也不四舍五入成好看的数字
   const creditValue = $('#topbar-credit-value');
-  if (creditValue) creditValue.textContent = String(balance.available ?? 0);
-  const delivery = $('.delivery-table');
-  if (delivery) delivery.hidden = false;
-  if (delivery) delivery.innerHTML = (exported.exports ?? []).slice(0, 5).map(e => '<p>'+escapeHtml(e.package_filename ?? e.id)+' · '+escapeHtml(e.created_at)+'</p>').join('') || '<p class="real-empty">尚无真实交付记录。</p>';
+  if (creditValue) creditValue.textContent = creditsRes.ok ? String(creditsRes.value.balance?.available ?? 0) : '—';
   // 模块06：我的作品页。真实作品渲染进 #real-works；.asset-layout 是 r06 契约保留的演示样例区，
   // 不再被真实数据覆盖/展开（演示边界不抢真实功能的显眼位置）。
   const assets = $('#assets-view .asset-layout');
