@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommerceReviewV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "skill_version", "context_hash", "artifact_version_id", "artifact_hash", "observation_status", "checks", "unknown_reasons"],
+  "properties": {
+    "schema_version": {"const": "commerce-review.1"},
+    "skill_version": {"const": "commerce-image-reviewer.1"},
+    "context_hash": {"type": "string", "minLength": 1},
+    "artifact_version_id": {"type": "string", "minLength": 1},
+    "artifact_hash": {"type": "string", "minLength": 1},
+    "observation_status": {"enum": ["complete", "partial", "unavailable"]},
+    "checks": {
+      "type": "array", "minItems": 8, "maxItems": 8,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["code", "status", "evidence", "region", "reference_image_ids", "suggested_fix"],
+        "properties": {
+          "code": {"enum": ["PRODUCT_IDENTITY", "SKU_MATCH", "PRODUCT_COLOR", "PACKAGE_TEXT", "INCLUDED_ITEMS", "BRAND_LAYOUT", "COMPOSITION", "COMPOSITE_QUALITY"]},
+          "status": {"enum": ["pass", "fail", "unknown", "not_applicable"]},
+          "evidence": {"type": "string", "minLength": 1},
+          "region": {"anyOf": [{"type": "null"}, {"type": "array", "minItems": 4, "maxItems": 4, "items": {"type": "number", "minimum": 0, "maximum": 1}}]},
+          "reference_image_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "suggested_fix": {"type": ["string", "null"], "minLength": 1}
+        }
+      }
+    },
+    "unknown_reasons": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+  }
+}

@@ -1,0 +1,901 @@
+{
+  "synthetic": true,
+  "note": "仅用于协议验证，未调用模型或执行工具",
+  "cases": [
+    {
+      "id": "refiner_action",
+      "input": {
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "context": {
+          "sku_id": "sku_white",
+          "facts": [
+            {
+              "key": "瓶身颜色",
+              "value": "白色",
+              "confirmed": true
+            }
+          ],
+          "critical_text": [
+            "450ml"
+          ],
+          "spec": {
+            "type": "scene_image",
+            "preserve_subject": true,
+            "required_items": [
+              "白色瓶身商品一件"
+            ],
+            "text_required": true
+          },
+          "brand": {
+            "primary": "#008060"
+          }
+        },
+        "issue_catalog": [
+          {
+            "code": "PRODUCT_IDENTITY",
+            "status": "pass",
+            "evidence": "候选图与参考图均为圆柱瓶身和白色泵头",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "SKU_MATCH",
+            "status": "pass",
+            "evidence": "输入SKU为白色款，两图可见外观对应白色款",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "PRODUCT_COLOR",
+            "status": "fail",
+            "evidence": "参考图瓶盖白色，候选图瓶盖黑色",
+            "priority": 1,
+            "required": true,
+            "allowed_actions": [
+              "recompose_subject"
+            ]
+          },
+          {
+            "code": "PACKAGE_TEXT",
+            "status": "pass",
+            "evidence": "候选图标签可辨450ml，与确认文字一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "INCLUDED_ITEMS",
+            "status": "pass",
+            "evidence": "候选图仅有一件商品，无额外配件",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "BRAND_LAYOUT",
+            "status": "pass",
+            "evidence": "上方标题可读，与深绿品牌色要求一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITION",
+            "status": "pass",
+            "evidence": "商品完整，右上留白符合要求",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITE_QUALITY",
+            "status": "pass",
+            "evidence": "瓶底贴合台面，接触阴影与光向一致，边缘无明显白边",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          }
+        ],
+        "report_valid": true,
+        "available_actions": [
+          {
+            "action": "recompose_subject",
+            "allowed_asset_ids": [
+              "asset_subject"
+            ],
+            "parameter_schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "subject_asset_id"
+              ],
+              "properties": {
+                "subject_asset_id": {
+                  "type": "string",
+                  "enum": [
+                    "asset_subject"
+                  ]
+                }
+              }
+            },
+            "requires_confirmation": true,
+            "limits": [
+              "保留原商品主体，合成效果需人工确认"
+            ]
+          }
+        ],
+        "history": [],
+        "limits": {
+          "remaining_rounds": 1,
+          "budget_remaining": 100,
+          "minimum_action_cost": 1,
+          "deadline_reached": false
+        }
+      },
+      "output": {
+        "schema_version": "commerce-revision.1",
+        "skill_version": "commerce-image-refiner.1",
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "decision": "propose_action",
+        "action": "recompose_subject",
+        "target_check_codes": [
+          "PRODUCT_COLOR"
+        ],
+        "locked_constraints": [
+          "保持已确认商品事实和原始主体素材",
+          "保留已通过构图和文字排版"
+        ],
+        "parameters": {
+          "subject_asset_id": "asset_subject"
+        },
+        "instruction": "以原始主体恢复白色瓶盖，保留既有布局；重新合成后复检全部已通过项",
+        "reason": "颜色错误可优先通过原始主体合成恢复，无需改变商品事实",
+        "material_requests": []
+      }
+    },
+    {
+      "id": "refiner_stale",
+      "input": {
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "context": {
+          "sku_id": "sku_white",
+          "facts": [
+            {
+              "key": "瓶身颜色",
+              "value": "白色",
+              "confirmed": true
+            }
+          ],
+          "critical_text": [
+            "450ml"
+          ],
+          "spec": {
+            "type": "scene_image",
+            "preserve_subject": true,
+            "required_items": [
+              "白色瓶身商品一件"
+            ],
+            "text_required": true
+          },
+          "brand": {
+            "primary": "#008060"
+          }
+        },
+        "issue_catalog": [
+          {
+            "code": "PRODUCT_IDENTITY",
+            "status": "pass",
+            "evidence": "候选图与参考图均为圆柱瓶身和白色泵头",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "SKU_MATCH",
+            "status": "pass",
+            "evidence": "输入SKU为白色款，两图可见外观对应白色款",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "PRODUCT_COLOR",
+            "status": "fail",
+            "evidence": "参考图瓶盖白色，候选图瓶盖黑色",
+            "priority": 1,
+            "required": true,
+            "allowed_actions": [
+              "recompose_subject"
+            ]
+          },
+          {
+            "code": "PACKAGE_TEXT",
+            "status": "pass",
+            "evidence": "候选图标签可辨450ml，与确认文字一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "INCLUDED_ITEMS",
+            "status": "pass",
+            "evidence": "候选图仅有一件商品，无额外配件",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "BRAND_LAYOUT",
+            "status": "pass",
+            "evidence": "上方标题可读，与深绿品牌色要求一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITION",
+            "status": "pass",
+            "evidence": "商品完整，右上留白符合要求",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITE_QUALITY",
+            "status": "pass",
+            "evidence": "瓶底贴合台面，接触阴影与光向一致，边缘无明显白边",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          }
+        ],
+        "report_valid": false,
+        "available_actions": [
+          {
+            "action": "recompose_subject",
+            "allowed_asset_ids": [
+              "asset_subject"
+            ],
+            "parameter_schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "subject_asset_id"
+              ],
+              "properties": {
+                "subject_asset_id": {
+                  "type": "string",
+                  "enum": [
+                    "asset_subject"
+                  ]
+                }
+              }
+            },
+            "requires_confirmation": true,
+            "limits": [
+              "保留原商品主体，合成效果需人工确认"
+            ]
+          }
+        ],
+        "history": [],
+        "limits": {
+          "remaining_rounds": 1,
+          "budget_remaining": 100,
+          "minimum_action_cost": 1,
+          "deadline_reached": false
+        }
+      },
+      "output": {
+        "schema_version": "commerce-revision.1",
+        "skill_version": "commerce-image-refiner.1",
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "decision": "needs_review",
+        "action": null,
+        "target_check_codes": [],
+        "locked_constraints": [
+          "保持已确认商品事实和原始主体素材",
+          "保留已通过构图和文字排版"
+        ],
+        "parameters": {},
+        "instruction": null,
+        "reason": "报告已过期，重新检查当前版本",
+        "material_requests": []
+      }
+    },
+    {
+      "id": "refiner_budget",
+      "input": {
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "context": {
+          "sku_id": "sku_white",
+          "facts": [
+            {
+              "key": "瓶身颜色",
+              "value": "白色",
+              "confirmed": true
+            }
+          ],
+          "critical_text": [
+            "450ml"
+          ],
+          "spec": {
+            "type": "scene_image",
+            "preserve_subject": true,
+            "required_items": [
+              "白色瓶身商品一件"
+            ],
+            "text_required": true
+          },
+          "brand": {
+            "primary": "#008060"
+          }
+        },
+        "issue_catalog": [
+          {
+            "code": "PRODUCT_IDENTITY",
+            "status": "pass",
+            "evidence": "候选图与参考图均为圆柱瓶身和白色泵头",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "SKU_MATCH",
+            "status": "pass",
+            "evidence": "输入SKU为白色款，两图可见外观对应白色款",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "PRODUCT_COLOR",
+            "status": "fail",
+            "evidence": "参考图瓶盖白色，候选图瓶盖黑色",
+            "priority": 1,
+            "required": true,
+            "allowed_actions": [
+              "recompose_subject"
+            ]
+          },
+          {
+            "code": "PACKAGE_TEXT",
+            "status": "pass",
+            "evidence": "候选图标签可辨450ml，与确认文字一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "INCLUDED_ITEMS",
+            "status": "pass",
+            "evidence": "候选图仅有一件商品，无额外配件",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "BRAND_LAYOUT",
+            "status": "pass",
+            "evidence": "上方标题可读，与深绿品牌色要求一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITION",
+            "status": "pass",
+            "evidence": "商品完整，右上留白符合要求",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITE_QUALITY",
+            "status": "pass",
+            "evidence": "瓶底贴合台面，接触阴影与光向一致，边缘无明显白边",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          }
+        ],
+        "report_valid": true,
+        "available_actions": [
+          {
+            "action": "recompose_subject",
+            "allowed_asset_ids": [
+              "asset_subject"
+            ],
+            "parameter_schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "subject_asset_id"
+              ],
+              "properties": {
+                "subject_asset_id": {
+                  "type": "string",
+                  "enum": [
+                    "asset_subject"
+                  ]
+                }
+              }
+            },
+            "requires_confirmation": true,
+            "limits": [
+              "保留原商品主体，合成效果需人工确认"
+            ]
+          }
+        ],
+        "history": [],
+        "limits": {
+          "remaining_rounds": 1,
+          "budget_remaining": 0,
+          "minimum_action_cost": 1,
+          "deadline_reached": false
+        }
+      },
+      "output": {
+        "schema_version": "commerce-revision.1",
+        "skill_version": "commerce-image-refiner.1",
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "decision": "stop",
+        "action": null,
+        "target_check_codes": [],
+        "locked_constraints": [
+          "保持已确认商品事实和原始主体素材",
+          "保留已通过构图和文字排版"
+        ],
+        "parameters": {},
+        "instruction": null,
+        "reason": "预算已到限",
+        "material_requests": []
+      }
+    },
+    {
+      "id": "refiner_material",
+      "input": {
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "context": {
+          "sku_id": "sku_white",
+          "facts": [
+            {
+              "key": "瓶身颜色",
+              "value": "白色",
+              "confirmed": true
+            }
+          ],
+          "critical_text": [
+            "450ml"
+          ],
+          "spec": {
+            "type": "scene_image",
+            "preserve_subject": true,
+            "required_items": [
+              "白色瓶身商品一件"
+            ],
+            "text_required": true
+          },
+          "brand": {
+            "primary": "#008060"
+          },
+          "packaging_changed": true
+        },
+        "issue_catalog": [
+          {
+            "code": "PRODUCT_IDENTITY",
+            "status": "pass",
+            "evidence": "候选图与参考图均为圆柱瓶身和白色泵头",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "SKU_MATCH",
+            "status": "pass",
+            "evidence": "输入SKU为白色款，两图可见外观对应白色款",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "PRODUCT_COLOR",
+            "status": "fail",
+            "evidence": "参考图瓶盖白色，候选图瓶盖黑色",
+            "priority": 1,
+            "required": true,
+            "allowed_actions": [
+              "recompose_subject"
+            ]
+          },
+          {
+            "code": "PACKAGE_TEXT",
+            "status": "pass",
+            "evidence": "候选图标签可辨450ml，与确认文字一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "INCLUDED_ITEMS",
+            "status": "pass",
+            "evidence": "候选图仅有一件商品，无额外配件",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "BRAND_LAYOUT",
+            "status": "pass",
+            "evidence": "上方标题可读，与深绿品牌色要求一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITION",
+            "status": "pass",
+            "evidence": "商品完整，右上留白符合要求",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITE_QUALITY",
+            "status": "pass",
+            "evidence": "瓶底贴合台面，接触阴影与光向一致，边缘无明显白边",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          }
+        ],
+        "report_valid": true,
+        "available_actions": [],
+        "history": [],
+        "limits": {
+          "remaining_rounds": 1,
+          "budget_remaining": 100,
+          "minimum_action_cost": 1,
+          "deadline_reached": false
+        }
+      },
+      "output": {
+        "schema_version": "commerce-revision.1",
+        "skill_version": "commerce-image-refiner.1",
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "decision": "needs_material",
+        "action": null,
+        "target_check_codes": [],
+        "locked_constraints": [
+          "保持已确认商品事实和原始主体素材",
+          "保留已通过构图和文字排版"
+        ],
+        "parameters": {},
+        "instruction": null,
+        "reason": "包装变更后缺少新包装实拍",
+        "material_requests": [
+          "补充新包装正面及标签实拍"
+        ]
+      }
+    },
+    {
+      "id": "refiner_no_change",
+      "input": {
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "context": {
+          "sku_id": "sku_white",
+          "facts": [
+            {
+              "key": "瓶身颜色",
+              "value": "白色",
+              "confirmed": true
+            }
+          ],
+          "critical_text": [
+            "450ml"
+          ],
+          "spec": {
+            "type": "scene_image",
+            "preserve_subject": true,
+            "required_items": [
+              "白色瓶身商品一件"
+            ],
+            "text_required": true
+          },
+          "brand": {
+            "primary": "#008060"
+          }
+        },
+        "issue_catalog": [
+          {
+            "code": "PRODUCT_IDENTITY",
+            "status": "pass",
+            "evidence": "候选图与参考图均为圆柱瓶身和白色泵头",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "SKU_MATCH",
+            "status": "pass",
+            "evidence": "输入SKU为白色款，两图可见外观对应白色款",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "PRODUCT_COLOR",
+            "status": "pass",
+            "evidence": "参考图瓶盖白色，候选图瓶盖黑色",
+            "priority": 1,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "PACKAGE_TEXT",
+            "status": "pass",
+            "evidence": "候选图标签可辨450ml，与确认文字一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "INCLUDED_ITEMS",
+            "status": "pass",
+            "evidence": "候选图仅有一件商品，无额外配件",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "BRAND_LAYOUT",
+            "status": "pass",
+            "evidence": "上方标题可读，与深绿品牌色要求一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITION",
+            "status": "pass",
+            "evidence": "商品完整，右上留白符合要求",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITE_QUALITY",
+            "status": "pass",
+            "evidence": "瓶底贴合台面，接触阴影与光向一致，边缘无明显白边",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          }
+        ],
+        "report_valid": true,
+        "available_actions": [
+          {
+            "action": "recompose_subject",
+            "allowed_asset_ids": [
+              "asset_subject"
+            ],
+            "parameter_schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "subject_asset_id"
+              ],
+              "properties": {
+                "subject_asset_id": {
+                  "type": "string",
+                  "enum": [
+                    "asset_subject"
+                  ]
+                }
+              }
+            },
+            "requires_confirmation": true,
+            "limits": [
+              "保留原商品主体，合成效果需人工确认"
+            ]
+          }
+        ],
+        "history": [],
+        "limits": {
+          "remaining_rounds": 1,
+          "budget_remaining": 100,
+          "minimum_action_cost": 1,
+          "deadline_reached": false
+        }
+      },
+      "output": {
+        "schema_version": "commerce-revision.1",
+        "skill_version": "commerce-image-refiner.1",
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "decision": "no_change",
+        "action": null,
+        "target_check_codes": [],
+        "locked_constraints": [
+          "保持已确认商品事实和原始主体素材",
+          "保留已通过构图和文字排版"
+        ],
+        "parameters": {},
+        "instruction": null,
+        "reason": "全部必需检查已解决",
+        "material_requests": []
+      }
+    },
+    {
+      "id": "refiner_unknown",
+      "input": {
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "context": {
+          "sku_id": "sku_white",
+          "facts": [
+            {
+              "key": "瓶身颜色",
+              "value": "白色",
+              "confirmed": true
+            }
+          ],
+          "critical_text": [
+            "450ml"
+          ],
+          "spec": {
+            "type": "scene_image",
+            "preserve_subject": true,
+            "required_items": [
+              "白色瓶身商品一件"
+            ],
+            "text_required": true
+          },
+          "brand": {
+            "primary": "#008060"
+          }
+        },
+        "issue_catalog": [
+          {
+            "code": "PRODUCT_IDENTITY",
+            "status": "pass",
+            "evidence": "候选图与参考图均为圆柱瓶身和白色泵头",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "SKU_MATCH",
+            "status": "unknown",
+            "evidence": "SKU缺少可辨别依据",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "PRODUCT_COLOR",
+            "status": "pass",
+            "evidence": "参考图瓶盖白色，候选图瓶盖黑色",
+            "priority": 1,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "PACKAGE_TEXT",
+            "status": "pass",
+            "evidence": "候选图标签可辨450ml，与确认文字一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "INCLUDED_ITEMS",
+            "status": "pass",
+            "evidence": "候选图仅有一件商品，无额外配件",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "BRAND_LAYOUT",
+            "status": "pass",
+            "evidence": "上方标题可读，与深绿品牌色要求一致",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITION",
+            "status": "pass",
+            "evidence": "商品完整，右上留白符合要求",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          },
+          {
+            "code": "COMPOSITE_QUALITY",
+            "status": "pass",
+            "evidence": "瓶底贴合台面，接触阴影与光向一致，边缘无明显白边",
+            "priority": 10,
+            "required": true,
+            "allowed_actions": []
+          }
+        ],
+        "report_valid": true,
+        "available_actions": [
+          {
+            "action": "recompose_subject",
+            "allowed_asset_ids": [
+              "asset_subject"
+            ],
+            "parameter_schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "subject_asset_id"
+              ],
+              "properties": {
+                "subject_asset_id": {
+                  "type": "string",
+                  "enum": [
+                    "asset_subject"
+                  ]
+                }
+              }
+            },
+            "requires_confirmation": true,
+            "limits": [
+              "保留原商品主体，合成效果需人工确认"
+            ]
+          }
+        ],
+        "history": [],
+        "limits": {
+          "remaining_rounds": 1,
+          "budget_remaining": 100,
+          "minimum_action_cost": 1,
+          "deadline_reached": false
+        }
+      },
+      "output": {
+        "schema_version": "commerce-revision.1",
+        "skill_version": "commerce-image-refiner.1",
+        "context_hash": "synthetic_ctx_01",
+        "source_version_id": "synthetic_version_01",
+        "based_on_report_id": "synthetic_report_01",
+        "decision": "needs_review",
+        "action": null,
+        "target_check_codes": [],
+        "locked_constraints": [
+          "保持已确认商品事实和原始主体素材",
+          "保留已通过构图和文字排版"
+        ],
+        "parameters": {},
+        "instruction": null,
+        "reason": "SKU缺少可辨别证据",
+        "material_requests": []
+      }
+    }
+  ]
+}

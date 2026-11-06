@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CommerceRevisionV1",
+  "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "skill_version", "context_hash", "source_version_id", "based_on_report_id", "decision", "action", "target_check_codes", "locked_constraints", "parameters", "instruction", "reason", "material_requests"],
+  "properties": {
+    "schema_version": {"const": "commerce-revision.1"},
+    "skill_version": {"const": "commerce-image-refiner.1"},
+    "context_hash": {"type": "string", "minLength": 1},
+    "source_version_id": {"type": "string", "minLength": 1},
+    "based_on_report_id": {"type": "string", "minLength": 1},
+    "decision": {"enum": ["propose_action", "no_change", "needs_material", "needs_review", "stop"]},
+    "action": {"enum": [null, "convert_format", "resize_canvas", "recompose_text", "recompose_subject", "regenerate_background", "regenerate_image", "masked_edit"]},
+    "target_check_codes": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "locked_constraints": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "parameters": {"type": "object"},
+    "instruction": {"type": ["string", "null"], "minLength": 1},
+    "reason": {"type": "string", "minLength": 1},
+    "material_requests": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"decision": {"const": "propose_action"}}},
+      "then": {"properties": {"action": {"type": "string"}, "target_check_codes": {"minItems": 1}, "instruction": {"type": "string", "minLength": 1}, "material_requests": {"maxItems": 0}}},
+      "else": {"properties": {"action": {"type": "null"}, "instruction": {"type": "null"}, "parameters": {"maxProperties": 0}, "target_check_codes": {"maxItems": 0}}}
+    },
+    {"if": {"properties": {"decision": {"const": "needs_material"}}}, "then": {"properties": {"material_requests": {"minItems": 1}}}}
+  ]
+}
