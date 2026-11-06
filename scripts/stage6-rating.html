@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阶段 6 三臂匿名盲评</title>
+<style>
+  :root {
+    --ink: #1d232b; --muted: #6a7380; --line: #d8dde4; --bg: #f5f6f8; --card: #fff;
+    --brand: #2f5d50; --brand-soft: #e8f1ed; --warn: #a0522d; --ok: #2f6b3a; --bad: #a33a3a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+  header { position: sticky; top: 0; z-index: 5; background: rgba(255,255,255,.96); border-bottom: 1px solid var(--line); padding: 10px 18px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .02em; }
+  .progress { flex: 1; min-width: 180px; height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .progress i { display: block; height: 100%; width: 0; background: var(--brand); transition: width .2s; }
+  .progress-text { font-variant-numeric: tabular-nums; color: var(--muted); }
+  main { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(360px, 2fr); gap: 18px; padding: 18px; max-width: 1400px; margin: 0 auto; }
+  section.panel { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  section.panel h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 0 0 10px; }
+  .imgbox { height: calc(100vh - 330px); min-height: 320px; display: flex; align-items: center; justify-content: center; background: #eef0f3; border-radius: 8px; overflow: hidden; }
+  .imgbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .meta { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 10px; }
+  .meta strong { font-size: 15px; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--brand-soft); color: var(--brand); }
+  .hint { color: var(--muted); font-size: 12px; margin: 0 0 10px; }
+  form { display: grid; gap: 12px; padding: 0 18px 18px; max-width: 1400px; margin: 0 auto; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0; padding: 10px 12px; background: var(--card); }
+  legend { font-size: 12px; color: var(--muted); padding: 0 4px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  label.opt { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; cursor: pointer; background: #fff; }
+  label.opt input { accent-color: var(--brand); }
+  label.opt.sel { border-color: var(--brand); background: var(--brand-soft); }
+  textarea { width: 100%; min-height: 66px; resize: vertical; font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
+  .severity select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+  .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button { font: inherit; padding: 9px 16px; border-radius: 7px; border: 1px solid var(--line); background: #fff; cursor: pointer; }
+  button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .status { color: var(--muted); font-size: 12px; }
+  .status.err { color: var(--bad); }
+  .status.ok { color: var(--ok); }
+  .case-list { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 18px 22px; max-width: 1400px; margin: 0 auto; }
+  .case-list button { padding: 4px 8px; font-size: 12px; }
+  .case-list button.rated { border-color: var(--ok); color: var(--ok); }
+  .case-list button.current { background: var(--brand); color: #fff; border-color: var(--brand); }
+  .done { margin: 18px; padding: 16px; border-radius: 10px; background: #eaf4ec; border: 1px solid #b7d6bf; color: #24502f; }
+  .rules { margin: 0 18px 18px; padding: 12px 16px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 12px; max-width: 1372px; }
+  .rules b { color: var(--ink); }
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+    .imgbox { height: 46vh; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>阶段 6 · 三臂匿名盲评</h1>
+  <div class="progress"><i id="bar"></i></div>
+  <div class="progress-text" id="progressText">0 / 36</div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>商品原图（参考）</h2>
+    <div class="imgbox"><img id="reference" alt="商品原图"></div>
+  </section>
+  <section class="panel">
+    <div class="meta">
+      <strong id="productName"></strong>
+      <span class="tag" id="scenarioTag"></span>
+      <span class="tag" id="caseTag"></span>
+    </div>
+    <p class="hint" id="scenarioHint"></p>
+    <h2>候选图（匿名）</h2>
+    <div class="imgbox"><img id="candidate" alt="候选图"></div>
+  </section>
+</main>
+
+<form id="form">
+  <div class="fields">
+    <fieldset>
+      <legend>事实错误：外观 / 结构 / 数量 / 颜色 / 关键文字与原图不符</legend>
+      <div class="row" data-field="fact_error">
+        <label class="opt"><input type="radio" name="fact_error" value="0">无（0）</label>
+        <label class="opt"><input type="radio" name="fact_error" value="1">有（1）</label>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>关键信息无法判断：原图信息不足 / 遮挡 / 细节看不清</legend>
+      <div class="row" data-field="unknown">
+        <label class="opt"><input type="radio" name="unknown" value="0">否（0）</label>
+        <label class="opt"><input type="radio" name="unknown" value="1">是（1）</label>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>画质合格：无严重变形、糊、错字，或遮挡商品关键细节</legend>
+      <div class="row" data-field="quality_pass">
+        <label class="opt"><input type="radio" name="quality_pass" value="1">合格（1）</label>
+        <label class="opt"><input type="radio" name="quality_pass" value="0">不合格（0）</label>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>可直接采用：无需返工即可用于商品页</legend>
+      <div class="row" data-field="direct_adoption">
+        <label class="opt"><input type="radio" name="direct_adoption" value="1">是（1）</label>
+        <label class="opt"><input type="radio" name="direct_adoption" value="0">否（0）</label>
+      </div>
+    </fieldset>
+    <fieldset class="severity">
+      <legend>严重度：1 轻微 / 2 明显 / 3 严重 / 4 阻断</legend>
+      <select id="severity">
+        <option value="">未选择</option>
+        <option value="1">1 轻微</option>
+        <option value="2">2 明显</option>
+        <option value="3">3 严重</option>
+        <option value="4">4 阻断</option>
+      </select>
+    </fieldset>
+    <fieldset style="grid-column: 1 / -1;">
+      <legend>备注：写具体证据（位置 / 文字 / 结构），有问题或无法判断时必填</legend>
+      <textarea id="notes" maxlength="400" placeholder="例：杯柄处多出一根细线；文案“版面测试文字”被瓶身遮挡"></textarea>
+    </fieldset>
+  </div>
+
+  <div class="actions">
+    <button type="button" id="prev">上一张</button>
+    <button type="button" class="primary" id="save" disabled>保存并下一张</button>
+    <button type="button" id="next">下一张（不保存）</button>
+    <span class="status" id="status"></span>
+  </div>
+</form>
+
+<div class="rules">
+  <b>口径</b>：同一案例的 3 张图请逐张独立判断，先看原图再看候选图；不要因为同组而互相给分。
+  事实错误看“与原图不符”，无法判断看“信息不足”，两者可以同时为 1。
+  <b>漏检 / 误判不是本页字段</b>：它们需要揭盲后拿系统报告与人工判断比对，由分析者填写，评分页不采集，避免评分人看到工作流差异。
+</div>
+
+<div class="case-list" id="caseList"></div>
+<div class="done" id="done" hidden>36 张已全部评分。请告知 Agent 汇总；未揭盲前不要查看 `blind-key.json`。</div>
+
+<script type="module">
+const SCENARIOS = {
+  clean_bg: { label: '干净背景主图', hint: '商品完整、居中、背景干净；不得改变商品结构、数量、颜色与关键文字。' },
+  scene: { label: '生活场景图', hint: '保留商品结构与事实，只更换环境；场景物不得遮挡、替换或补造商品部件。' },
+  layout: { label: '文案排版图', hint: '只叠加测试文字；文字不得遮挡商品关键细节，不得出现错字。' },
+};
+const FIELDS = ['fact_error', 'unknown', 'quality_pass', 'direct_adoption'];
+
+let entries = [];
+let index = 0;
+
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '');
+const caseKey = entry => esc(entry.case_id);
+const shortLabel = (entry, position) => `${entry.product_id} ${SCENARIOS[entry.scenario]?.label ?? entry.scenario} #${position}`;
+
+function checked(name) {
+  const input = document.querySelector(`input[name="${name}"]:checked`);
+  return input ? input.value : '';
+}
+
+function setField(name, value) {
+  for (const input of document.querySelectorAll(`input[name="${name}"]`)) input.checked = input.value === value;
+  paintSelected();
+}
+
+function paintSelected() {
+  for (const box of document.querySelectorAll('[data-field]')) {
+    for (const label of box.querySelectorAll('label.opt')) {
+      label.classList.toggle('sel', label.querySelector('input').checked);
+    }
+  }
+}
+
+function needsNote() {
+  return checked('fact_error') === '1' || checked('unknown') === '1' || checked('quality_pass') === '0';
+}
+
+function refreshSave() {
+  const complete = FIELDS.every(field => checked(field) !== '');
+  const noteOk = !needsNote() || $('notes').value.trim().length > 0;
+  $('save').disabled = !(complete && noteOk);
+}
+
+function renderList() {
+  const list = $('caseList');
+  list.innerHTML = '';
+  const counts = {};
+  for (const entry of entries) counts[caseKey(entry)] = (counts[caseKey(entry)] || 0) + 1;
+  const seen = {};
+  entries.forEach((entry, i) => {
+    const key = caseKey(entry);
+    seen[key] = (seen[key] || 0) + 1;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = shortLabel(entry, seen[key]);
+    button.classList.toggle('rated', entry.rating_status === 'rated');
+    button.classList.toggle('current', i === index);
+    button.addEventListener('click', () => { index = i; render(); });
+    list.appendChild(button);
+  });
+}
+
+function render() {
+  const entry = entries[index];
+  const info = SCENARIOS[entry.scenario] ?? { label: entry.scenario, hint: '' };
+  $('reference').src = `/reference/${entry.product_id}`;
+  $('candidate').src = `/blind/${entry.blind_id}`;
+  $('productName').textContent = `${entry.product_id} · ${entry.product_name}`;
+  $('scenarioTag').textContent = info.label;
+  $('caseTag').textContent = entry.case_id;
+  $('scenarioHint').textContent = info.hint;
+  setField('fact_error', entry.fact_error);
+  setField('unknown', entry.unknown);
+  setField('quality_pass', entry.quality_pass);
+  setField('direct_adoption', entry.direct_adoption);
+  $('severity').value = entry.severity || '';
+  $('notes').value = entry.notes || '';
+  $('status').textContent = entry.rating_status === 'rated' ? '这张已保存，可修改后重存。' : '未评分';
+  $('status').className = 'status';
+  refreshSave();
+  renderList();
+  const rated = entries.filter(item => item.rating_status === 'rated').length;
+  $('progressText').textContent = `${rated} / ${entries.length}`;
+  $('bar').style.width = `${(rated / entries.length) * 100}%`;
+  $('done').hidden = rated !== entries.length;
+  $('prev').disabled = index === 0;
+  $('next').disabled = index === entries.length - 1;
+}
+
+function nextUnrated() {
+  for (let step = 1; step <= entries.length; step += 1) {
+    const i = (index + step) % entries.length;
+    if (entries[i].rating_status !== 'rated') { index = i; return; }
+  }
+}
+
+async function save() {
+  const entry = entries[index];
+  const payload = {
+    blind_id: entry.blind_id,
+    fact_error: checked('fact_error'),
+    unknown: checked('unknown'),
+    quality_pass: checked('quality_pass'),
+    direct_adoption: checked('direct_adoption'),
+    severity: $('severity').value,
+    notes: $('notes').value.trim(),
+  };
+  $('save').disabled = true;
+  $('status').textContent = '保存中…';
+  $('status').className = 'status';
+  try {
+    const response = await fetch('/api/rate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || '保存失败');
+    entries[index] = { ...entry, ...body.entry };
+    $('status').textContent = '已保存';
+    $('status').className = 'status ok';
+    nextUnrated();
+    render();
+    $('status').textContent = '已保存';
+    $('status').className = 'status ok';
+  } catch (error) {
+    $('status').textContent = error.message;
+    $('status').className = 'status err';
+    refreshSave();
+  }
+}
+
+for (const input of document.querySelectorAll('input[type=radio]')) {
+  input.addEventListener('change', () => { paintSelected(); refreshSave(); });
+}
+$('severity').addEventListener('change', refreshSave);
+$('notes').addEventListener('input', refreshSave);
+$('prev').addEventListener('click', () => { if (index > 0) { index -= 1; render(); } });
+$('next').addEventListener('click', () => { if (index < entries.length - 1) { index += 1; render(); } });
+$('save').addEventListener('click', save);
+
+try {
+  const state = await (await fetch('/api/state')).json();
+  entries = state.entries;
+  const firstUnrated = entries.findIndex(entry => entry.rating_status !== 'rated');
+  index = firstUnrated >= 0 ? firstUnrated : 0;
+  render();
+} catch (error) {
+  $('status').textContent = `加载失败：${error.message}`;
+  $('status').className = 'status err';
+}
+</script>
+</body>
+</html>
