@@ -443,10 +443,26 @@ export function buildObservabilitySnapshot({
   const failureRate = totalFinished > 0 ? failedRuns.length / totalFinished : null;
   const unknownRate = runs.length > 0 ? attentionRuns.length / runs.length : null;
 
-  // 修订净改善：有修订的 run 中最终完成的占比
-  const revisedRuns = runs.filter(r => (r.revision_count ?? 0) > 0 || (r.attempts ?? []).some(a => (a.iteration ?? 1) > 1));
-  const revisedCompleted = revisedRuns.filter(r => r.status === 'completed').length;
-  const revisionNetImprovement = revisedRuns.length > 0 ? revisedCompleted / revisedRuns.length : null;
+  // 修订净改善：汇总真实修订轨迹（同一检查口径的前后对比），不用"任务最终是否完成"冒充
+  const revisionHistory = runs.flatMap(r => (r.revision?.history ?? []));
+  const revisionRounds = revisionHistory.length;
+  const improvedRounds = revisionHistory.filter(entry => entry.outcome?.improved === true).length;
+  const revisionLatencies = revisionHistory.map(entry => Number(entry.latency_ms))
+    .filter(value => Number.isFinite(value) && value > 0);
+  const revisionMetrics = {
+    rounds: revisionRounds,
+    improved_rounds: improvedRounds,
+    net_improvement_rate: revisionRounds > 0 ? Math.round((improvedRounds / revisionRounds) * 1000) / 1000 : null,
+    credits_spent: revisionHistory.reduce((sum, entry) => sum + (Number(entry.credits) || 0), 0),
+    avg_latency_ms: revisionLatencies.length > 0
+      ? Math.round(revisionLatencies.reduce((sum, value) => sum + value, 0) / revisionLatencies.length) : null,
+    visual_auto_runs: runs.filter(r => r.revision?.visual?.enabled === true).length,
+    visual_auto_rounds: runs.reduce((sum, r) => sum + (Number(r.revision?.visual?.rounds_used) || 0), 0),
+    // P4：是否开放更多轮次必须由净改善率、成本与延时共同决定，当前如实给出"未达标不出结论"
+    more_rounds_decision: revisionRounds === 0
+      ? 'insufficient_data'
+      : (improvedRounds / revisionRounds >= 0.5 ? 'eligible_for_review' : 'not_eligible'),
+  };
 
   // 每张成本：总扣减额度 / 总成功交付物数
   const totalCaptured = completedRuns.reduce((sum, r) => sum + (r.budget?.captured_credits ?? 0), 0);
@@ -485,11 +501,13 @@ export function buildObservabilitySnapshot({
       adoption_rate: adoptionRate !== null ? Math.round(adoptionRate * 1000) / 1000 : null,
       failure_rate: failureRate !== null ? Math.round(failureRate * 1000) / 1000 : null,
       unknown_rate: unknownRate !== null ? Math.round(unknownRate * 1000) / 1000 : null,
-      revision_net_improvement: null, // 缺少修订前后同口径质量评分，不以完成率冒充改善
+      revision_net_improvement: revisionMetrics.net_improvement_rate,
+      // P4：修订轮次、成本、延时与"是否可评估开放更多轮次"的事实指标
+      revision: revisionMetrics,
       cost_per_image: null, // 尚无统一币种、可核验的供应商结算账单
       credits_per_image: costPerImage,
       export_rate: exportRate,
-      revision_completion_rate: revisionNetImprovement,
+      revision_completion_rate: revisionRounds > 0 ? improvedRounds / revisionRounds : null,
       payment_conversion: paymentConversion !== null ? Math.round(paymentConversion * 1000) / 1000 : null,
     },
     credits: balance ? { available: balance.available, reserved: balance.reserved ?? null } : null,

@@ -46,6 +46,21 @@ function subjectPng(width = 160, height = 160) {
   return encodeRgbPng(width, height, pixels);
 }
 
+/** 白底 + 大面积色块：占比超过可信阈值，用于验证不产出局部合成底图。 */
+function lowConfidencePng(width = 100, height = 100) {
+  const pixels = Buffer.alloc(width * height * 3);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 3;
+      const subject = x >= 10 && x < 90 && y >= 10 && y < 90;
+      pixels[index] = subject ? 40 : 246;
+      pixels[index + 1] = subject ? 40 : 246;
+      pixels[index + 2] = subject ? 40 : 246;
+    }
+  }
+  return encodeRgbPng(width, height, pixels);
+}
+
 /** 纯色 PNG：主体占比为 100%，用于验证退化检测。 */
 function solidPng(width = 64, height = 64) {
   const pixels = Buffer.alloc(width * height * 3, 128);
@@ -215,6 +230,18 @@ test('M06 掩码不可用：非 PNG、损坏 PNG、纯色退化都必须明确�
   assert.equal(degenerate.reason, 'MASK_DEGENERATE');
 });
 
+test('M06 掩码低可信：背景与主体无法分开时不产出去背底图，但仍保留掩码', () => {
+  const mask = createSubjectMask({ bytes: lowConfidencePng(), mime: 'image/png' });
+  assert.equal(mask.available, true, JSON.stringify(mask));
+  assert.equal(mask.confidence, 'low');
+  assert.ok(mask.coverage > 0.5);
+  assert.equal(mask.has_cutout, false);
+  assert.equal(mask.cutoutBytes, null);
+  assert.equal(mask.cutout_sha256, null);
+  assert.match(mask.message, /参考图保护/u);
+  assert.ok(mask.maskBytes.length > 0, '掩码仍可用于参考图保护与记录');
+});
+
 // ---------- 2. 本地合成 ----------
 
 test('M06 本地合成：只替换掩码内像素，掩码外保持生成图原样', () => {
@@ -298,6 +325,19 @@ test('M06 主体保护闸口：真实 Provider 无能力必须拒绝，模拟可
   assert.equal(realComposite.ok, true);
   assert.equal(realComposite.mode, 'composite');
 
+  const lowConfidence = createSubjectMask({ bytes: lowConfidencePng(), mime: 'image/png' });
+  const compositeWithoutCutout = checkSubjectProtection({
+    capabilities: { ...realNoCap, supports_post_composite: true }, protection: lowConfidence, required: true,
+  });
+  assert.equal(compositeWithoutCutout.ok, false, '没有去背底图时不得声称本地合成');
+
+  const realReference = checkSubjectProtection({
+    capabilities: { ...realNoCap, supports_reference_protection: true }, protection: lowConfidence, required: true,
+  });
+  assert.equal(realReference.ok, true);
+  assert.equal(realReference.mode, 'reference');
+  assert.match(realReference.warning, /复核/u, '参考图保护必须显式提示需复核');
+
   const missing = { available: false, reason: 'MASK_DEGENERATE' };
   const simulated = checkSubjectProtection({
     capabilities: { id: 'deterministic-mock', simulated: true, supports_mask: true },
@@ -336,6 +376,7 @@ test('M06 Seedream Adapter：能力如实声明，主体保护校验拒绝无掩
   assert.equal(capabilities.acceptance, 'not_verified');
   assert.equal(capabilities.supports_mask, false);
   assert.equal(capabilities.supports_post_composite, false);
+  assert.equal(capabilities.supports_reference_protection, false);
 
   const request = {
     request_hash: 'hash-1', target_width: 1024, target_height: 1024, references: 1,
@@ -350,6 +391,12 @@ test('M06 Seedream Adapter：能力如实声明，主体保护校验拒绝无掩
     apiKey: 'test-key', fetchImpl: fakeFetch({ imageBytes: subjectPng() }), supportsPostComposite: true,
   });
   assert.equal(capable.validate(request).ok, true);
+
+  const referenceOnly = createSeedreamProvider({
+    apiKey: 'test-key', fetchImpl: fakeFetch({ imageBytes: subjectPng() }), supportsReferenceProtection: true,
+  });
+  assert.equal(referenceOnly.capabilities().supports_reference_protection, true);
+  assert.equal(referenceOnly.validate({ ...request, mask_ref: null }).ok, true, '参考图保护允许无掩码请求');
 });
 
 test('M06 Seedream Adapter：真实调用解析模型、用量、时延、请求 id 与输出哈希', async () => {

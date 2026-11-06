@@ -30,8 +30,9 @@ import {
 } from './m07.mjs';
 import {
   EXPORT_SCHEMA_VERSION, PACKAGE_FORMAT_VERSION, REVISION_MAX_NO_IMPROVEMENT, REVISION_MAX_ROUNDS,
-  adoptVersionRecord, buildManifest, buildQaSummary, buildZip, compareRevisionOutcome, exportBundleName,
-  exportRecordId, makeVersionRecord, planExport, planRevision, zipSha256,
+  VISUAL_REVISION_MAX_ROUNDS, adoptVersionRecord, buildManifest, buildQaSummary, buildZip,
+  compareRevisionOutcome, computeRevisionMetrics, exportBundleName, exportRecordId, makeVersionRecord,
+  planExport, planRevision, selectRevisionVersion, zipSha256,
 } from './m08.mjs';
 import {
   buildJointManifest, checkDetailPageValidity, evaluateVideoFrames, planPlatformDelivery, planVideo,
@@ -44,6 +45,10 @@ import {
 } from './text-edits.mjs';
 import { compileDependencies, mergeManualEntries } from './depgraph.mjs';
 import { planSkuExport } from './skucheck.mjs';
+import { activeAssets } from './domain.mjs';
+import { auditProductContext, buildContextBinding, inspectAssetUsability } from './product-context.mjs';
+import { attachVisualReview, buildReviewRequest, reviewArtifact } from './visual-review.mjs';
+import { buildSuiteManifest } from './suite.mjs';
 
 export const RUN_SCHEMA_VERSION = 1;
 export const EVENT_SCHEMA_VERSION = 1;
@@ -94,6 +99,8 @@ export function createJobs({
   provider,
   // R04：OCR 适配器由宿主注入；未注入即"未配置"，文字检查保持 unknown
   ocr: ocrAdapter = null,
+  // P2：视觉评审适配器由宿主注入；未注入/未配置时评审项保持 unknown，绝不伪造看图结论
+  visualReviewer = null,
   clock = () => new Date(),
   initialCredits = 0,
   attemptTimeoutMs = 30_000,
@@ -279,9 +286,23 @@ export function createJobs({
           item.tenant_id === ctx.tenantId && item.brand_kit_id === spec.brand_kit.id
           && item.version === spec.brand_kit.version) ?? null
         : null,
+      // P1：上下文绑定需要冻结当时的生效素材版本，而不是提交时的实时素材
+      assets: Object.values(data.assets ?? {}).filter(item =>
+        item.tenant_id === ctx.tenantId && item.project_id === project.id),
     }));
     const executionPlan = compileExecutionPlan({
       project, spec, truth: compileInputs.truth, brandKitVersion: compileInputs.brandKitVersion,
+    });
+    // P1：项目 / SKU / 事实 / 素材 / 品牌 / 规格一次性冻结为 context_hash；
+    // 这是记录与追溯，不新增硬拒绝，既有能力闸口仍是唯一入口。
+    const productUsability = activeAssets(compileInputs.assets)
+      .map(asset => inspectAssetUsability({ asset }));
+    const productAudit = auditProductContext({
+      project, assets: compileInputs.assets, truth: compileInputs.truth, usability: productUsability,
+    });
+    const contextBinding = buildContextBinding({
+      project, assets: compileInputs.assets, truth: compileInputs.truth,
+      brandKitVersion: compileInputs.brandKitVersion, spec,
     });
     const created = await store.mutate(data => {
       const duplicated = Object.values(data.runs ?? {})
@@ -496,6 +517,26 @@ export function createJobs({
           dropped: subjectContext.dropped ?? [],
           required_count: subjectContext.required_count ?? 0,
         },
+        // P1：商品上下文绑定。素材替换、事实更新或规格变更都会改变 context_hash，
+        // 后续评审/修订报告以此判断是否仍然适用于本任务。
+        product_context: {
+          version: contextBinding.version,
+          context_hash: contextBinding.context_hash,
+          hash_algorithm: contextBinding.hash_algorithm,
+          sku: contextBinding.sku,
+          truth: contextBinding.truth,
+          brand: contextBinding.brand,
+          spec: contextBinding.spec,
+          assets: contextBinding.assets,
+          asset_count: contextBinding.asset_count,
+          audit: {
+            can_bind: productAudit.can_bind,
+            roles: productAudit.roles,
+            blockers: productAudit.blockers,
+            warnings: productAudit.warnings,
+            retake_requests: productAudit.retake_requests,
+          },
+        },
         generation_record_ids: [],
         attempts: [],
         // M08：版本只增不改；active 标记决定当前选用版，回退只切标记
@@ -505,15 +546,45 @@ export function createJobs({
         regeneration_request: regenerationRequest,
         regeneration: { reserved_credits: 0, captured_credits: 0, released_credits: 0 },
         // M08：自动修订受轮数、预算与"连续无改善"三重限制，绝不自动扩大预算
+        // P4：控制面显式记录模式、权限、能力与视觉闸口；未验收的视觉评审不会开启自动循环
         revision: {
           enabled: capabilities.supports_revision === true,
           provider_support: capabilities.supports_revision === true,
+          // 首版只处理机器可判定的硬失败；视觉驱动循环默认关闭
+          mode: capabilities.supports_revision === true ? 'hard_failure_only' : 'disabled',
+          permission: {
+            automatic: capabilities.supports_revision === true,
+            requires_confirmation: false,
+            actor: 'system',
+            note: '仅对可修复的机器硬失败自动提交单步修订；视觉类修订仍需人工确认',
+          },
+          capability: {
+            provider_supports_revision: capabilities.supports_revision === true,
+            provider_acceptance: capabilities.acceptance ?? 'not_verified',
+            visual_review_configured: visualReviewer?.configured === true,
+            visual_review_acceptance: visualReviewer?.acceptance ?? 'not_available',
+          },
+          visual: {
+            enabled: capabilities.supports_revision === true
+              && visualReviewer?.configured === true
+              && visualReviewer?.acceptance === 'verified',
+            configured: visualReviewer?.configured === true,
+            acceptance: visualReviewer?.acceptance ?? 'not_available',
+            max_rounds: VISUAL_REVISION_MAX_ROUNDS,
+            rounds_used: 0,
+            stop_reason: visualReviewer?.configured === true
+              ? (visualReviewer?.acceptance === 'verified' ? null : 'visual_review_not_verified')
+              : 'visual_review_not_configured',
+            note: '首版视觉自动修订最多一轮；评审未验收时不开启自动循环，只保留人工修订建议',
+          },
           max_rounds: quote.billing_mode === 'finished_image' ? quote.lines.reduce((n, l) => n + l.count, 0) * 2 : Math.max(1, Number(revisionMaxRounds) || REVISION_MAX_ROUNDS),
           max_credits: Math.max(0, Math.floor(quote.max_credits * 0.6)),
           round: 0,
           spent_credits: 0,
           no_improvement_streak: 0,
           history: [],
+          metrics: computeRevisionMetrics(),
+          context_check: null,
           stop_reason: capabilities.supports_revision === true ? null : 'provider_unsupported',
           note: capabilities.supports_revision === true
             ? '仅修订机器可判断的硬失败，一次一个关键项；通过项保留'
@@ -972,8 +1043,28 @@ export function createJobs({
       outputBytes, ext, outputHash, composite, losslessOutput, recordId: record.id,
     }, events, at);
 
+    // P4：修订结果先与修订前报告对比，再决定是否自动替换选用版本。
+    // 只有净改善才切换；无改善或通过项退步时，新版本仅留历史，原选用版本不动。
+    const revisionOutcome = attempt.revision && run.revision
+      ? compareRevisionOutcome({
+        beforeReport: data.quality_reports?.[attempt.revision.based_on_report_id] ?? null,
+        afterReport: report,
+        actions: attempt.revision.actions ?? [],
+      })
+      : null;
+    const previousActiveVersion = run.versions.find(item =>
+      item.deliverable_id === attempt.deliverable_id && item.active === true) ?? null;
+
     // M08：每个成功产物都留版本；同交付物的旧版本转为历史，不删除、不覆盖
     // M13：finished_image 本地合成路径把文字层与底图哈希随版本冻结，文字排版修改只认版本里的这份
+    const provisionalVersionId = newId('ver_placeholder');
+    const selection = revisionOutcome
+      ? selectRevisionVersion({
+        outcome: revisionOutcome,
+        previousVersionId: previousActiveVersion?.id ?? null,
+        newVersionId: provisionalVersionId,
+      })
+      : { active_version_id: provisionalVersionId, new_version_active: true, supersede_previous: true, reason: 'FIRST_VERSION' };
     const version = makeVersionRecord({
       run, attempt, deliverable: target, report,
       output: {
@@ -983,17 +1074,20 @@ export function createJobs({
       },
       textLayers: compiledTextLayers,
       overlayBaseHash: overlayBaseHash,
+      active: selection.new_version_active,
       at,
     });
-    for (const previous of run.versions) {
-      if (previous.deliverable_id !== version.deliverable_id || !previous.active) continue;
-      previous.active = false;
-      previous.superseded_at = version.created_at;
+    if (selection.supersede_previous) {
+      for (const previous of run.versions) {
+        if (previous.deliverable_id !== version.deliverable_id || !previous.active) continue;
+        previous.active = false;
+        previous.superseded_at = version.created_at;
+      }
     }
     run.versions.push(version);
     recordImageDependencies(data, run, version);
     if (target) {
-      target.active_version_id = version.id;
+      target.active_version_id = selection.new_version_active ? version.id : previousActiveVersion?.id ?? version.id;
       target.revision = null;
     }
     events.push(pushEvent(data, run, {
@@ -1001,14 +1095,14 @@ export function createJobs({
       payload: {
         deliverable_id: version.deliverable_id, version_id: version.id, number: version.number,
         report_id: report.id, hash: outputHash,
+        active: version.active,
+        selection_reason: selection.reason,
       },
     }));
 
-    if (attempt.revision && run.revision) {
-      const before = data.quality_reports?.[attempt.revision.based_on_report_id] ?? null;
-      const outcome = compareRevisionOutcome({
-        beforeReport: before, afterReport: report, actions: attempt.revision.actions ?? [],
-      });
+    if (revisionOutcome && run.revision) {
+      const latencyMs = attempt.started_at
+        ? Math.max(0, new Date(at).getTime() - new Date(attempt.started_at).getTime()) : null;
       run.revision.spent_credits += capture.applied ? attempt.planned_credits : 0;
       run.revision.history.push({
         round: attempt.revision.round,
@@ -1020,31 +1114,39 @@ export function createJobs({
         after_version_id: version.id,
         after_report_id: report.id,
         credits: attempt.planned_credits,
+        latency_ms: latencyMs,
+        selected_version_id: target?.active_version_id ?? version.id,
+        selection_reason: selection.reason,
         reason: attempt.revision.reason ?? null,
         outcome: {
-          improved: outcome.improved,
-          resolved: outcome.resolved,
-          still_failing: outcome.still_failing,
-          regressions: outcome.regressions,
-          retained: outcome.retained,
-          before_decision: outcome.before_decision,
-          after_decision: outcome.after_decision,
+          improved: revisionOutcome.improved,
+          resolved: revisionOutcome.resolved,
+          still_failing: revisionOutcome.still_failing,
+          regressions: revisionOutcome.regressions,
+          retained: revisionOutcome.retained,
+          before_decision: revisionOutcome.before_decision,
+          after_decision: revisionOutcome.after_decision,
         },
         at: new Date(at).toISOString(),
       });
-      run.revision.no_improvement_streak = outcome.improved ? 0 : run.revision.no_improvement_streak + 1;
+      run.revision.no_improvement_streak = revisionOutcome.improved ? 0 : run.revision.no_improvement_streak + 1;
+      run.revision.metrics = computeRevisionMetrics({ revision: run.revision });
       events.push(pushEvent(data, run, {
-        stage: 'revision', status: outcome.improved ? 'improved' : 'no_improvement', at,
+        stage: 'revision', status: revisionOutcome.improved ? 'improved' : 'no_improvement', at,
         attemptId: attempt.id, iteration: attempt.iteration,
         payload: {
           round: attempt.revision.round,
           deliverable_id: attempt.deliverable_id,
           actions: (attempt.revision.actions ?? []).map(item => item.code),
-          resolved: outcome.resolved,
-          still_failing: outcome.still_failing,
-          regressions: outcome.regressions,
-          retained_count: outcome.retained.length,
+          resolved: revisionOutcome.resolved,
+          still_failing: revisionOutcome.still_failing,
+          regressions: revisionOutcome.regressions,
+          retained_count: revisionOutcome.retained.length,
           no_improvement_streak: run.revision.no_improvement_streak,
+          selected_version_id: target?.active_version_id ?? version.id,
+          selection_reason: selection.reason,
+          latency_ms: latencyMs,
+          metrics: run.revision.metrics,
         },
       }));
       if (run.revision.no_improvement_streak >= REVISION_MAX_NO_IMPROVEMENT) {
@@ -1271,6 +1373,42 @@ export function createJobs({
       report = makeQaFailureReport({ run, deliverable: target, attempt, spec, truth, error, now: at });
     }
     report.generation_record_id = recordId ?? null;
+    // P2：已配置视觉评审时，对成品图追加评审检查；未配置则完全不介入，既有检查与结论不变。
+    // 评审失败只影响新增项的 unknown 状态，不让整个生成流程失败。
+    if (visualReviewer?.configured === true) {
+      try {
+        const project = data.projects?.[run.project_id] ?? null;
+        const brandKitVersion = spec?.brand_kit
+          ? Object.values(data.brand_kit_versions ?? {}).find(item =>
+            item.tenant_id === run.tenant_id && item.brand_kit_id === spec.brand_kit.id
+            && item.version === spec.brand_kit.version) ?? null
+          : null;
+        const references = [];
+        for (const asset of activeAssetsOf(data, run)) {
+          if (!asset.sha256) continue;
+          const bytes = await store.readBlob(asset.sha256, asset.ext).catch(() => null);
+          references.push({ asset, bytes });
+        }
+        const bundle = buildReviewRequest({
+          project, run, deliverable: target, truth, spec, brandKitVersion,
+          candidate: {
+            bytes: outputBytes,
+            mime: ext === 'jpg' ? 'image/jpeg' : `image/${ext}`,
+            sha256: outputHash,
+          },
+          references,
+          compositeApplied: composite?.applied === true,
+        });
+        const review = await reviewArtifact({ reviewer: visualReviewer, bundle });
+        attachVisualReview({ report, review, rulesHash: review.rules_hash ?? null, checkedAt: at });
+      } catch (error) {
+        attachVisualReview({
+          report,
+          review: { status: 'error', reason: `视觉评审接入失败：${error?.message ?? 'UNKNOWN_ERROR'}`, output: null },
+          checkedAt: at,
+        });
+      }
+    }
     data.quality_reports[report.id] = report;
     attempt.quality_report_id = report.id;
     if (target) target.quality_report_id = report.id;
@@ -1286,6 +1424,8 @@ export function createJobs({
         blocked_codes: (report.decision_reasons?.blocked ?? []).map(item => item.code),
         review_required: (report.decision_reasons?.review_required ?? []).map(item => item.code),
         platform_compliance: report.platform_compliance,
+        visual_review_status: report.visual_review?.status ?? null,
+        visual_review_configured: report.visual_review != null,
         quality_status: run.quality_status,
       },
     }));
@@ -1579,6 +1719,23 @@ export function createJobs({
   async function scheduleRevisions(data, run, events, at) {
     const revision = run.revision;
     if (!revision || revision.enabled !== true || revision.stop_reason) return 'none';
+    // P4：权限与能力检查必须在提交前完成；任一项未通过都不能自动提交修订
+    if (revision.permission?.automatic !== true) {
+      revision.stop_reason = 'permission_denied';
+      events.push(pushEvent(data, run, {
+        stage: 'revision', status: 'stopped', at,
+        payload: { stop_reason: 'permission_denied', note: '当前任务未授予自动修订权限，需人工确认后执行' },
+      }));
+      return 'none';
+    }
+    if (revision.mode !== 'hard_failure_only') {
+      revision.stop_reason = 'mode_unsupported';
+      events.push(pushEvent(data, run, {
+        stage: 'revision', status: 'stopped', at,
+        payload: { stop_reason: 'mode_unsupported', mode: revision.mode },
+      }));
+      return 'none';
+    }
     if (revision.no_improvement_streak >= REVISION_MAX_NO_IMPROVEMENT) {
       revision.stop_reason = 'no_improvement';
       return 'none';
@@ -1591,6 +1748,27 @@ export function createJobs({
       if (!version) continue;
       const report = data.quality_reports?.[version.report_id] ?? null;
       if (!report || report.decision !== 'blocked') continue;
+      // P4：上下文变化（事实/规格/规则/文件失效）时不得继续修订；
+      // 旧报告不能驱动新动作，否则会把已经过期的结论当成当前问题。
+      const validity = await reportValidityIn(data, report);
+      if (validity.validity !== 'current') {
+        revision.stop_reason = 'context_changed';
+        revision.context_check = {
+          report_id: report.id,
+          checked_at: new Date(at).toISOString(),
+          validity: validity.validity,
+          reasons: validity.reasons ?? [],
+        };
+        events.push(pushEvent(data, run, {
+          stage: 'revision', status: 'stopped', at,
+          payload: {
+            stop_reason: 'context_changed', deliverable_id: target.deliverable_id,
+            report_id: report.id, validity: validity.validity, reasons: validity.reasons ?? [],
+            note: '上下文已变化，旧报告不再适用；需重新检查后再决定是否修订',
+          },
+        }));
+        return 'none';
+      }
       const plan = planRevision({ report, deliverable: target });
       if (!plan.revise) continue;
 
@@ -2194,6 +2372,58 @@ export function createJobs({
     return { reports: views.map(view => view.report), total: views.length };
   }
 
+  /**
+   * P3：修订规划的只读输入。
+   * 复用质量报告的有效性判断，把报告、当前事实/规格/品牌、交付物与生效版本一次性冻结。
+   * 不写库、不调用模型；过期报告仍返回，由调用方决定展示原因还是拒绝执行。
+   */
+  async function revisionPlanningInput(ctx, { runId = null, reportId = null } = {}) {
+    if (!runId || !reportId) throw new ApiError(422, 'PLAN_INPUT_REQUIRED', '修订规划需要任务与质量报告');
+    const report = await store.read(data => {
+      const found = data.quality_reports?.[reportId];
+      if (!found || found.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '质量报告不存在');
+      const run = findRun(data, ctx, runId);
+      if (found.run_id !== run.id) throw new ApiError(422, 'REPORT_RUN_MISMATCH', '该质量报告不属于指定任务');
+      return structuredClone(found);
+    });
+    const context = await store.read(data => {
+      const run = data.runs?.[runId] ?? null;
+      const project = run ? data.projects?.[run.project_id] ?? null : null;
+      const spec = Object.values(data.specs ?? {}).find(item =>
+        item.tenant_id === ctx.tenantId && item.project_id === report.project_id
+        && item.version === report.spec_ref?.version) ?? null;
+      const truth = latestTruthOfProject(data, ctx.tenantId, report.project_id);
+      const kit = spec?.brand_kit ? data.brand_kits?.[spec.brand_kit.id] ?? null : null;
+      const kitVersion = spec?.brand_kit
+        ? Object.values(data.brand_kit_versions ?? {}).find(item =>
+          item.tenant_id === ctx.tenantId && item.brand_kit_id === spec.brand_kit.id
+          && item.version === spec.brand_kit.version) ?? null
+        : null;
+      const deliverable = (run?.deliverables ?? []).find(item => item.deliverable_id === report.deliverable_id) ?? null;
+      const version = (run?.versions ?? []).find(item => item.active && item.deliverable_id === report.deliverable_id) ?? null;
+      const channel = spec?.channel?.platform
+        ? matchChannelRule({ platform: spec.channel.platform, category: project?.category ?? '', at: clock() })
+        : { rule: null, status: 'missing', reasons: ['未选择目标平台，无法匹配平台规则'] };
+      return {
+        run, project, spec, truth, kitVersion, deliverable, version, channel,
+        kitHeadVersion: kit?.head_version ?? null,
+      };
+    });
+    let outputExists = false;
+    if (report.output_file?.hash) {
+      outputExists = Boolean(await store.readBlob(report.output_file.hash, report.output_file.format ?? 'png'));
+    }
+    const validity = computeReportValidity({
+      report,
+      spec: context.spec,
+      truth: context.truth,
+      brandKitVersion: context.kitHeadVersion,
+      channel: context.channel,
+      outputExists,
+    });
+    return { ...context, report: presentReport(report, validity), raw_report: report, validity };
+  }
+
   async function getQualityReport(ctx, reportId) {
     const report = await store.read(data => {
       const found = data.quality_reports?.[reportId];
@@ -2287,6 +2517,33 @@ export function createJobs({
     if (!bytes) throw new ApiError(410, 'CONTENT_MISSING', '图片文件不可用');
     return item.clean ? { bytes, mime: item.version.format === 'jpg' ? 'image/jpeg' : `image/${item.version.format}`, preview: false }
       : { bytes: await draftPreview(bytes), mime: 'image/png', preview: true };
+  }
+
+  /**
+   * P5—P6：套图清单与规则检查。
+   * 只读：不触发重生成、不改变选用版本；单图质量门槛先于跨图规则。
+   */
+  async function getRunSuite(ctx, runId) {
+    return store.read(async data => {
+      const run = findRun(data, ctx, runId);
+      const spec = specOfRun(data, run);
+      const truth = truthOfRun(data, run, spec);
+      const reports = {};
+      const validities = {};
+      for (const version of run.versions ?? []) {
+        const report = data.quality_reports?.[version.report_id] ?? null;
+        if (!report) continue;
+        reports[report.id] = report;
+        validities[report.id] = await reportValidityIn(data, report);
+      }
+      const dependencies = Object.values(data.image_dependencies ?? {})
+        .filter(item => item.run_id === run.id);
+      return buildSuiteManifest({
+        run, reports, validities, dependencies, truth,
+        brandKit: spec?.brand_kit ?? null,
+        now: clock(),
+      });
+    });
   }
 
   async function listRunVersions(ctx, runId) {
@@ -3542,8 +3799,9 @@ export function createJobs({
   return {
     start, stop, createRun, cancelRun, confirmBudget, reconcileRun, getRun, listRuns, eventsSince, recover, advance, subscribe, waitIdle,
     listGenerationRecords, getGenerationRecord,
-    listQualityReports, getQualityReport, reviewQualityReport,
+    listQualityReports, getQualityReport, reviewQualityReport, revisionPlanningInput,
     listRunVersions, readVersionContent, activateVersion, createExport, listExports, getExport, readExportPackage,
+    getRunSuite,
     textLayersOfDeliverable, editDeliverableText, recomposeVersionFacts,
     createVideoPlan, listVideoPlans, getVideoPlan, evaluateVideoPlanFrames, generateVideo,
     createJointExport, createBatchExport, createSkuExport, planSkuAvailability,

@@ -10,7 +10,15 @@ import {
 } from './auth.mjs';
 import { IMAGE_TYPES, inspectImage } from './images.mjs';
 import { createSubjectMask, normalizeSubjectBox } from './m06.mjs';
+import {
+  auditProductContext, buildContextBinding, inspectAssetUsability,
+} from './product-context.mjs';
 import { createOcrFromEnv, extractionCandidates } from './ocr.mjs';
+import { createVisualReviewerFromEnv } from './visual-review.mjs';
+import {
+  buildRevisionRequest, createRevisionPlannerFromEnv, loadRefinerRules,
+  planRevisionAction, presentRevisionPlan,
+} from './revision-planner.mjs';
 import { prepareSubjectMask, renderSvgPng } from './raster.mjs';
 import {
   ASSET_ROLES, LIMITS, activeAssets, computeReadiness, sha256,
@@ -37,7 +45,7 @@ import {
   dependencyEntriesFor, explainerPath, explainerStale, planFingerprint, presentExplainer,
   renderExplainerSvg, replacementListFor, validateExplainerFeedback, validateExplainerReview,
 } from './explainer.mjs';
-import { EXPORT_SCHEMA_VERSION, buildZip, exportRecordId, zipSha256 } from './m08.mjs';
+import { EXPORT_SCHEMA_VERSION, VISUAL_REVISION_MAX_ROUNDS, buildZip, exportRecordId, zipSha256 } from './m08.mjs';
 import {
   assembleSpec, brandKitContentHash, computeSpecValidity, specContentHash, validateBrandKitInput,
 } from './spec.mjs';
@@ -98,6 +106,11 @@ import {
 } from './m12.mjs';
 
 const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
+// P3：能复用现有重生成流程执行的动作。其余动作（格式转换/缩画布/文字重排）本阶段没有安全入口，
+// 规划可以建议，但服务端明确拒绝执行，避免"点了确认却做了另一件事"。
+const EXECUTABLE_REVISION_ACTIONS = Object.freeze([
+  'regenerate_image', 'regenerate_background', 'recompose_subject',
+]);
 const now = () => new Date().toISOString();
 const fingerprintOf = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
@@ -130,6 +143,10 @@ export function createApi({
   provider: injectedProvider = null,
   // R04：OCR 可注入；不注入时按环境变量判断是否已配置
   ocr: injectedOcr = null,
+  // P2：视觉评审可注入；不注入时按环境变量判断，未配置则评审项保持 unknown
+  visualReviewer: injectedReviewer = null,
+  // P3：修订规划可注入；不注入时按环境变量判断，未配置则使用确定性建议
+  revisionPlanner: injectedPlanner = null,
   providerOptions = {},
   // M12：支付 Provider 默认未配置；只有宿主显式注入真实能力时才允许真实收款
   paymentProvider = null,
@@ -160,11 +177,35 @@ export function createApi({
   // R04/E04：OCR 适配器在 api 作用域保留一份（E04 三层核对的视觉层直接调用），
   // 与注入 jobs 的是同一实例；未配置（null）时视觉项保持未知，绝不伪造已核对。
   const ocrAdapter = injectedOcr ?? createOcrFromEnv(process.env);
+  // P2：视觉评审适配器与注入 jobs 的是同一实例；未配置时报告会明确写"未配置"，不伪造看图结论
+  const visualReviewer = injectedReviewer ?? createVisualReviewerFromEnv(process.env);
+  const visualReviewInfo = {
+    configured: visualReviewer.configured === true,
+    mode: visualReviewer.mode ?? 'not_configured',
+    acceptance: visualReviewer.acceptance ?? 'not_available',
+    model: visualReviewer.model ?? null,
+    note: visualReviewer.note ?? null,
+  };
+  // P3：修订规划器与注入的是同一实例；未配置时只输出确定性建议，不调用模型
+  const revisionPlanner = injectedPlanner ?? createRevisionPlannerFromEnv(process.env);
+  const revisionPlannerInfo = {
+    configured: revisionPlanner.configured === true,
+    mode: revisionPlanner.mode ?? 'not_configured',
+    acceptance: revisionPlanner.acceptance ?? 'not_available',
+    model: revisionPlanner.model ?? null,
+    note: revisionPlanner.note ?? null,
+    // 阶段 3 的边界：规划只产出建议，执行必须人工确认；不启用自动循环
+    auto_loop: false,
+    requires_confirmation: true,
+    executable_actions: [...EXECUTABLE_REVISION_ACTIONS],
+  };
   const jobs = createJobs({
     store, provider, clock, initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, revisionMaxRounds,
     providerMaxConcurrency, tenantMaxConcurrency, unknownReconcileMs,
     // R04：注入 OCR 时才会对成品做真实文字核对，否则文字项保持 unknown
     ocr: ocrAdapter,
+    // P2：注入视觉评审时才会对成品图追加评审项，否则既有检查与结论不变
+    visualReviewer,
   });
   // M12：进程内指标只保留聚合计数，不记录请求体、素材或提示词
   const metrics = { total: 0, by_status: {}, errors: 0, by_error: {} };
@@ -328,10 +369,25 @@ export function createApi({
         requireMethod(method, ['DELETE']);
         return deleteManualDependency(ctx, req, rest[1], rest[3], rest[5], query, send);
       }
+      // P3：修订建议与人工确认执行（规划不扣费、不执行；执行走既有重生成）
+      if (rest.length === 3 && rest[2] === 'revision-plans') {
+        if (method === 'POST') return createRevisionPlanRoute(ctx, req, rest[1], send);
+        requireMethod(method, ['GET', 'HEAD', 'POST']);
+        return listRevisionPlansRoute(ctx, rest[1], send);
+      }
+      if (rest.length === 5 && rest[2] === 'revision-plans' && rest[4] === 'execute') {
+        requireMethod(method, ['POST']);
+        return executeRevisionPlanRoute(ctx, req, rest[1], rest[3], send);
+      }
       if (rest.length !== 3) throw new ApiError(404, 'NOT_FOUND', '接口不存在');
       if (rest[2] === 'dependencies') {
         requireMethod(method, ['GET', 'HEAD']);
         return getRunDependencies(ctx, rest[1], send);
+      }
+      // P5—P6：套图 manifest 与跨图规则检查（只读，不触发重生成）
+      if (rest[2] === 'suite') {
+        requireMethod(method, ['GET', 'HEAD']);
+        return jobs.getRunSuite(ctx, rest[1]).then(result => send(200, result));
       }
       if (rest[2] === 'regenerate') { requireMethod(method, ['POST']); return regenerateRunRoute(ctx, req, rest[1], send); }
       if (rest[2] === 'cancel') { requireMethod(method, ['POST']); return cancelRunRoute(ctx, req, rest[1], send); }
@@ -564,6 +620,21 @@ export function createApi({
         acceptance: providerInfo.acceptance,
         note: providerInfo.note,
         capabilities: provider.capabilities(),
+        // P2：视觉评审是否真的接入。未接入时评审项保持 unknown，不用规则文字冒充看图结论
+        visual_review: visualReviewInfo,
+        // P3：修订规划是否真的接入；未接入时只给确定性建议，不能声称模型规划质量
+        revision_planner: revisionPlannerInfo,
+        // P4：自动修订控制面。视觉评审未验收时明确关闭，不把"未启用"写成"已验收"
+        revision_control: {
+          mode: 'hard_failure_only',
+          automatic_rounds: revisionMaxRounds,
+          visual_auto_loop: visualReviewInfo.configured === true && visualReviewInfo.acceptance === 'verified',
+          visual_max_rounds: VISUAL_REVISION_MAX_ROUNDS,
+          visual_gate: visualReviewInfo.configured !== true
+            ? 'visual_review_not_configured'
+            : (visualReviewInfo.acceptance === 'verified' ? null : 'visual_review_not_verified'),
+          note: '首版只自动修订可修复的机器硬失败；视觉驱动自动修订最多一轮且仅在评审验收通过后开放',
+        },
       });
     }
     if (resource === 'generation-records') {
@@ -915,6 +986,8 @@ export function createApi({
         if (third === 'cancel') return 'run:cancel';
         if (third === 'budget-confirmation') return 'run:budget';
         if (third === 'reconcile') return 'run:reconcile';
+        // P3：规划虽然不扣费，但会落一条待确认建议；读列表只需读权限，提交与执行需要建任务权限
+        if (third === 'revision-plans') return write ? 'run:create' : 'run:read';
         if (third === 'exports' && write) return 'export:create';
         if (third === 'versions' && fourth === 'activate' && write) return 'version:activate';
         // M13：文字层预览是读动作；提交文字修改是内容写动作，复核/只读角色不可用
@@ -1278,11 +1351,26 @@ export function createApi({
         .filter(asset => asset.project_id === project.id && asset.tenant_id === ctx.tenantId)
         .sort((left, right) => left.created_at.localeCompare(right.created_at));
       const truth = latestTruth(data, project.id);
+      const spec = latestSpec(data, project.id);
+      // P1：品牌版本以当前冻结规格引用的那一版为准；没有规格就没有品牌绑定
+      const brandKitVersion = spec?.brand_kit
+        ? Object.values(data.brand_kit_versions).find(item =>
+          item.tenant_id === ctx.tenantId && item.brand_kit_id === spec.brand_kit.id
+          && item.version === spec.brand_kit.version) ?? null
+        : null;
+      // 详情页不读二进制：可用性按上传时已校验的元数据判断，解码状态保持 unverified
+      const usability = activeAssets(assets).map(asset => inspectAssetUsability({ asset }));
+      const assetAudit = auditProductContext({ project, assets, truth, usability });
       return {
         project: serializeProject(project),
         assets: assets.map(asset => serializeAsset(asset, project.id)),
         truth_head: truth,
         readiness: computeReadiness(project, assets, truth),
+        // P1：素材可用性与补拍提示，前端据此展示"缺什么、补什么"
+        asset_audit: assetAudit,
+        asset_usability: usability,
+        // P1：上下文冻结哈希，素材/事实/品牌/规格任一变化都会失效
+        context_binding: buildContextBinding({ project, assets, truth, brandKitVersion, spec }),
       };
     });
     send(200, detail);
@@ -1332,6 +1420,14 @@ export function createApi({
         message: `最短边 ${shortSide}px 低于建议 ${LIMITS.minShortSide}px，可先保存但建议补图`,
       });
     }
+    // P1：上传即做真实解码与掩码来源判断，补拍提示随响应返回
+    const usability = inspectAssetUsability({
+      asset: {
+        id: null, filename, role, mime: info.mime, ext: info.ext,
+        width: info.width, height: info.height, subject_box: null,
+      },
+      bytes: buffer,
+    });
     await store.putBlob(buffer, hash, info.ext);
 
     const result = await store.mutate(data => {
@@ -1394,6 +1490,8 @@ export function createApi({
     send(201, {
       asset: serializeAsset(result.asset, projectId),
       warnings: result.asset.warnings,
+      // P1：真实解码结果、掩码来源与补拍建议
+      usability: { ...usability, asset_id: result.asset.id },
       replaced_asset_ids: result.replaced,
       readiness: result.readiness,
     });
@@ -3192,6 +3290,15 @@ export function createApi({
     return { items, quote };
   }
 
+  /** 项目当前是否存在未完成变更单：有则新变更必须等它完成或取消。 */
+  function openChangeOf(data, project) {
+    const open = Object.values(data.change_orders ?? {})
+      .filter(item => item.tenant_id === project.tenant_id && item.project_id === project.id)
+      .filter(item => !['completed', 'cancelled'].includes(item.status))
+      .sort((left, right) => String(right.created_at ?? '').localeCompare(String(left.created_at ?? '')));
+    return open[0] ?? null;
+  }
+
   /** 预览：只算差异与影响，不落任何数据、不触发任何生成。 */
   async function previewChange(ctx, req, projectId, send) {
     const body = await readJson(req);
@@ -3205,6 +3312,7 @@ export function createApi({
         ? diffSkuProfiles(headSkuProfileOf(data, project)?.skus ?? [], skuPayload.skus)
         : [];
       const { items, quote } = computeChangeImpactIn(data, project, diff, skuDiff);
+      const blocking = openChangeOf(data, project);
       return {
         project_id: project.id,
         base_truth_version: project.truth_head_version,
@@ -3213,6 +3321,10 @@ export function createApi({
         impact_items: items.map(item => ({ ...item, status: 'pending' })),
         quote,
         empty: diffIsEmpty(diff, skuDiff),
+        // P5：执行中再次变更会与未完成变更单重复处理同一批图片；
+        // 预览直接暴露阻塞单，确认时再硬拒，避免静默覆盖。
+        blocking_change: blocking ? { id: blocking.id, status: blocking.status } : null,
+        can_confirm: blocking === null,
       };
     });
     send(200, result);
@@ -3257,6 +3369,17 @@ export function createApi({
       const skuDiff = skuPayload ? diffSkuProfiles(oldSkus, skuPayload.skus) : [];
       if (diffIsEmpty(diff, skuDiff)) {
         throw new ApiError(409, 'NO_CHANGES', '本次提交与当前版本没有差异，未创建变更单');
+      }
+      // P5：同一项目只允许一个未完成变更单，避免执行中再次变更重复处理同一批图片。
+      // 旧单已确认但未执行也算未完成：此时其影响清单仍基于旧版本，不能叠第二份。
+      const open = openChangeOf(data, project);
+      if (open) {
+        throw new ApiError(409, 'CHANGE_IN_PROGRESS',
+          '项目已有未完成的变更单，请先完成或取消后再提交新的变更', {
+            change_id: open.id, status: open.status,
+            pending_items: (open.impact_items ?? []).filter(row =>
+              ['pending', 'running'].includes(row.status)).length,
+          });
       }
       // 同一 mutate 内先落新事实版本（乐观锁在 applyTruthVersionIn 内），再按需落 SKU 档案版本
       const { record: truthRecord } = applyTruthVersionIn(data, ctx, project, truthPayload);
@@ -6692,6 +6815,230 @@ export function createApi({
       backup_id: backupId,
       counts: restored.counts,
       notice: '仅恢复本租户数据；其他租户记录未被覆盖',
+    });
+  }
+
+  // ---------- P3：修订建议（只给建议）与人工确认后的单步执行 ----------
+  /**
+   * 生成一份可读修订建议。服务端只做规划：不扣费、不改图、不写版本。
+   * 报告必须仍然有效，避免拿旧证据去改图；建议重复请求复用同一条待确认记录。
+   */
+  async function createRevisionPlanRoute(ctx, req, runId, send) {
+    const body = await readJson(req).catch(() => ({}));
+    const reportId = String(body?.report_id ?? '').trim();
+    if (!reportId) throw new ApiError(422, 'REPORT_REQUIRED', '修订规划需要指定质量报告');
+    const input = await jobs.revisionPlanningInput(ctx, { runId, reportId });
+    if (input.validity.validity !== 'current') {
+      throw new ApiError(409, 'REPORT_STALE', '质量报告已失效，请重新检查后再规划修订', {
+        validity: input.validity.validity,
+        reasons: input.validity.reasons,
+      });
+    }
+    const planRequest = buildRevisionRequest({
+      project: input.project,
+      run: input.run,
+      deliverable: input.deliverable,
+      report: input.report,
+      truth: input.truth,
+      spec: input.spec,
+      brandKitVersion: input.kitVersion,
+      providerCapabilities: provider.capabilities(),
+      hasTextLayers: Array.isArray(input.version?.text_layers) && input.version.text_layers.length > 0,
+      hasSubjectProtection: input.run?.subject_context?.available === true,
+      compositeAvailable: input.run?.subject_context?.mode === 'composite',
+      maxRounds: revisionMaxRounds,
+    });
+    const rules = await loadRefinerRules();
+    const planning = await planRevisionAction({ planner: revisionPlanner, rules, request: planRequest });
+    const view = presentRevisionPlan({ plan: planning, report: input.report });
+    const createdAt = new Date(clock()).toISOString();
+    const record = await store.mutate(data => {
+      // 同一报告 + 同一商品上下文 + 同一成品版本只保留一条待确认建议，避免重复点击堆积
+      const existing = Object.values(data.revision_plans ?? {}).find(item =>
+        item.tenant_id === ctx.tenantId && item.run_id === runId
+        && item.report_id === reportId && item.context_hash === planRequest.context_hash
+        && item.source_version_id === planRequest.source_version_id && item.status === 'proposed');
+      if (existing) return { ...existing, replayed: true };
+      const item = {
+        id: newId('rplan'),
+        tenant_id: ctx.tenantId,
+        project_id: input.run?.project_id ?? input.project?.id ?? null,
+        run_id: runId,
+        report_id: reportId,
+        deliverable_id: input.deliverable?.deliverable_id ?? null,
+        report_hash: planRequest.report_hash,
+        context_hash: planRequest.context_hash,
+        source_version_id: planRequest.source_version_id,
+        artifact_hash: planRequest.artifact_hash,
+        decision: view.decision,
+        action: view.action,
+        target_check_codes: [...view.target_check_codes],
+        status: 'proposed',
+        plan: view,
+        planning: {
+          status: planning.status,
+          reason: planning.reason ?? null,
+          rules_hash: planning.rules_hash ?? rules.rules_hash,
+          model: planning.model ?? null,
+          latency_ms: planning.latency_ms ?? null,
+        },
+        created_by: ctx.actorId,
+        created_at: createdAt,
+        executed_at: null,
+        executed_by: null,
+        child_run_id: null,
+        execution: null,
+      };
+      data.revision_plans[item.id] = item;
+      return { ...item, replayed: false };
+    });
+    send(record.replayed ? 200 : 201, {
+      plan_id: record.id,
+      plan: record.plan,
+      run_id: runId,
+      report_id: reportId,
+      replayed: record.replayed === true,
+      executed: false,
+      // 只有通过校验/确定性兜底的动作才给出执行入口；超时或非法输出只能人工处理
+      execution: {
+        available: ['proposed', 'deterministic'].includes(record.plan?.status)
+          && record.decision === 'propose_action'
+          && EXECUTABLE_REVISION_ACTIONS.includes(record.action),
+        action: record.action,
+        executable_actions: [...EXECUTABLE_REVISION_ACTIONS],
+        reason: !['proposed', 'deterministic'].includes(record.plan?.status)
+          ? '规划未通过可信校验，请重试或人工处理'
+          : (record.decision !== 'propose_action'
+            ? '该建议不是可执行动作'
+            : (EXECUTABLE_REVISION_ACTIONS.includes(record.action)
+              ? null : `动作 ${record.action} 在本阶段没有安全执行入口`)),
+      },
+      note: '这是建议，不会自动改图或扣费；人工确认后才执行',
+    });
+  }
+
+  async function listRevisionPlansRoute(ctx, runId, send) {
+    const payload = await store.read(data => {
+      const run = data.runs?.[runId] ?? null;
+      if (!run || run.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '任务不存在');
+      const plans = Object.values(data.revision_plans ?? {})
+        .filter(item => item.tenant_id === ctx.tenantId && item.run_id === runId)
+        .sort((left, right) => String(left.created_at).localeCompare(String(right.created_at)))
+        .map(item => ({
+          plan_id: item.id,
+          report_id: item.report_id,
+          deliverable_id: item.deliverable_id,
+          decision: item.decision,
+          action: item.action,
+          target_check_codes: [...(item.target_check_codes ?? [])],
+          status: item.status,
+          executed: item.status === 'executed',
+          child_run_id: item.child_run_id ?? null,
+          created_at: item.created_at,
+          executed_at: item.executed_at ?? null,
+          plan: item.plan,
+        }));
+      return { run_id: runId, total: plans.length, plans };
+    });
+    send(200, payload);
+  }
+
+  /**
+   * 人工确认执行：只接受可复用现有重生成流程的动作，执行前后都重新核对证据。
+   * 幂等键 + 记录状态保证重复点击不会重复扣费。
+   */
+  async function executeRevisionPlanRoute(ctx, req, runId, planId, send) {
+    const idempotencyKey = String(req.headers['idempotency-key'] ?? '').trim();
+    if (!idempotencyKey) {
+      throw new ApiError(400, 'MISSING_IDEMPOTENCY_KEY', '修订执行必须提供 Idempotency-Key');
+    }
+    const body = await readJson(req).catch(() => ({}));
+    if (body.confirm !== true) {
+      throw new ApiError(428, 'CONFIRMATION_REQUIRED', '修订执行必须由人工显式确认（confirm: true）');
+    }
+    const record = await store.read(data => {
+      const item = data.revision_plans?.[planId] ?? null;
+      if (!item || item.tenant_id !== ctx.tenantId || item.run_id !== runId) {
+        throw new ApiError(404, 'NOT_FOUND', '修订建议不存在');
+      }
+      return structuredClone(item);
+    });
+    if (record.status === 'executed') {
+      return send(200, {
+        plan_id: planId, plan: record.plan, child_run_id: record.child_run_id,
+        executed: true, replayed: true, note: '同一确认已执行过，未重复提交',
+      });
+    }
+    if (record.decision !== 'propose_action') {
+      throw new ApiError(409, 'PLAN_NOT_EXECUTABLE', '该建议不是可执行动作，不能执行', {
+        decision: record.decision,
+      });
+    }
+    if (!['proposed', 'deterministic'].includes(record.plan?.status)) {
+      throw new ApiError(409, 'PLAN_NOT_TRUSTED', '规划未通过可信校验，不能直接执行；请重试规划或人工处理', {
+        status: record.plan?.status ?? null,
+      });
+    }
+    if (!EXECUTABLE_REVISION_ACTIONS.includes(record.action)) {
+      throw new ApiError(409, 'ACTION_NOT_EXECUTABLE',
+        `动作 ${record.action} 在本阶段没有安全执行入口，请按建议人工处理`, {
+          action: record.action,
+          executable_actions: [...EXECUTABLE_REVISION_ACTIONS],
+        });
+    }
+    // 执行前重新读取证据：报告仍有效、目标问题仍存在、商品上下文未漂移
+    const input = await jobs.revisionPlanningInput(ctx, { runId, reportId: record.report_id });
+    if (input.validity.validity !== 'current') {
+      throw new ApiError(409, 'REPORT_STALE', '质量报告已失效，不能基于旧证据执行修订', {
+        validity: input.validity.validity,
+        reasons: input.validity.reasons,
+      });
+    }
+    const targets = [...(record.target_check_codes ?? [])];
+    const stillOpen = (input.report.checks ?? []).filter(item =>
+      targets.includes(item.code) && (item.status === 'fail' || (item.status === 'unknown' && item.required === true)));
+    if (stillOpen.length === 0) {
+      throw new ApiError(409, 'TARGET_ALREADY_RESOLVED', '目标问题已不再失败，不需要执行修订', { targets });
+    }
+    if (record.context_hash && input.run?.product_context?.context_hash
+      && input.run.product_context.context_hash !== record.context_hash) {
+      throw new ApiError(409, 'CONTEXT_CHANGED', '商品上下文已变化，请重新规划修订', {
+        planned: record.context_hash,
+        current: input.run.product_context.context_hash,
+      });
+    }
+    const sourceVersionId = record.source_version_id?.startsWith('ver_') ? record.source_version_id : null;
+    const { created, prepared } = await launchRegeneration({
+      ctx, sourceRunId: runId, deliverableId: record.deliverable_id,
+      sourceVersionId, idempotencyKey,
+    });
+    const executedAt = new Date(clock()).toISOString();
+    await store.mutate(data => {
+      const item = data.revision_plans?.[planId];
+      if (!item) return null;
+      item.status = 'executed';
+      item.executed_at = executedAt;
+      item.executed_by = ctx.actorId;
+      item.child_run_id = created.run.id;
+      item.execution = {
+        idempotency_key: idempotencyKey,
+        quote_id: prepared.quote.quote_id,
+        action: record.action,
+        report_id: record.report_id,
+        requires_recheck: true,
+        note: '执行后必须等待新任务完成并重新检查，比较通过项是否退步',
+      };
+      item.plan = { ...item.plan, executed: true, executed_at: executedAt, child_run_id: created.run.id };
+      return null;
+    });
+    send(created.replayed ? 200 : 201, {
+      plan_id: planId,
+      plan: { ...record.plan, executed: true, child_run_id: created.run.id },
+      child_run_id: created.run.id,
+      quote_id: prepared.quote.quote_id,
+      executed: true,
+      requires_recheck: true,
+      note: '已按确认提交单步重生成；新任务会重新评审，仍需人工比较通过项是否退步',
     });
   }
 

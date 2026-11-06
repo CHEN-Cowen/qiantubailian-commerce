@@ -52,6 +52,7 @@ export function createSeedreamProvider({
   model = process.env.PILOTDECK_SEEDREAM_MODEL || SEEDREAM_DEFAULT_MODEL,
   supportsMask = false,
   supportsPostComposite = false,
+  supportsReferenceProtection = false,
   fetchImpl = globalThis.fetch,
   clock = () => Date.now(),
   timeoutMs = 120_000,
@@ -72,6 +73,7 @@ export function createSeedreamProvider({
       max_references: MAX_REFERENCES,
       supports_mask: false,
       supports_post_composite: supportsPostComposite === true,
+      supports_reference_protection: supportsReferenceProtection === true,
       supports_async: true,
       supports_cancel: true,
       supports_seed: false,
@@ -97,19 +99,21 @@ export function createSeedreamProvider({
       return { ok: false, code: 'UNSUPPORTED_CAPABILITY', message: `最多 ${MAX_REFERENCES} 张参考图，收到 ${request.references}` };
     }
     if (request.requires_subject_protection) {
-      if (!request.mask_ref || !String(request.mask_ref).startsWith('mask:verified:')) {
+      const caps = capabilities();
+      const maskOrComposite = caps.supports_mask || caps.supports_post_composite;
+      if (!maskOrComposite && !caps.supports_reference_protection) {
+        return {
+          ok: false,
+          code: 'UNSUPPORTED_CAPABILITY',
+          message: 'Seedream Adapter 未声明掩码、本地主体合成或参考图保护能力；拒绝在无保护的情况下真实调用',
+          details: { supports_mask: false, supports_post_composite: false, supports_reference_protection: false },
+        };
+      }
+      if (maskOrComposite && (!request.mask_ref || !String(request.mask_ref).startsWith('mask:verified:'))) {
         return {
           ok: false,
           code: 'UNSUPPORTED_CAPABILITY',
           message: '需要商品主体保护，但主体掩码缺失或未经像素校验；拒绝静默丢弃保护',
-        };
-      }
-      if (!capabilities().supports_mask && !capabilities().supports_post_composite) {
-        return {
-          ok: false,
-          code: 'UNSUPPORTED_CAPABILITY',
-          message: 'Seedream Adapter 未声明掩码能力，也未声明可验收的本地主体合成；拒绝在无保护的情况下真实调用',
-          details: { supports_mask: false, supports_post_composite: false },
         };
       }
     }

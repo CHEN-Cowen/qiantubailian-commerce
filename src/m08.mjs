@@ -14,6 +14,8 @@ import { deflateRawSync } from 'node:zlib';
 export const M08_VERSION = 'm08.1';
 export const REVISION_MAX_ROUNDS = 3;
 export const REVISION_MAX_NO_IMPROVEMENT = 2;
+/** P4：视觉驱动的自动修订首版最多一轮；未验收的评审能力不得开启。 */
+export const VISUAL_REVISION_MAX_ROUNDS = 1;
 export const EXPORT_SCHEMA_VERSION = 1;
 export const PACKAGE_FORMAT_VERSION = 'qtb-package.1';
 
@@ -90,12 +92,81 @@ export function compareRevisionOutcome({ beforeReport, afterReport, actions = []
   };
 }
 
+/**
+ * P4：修订轮次控制面。
+ * 净改善率、成本与延时都从真实修订轨迹里算，不看"任务最终是否完成"这种会被其他因素污染的指标。
+ * 没有修订轨迹时全部返回 null，绝不用 0 冒充"零改善"或"零成本"。
+ */
+export function computeRevisionMetrics({ revision = null } = {}) {
+  const history = Array.isArray(revision?.history) ? revision.history : [];
+  const rounds = history.length;
+  if (rounds === 0) {
+    return {
+      rounds: 0, improved_rounds: 0, regressed_rounds: 0, still_failing_rounds: 0,
+      net_improvement_rate: null, credits_spent: Number(revision?.spent_credits) || 0,
+      avg_latency_ms: null, max_latency_ms: null,
+    };
+  }
+  const improved = history.filter(entry => entry.outcome?.improved === true).length;
+  const regressed = history.filter(entry => (entry.outcome?.regressions ?? []).length > 0).length;
+  const stillFailing = history.filter(entry =>
+    (entry.outcome?.still_failing ?? []).length > 0 && entry.outcome?.improved !== true).length;
+  const latencies = history.map(entry => Number(entry.latency_ms))
+    .filter(value => Number.isFinite(value) && value > 0);
+  const credits = history.reduce((sum, entry) => sum + (Number(entry.credits) || 0), 0);
+  return {
+    rounds,
+    improved_rounds: improved,
+    regressed_rounds: regressed,
+    still_failing_rounds: stillFailing,
+    net_improvement_rate: Math.round((improved / rounds) * 1000) / 1000,
+    credits_spent: credits,
+    avg_latency_ms: latencies.length > 0
+      ? Math.round(latencies.reduce((sum, value) => sum + value, 0) / latencies.length) : null,
+    max_latency_ms: latencies.length > 0 ? Math.max(...latencies) : null,
+  };
+}
+
+/**
+ * P4：修订后的版本选择。
+ * 只有净改善才自动替换选用版本；无改善或出现通过项退步时，新版本只作为历史留档，
+ * 原选用版本不动，避免"改了但更差"的结果被自动放行。
+ */
+export function selectRevisionVersion({ outcome = null, previousVersionId = null, newVersionId = null } = {}) {
+  const improved = outcome?.improved === true;
+  const regressions = outcome?.regressions ?? [];
+  if (improved) {
+    return {
+      active_version_id: newVersionId,
+      new_version_active: true,
+      supersede_previous: true,
+      reason: 'IMPROVED',
+    };
+  }
+  if (!previousVersionId) {
+    return {
+      active_version_id: newVersionId,
+      new_version_active: true,
+      supersede_previous: false,
+      reason: 'NO_PREVIOUS_VERSION',
+    };
+  }
+  return {
+    active_version_id: previousVersionId,
+    new_version_active: false,
+    supersede_previous: false,
+    reason: regressions.length > 0 ? 'REGRESSION' : 'NO_IMPROVEMENT',
+  };
+}
+
 // ---------- 版本 ----------
 
 export function makeVersionRecord({
   run, attempt, deliverable, report, output = {}, at = new Date(),
   // M13：本地合成路径把文字层与底图哈希随版本冻结，后续文字排版修改只认版本里的这份
   textLayers = null, overlayBaseHash = null,
+  // P4：修订未改善时不自动选用，新版本只留历史
+  active = true,
 } = {}) {
   const sameDeliverable = (run?.versions ?? []).filter(item => item.deliverable_id === attempt.deliverable_id);
   return {
@@ -116,8 +187,8 @@ export function makeVersionRecord({
     width: output.width ?? null,
     height: output.height ?? null,
     bytes: output.bytes ?? 0,
-    active: true,
-    superseded_at: null,
+    active: active === true,
+    superseded_at: active === true ? null : iso(at),
     created_at: iso(at),
     created_by: 'system',
     note: attempt.revision

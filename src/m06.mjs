@@ -19,6 +19,9 @@ export const SUBJECT_MASK_MAX_SIDE = 512;
 const MASK_BACKGROUND_THRESHOLD = 42;
 const MASK_MIN_COVERAGE = 0.02;
 const MASK_MAX_COVERAGE = 0.98;
+// 超过该占比说明背景与主体没有被可靠分开，局部合成会把背景一起贴回生成图。
+const MASK_MAX_TRUSTED_COVERAGE = 0.5;
+const MASK_FRAME_SPAN_LIMIT = 0.98;
 const MAX_COMPOSITE_PIXELS = 6_000_000;
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -300,6 +303,10 @@ export function createSubjectMask({ bytes, mime, box = null } = {}) {
   const subject = new Uint8Array(width * height);
   const rgbs = Buffer.alloc(width * height * 3);
   let coverageCount = 0;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const index = y * width + x;
@@ -315,7 +322,13 @@ export function createSubjectMask({ bytes, mime, box = null } = {}) {
         isSubject = Math.sqrt(dr * dr + dg * dg + db * db) > MASK_BACKGROUND_THRESHOLD;
       }
       subject[index] = isSubject ? 1 : 0;
-      if (isSubject) coverageCount += 1;
+      if (isSubject) {
+        coverageCount += 1;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
       rgbs[index * 3] = decoded.pixels[source];
       rgbs[index * 3 + 1] = decoded.pixels[source + 1];
       rgbs[index * 3 + 2] = decoded.pixels[source + 2];
@@ -348,21 +361,35 @@ export function createSubjectMask({ bytes, mime, box = null } = {}) {
     }
   }
 
+  // 背景色差无法可靠区分「商品」与「非纯色背景（桌面、暗角、其他物体）」时，
+  // 掩码会覆盖整张素材。此时仍保留掩码供「参考图保护」使用，但不产出局部合成底图：
+  // 把整张原始照片按比例贴回生成图会造成大面积遮挡、碎斑与商品交叠。
+  const bounds = maxX >= 0 ? { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 } : null;
+  const frameSpanX = bounds ? bounds.width / width : 0;
+  const frameSpanY = bounds ? bounds.height / height : 0;
+  const lowConfidence = coverage > MASK_MAX_TRUSTED_COVERAGE
+    || (frameSpanX >= MASK_FRAME_SPAN_LIMIT && frameSpanY >= MASK_FRAME_SPAN_LIMIT);
+
   const maskBytes = encodeMaskPng(width, height, index => subject[index] === 1);
-  const cutoutBytes = encodeRgbaPng(width, height, rgbs, index => (subject[index] === 1 ? 255 : 0));
+  const cutoutBytes = lowConfidence ? null : encodeRgbaPng(width, height, rgbs, index => (subject[index] === 1 ? 255 : 0));
   return {
     available: true,
     width,
     height,
     coverage,
+    bounds,
+    confidence: lowConfidence ? 'low' : 'normal',
     edge_pixels: edgePixels,
     background: transparentBorder ? { mode: 'alpha' } : { mode: 'border_color', ...background, threshold: MASK_BACKGROUND_THRESHOLD },
     maskBytes,
     cutoutBytes,
     sha256: sha256(maskBytes),
-    cutout_sha256: sha256(cutoutBytes),
-    has_cutout: true,
+    cutout_sha256: cutoutBytes ? sha256(cutoutBytes) : null,
+    has_cutout: cutoutBytes !== null,
     method: transparentBorder ? 'alpha_channel' : 'border_color_keying',
+    message: lowConfidence
+      ? `背景与主体无法可靠分离（掩码占 ${(coverage * 100).toFixed(1)}%），不生成局部合成底图；改用参考图保护并由人工/评审复核`
+      : null,
   };
 }
 
@@ -514,17 +541,26 @@ export function buildReferencePlan({
 /**
  * 主体保护能力闸口。规则：
  * - 模拟 Provider 允许降级，但必须带原因，记录里会明确标 simulated_fallback；
- * - 真实 Provider 必须要么原生支持掩码，要么声明可做本地合成，否则拒绝调用；
- * - 掩码不可用时，真实 Provider 一律拒绝，绝不静默丢弃。
+ * - 真实 Provider 必须要么原生支持掩码、要么声明可做本地合成、要么显式声明仅参考图保护，否则拒绝调用；
+ * - 掩码不可用时，未声明参考图保护的真实 Provider 一律拒绝，绝不静默丢弃。
  */
 export function checkSubjectProtection({ capabilities, protection, required = true } = {}) {
   if (!required) return { ok: true, mode: 'not_required' };
   const simulated = capabilities?.simulated === true;
+  // 参考图保护：供应商把主体原图当参考图并受提示词约束，但没有像素级保证。
+  // 这是明确的降级模式，必须记录 warning 并由人工/视觉评审复核主体一致性。
+  const referenceProtection = capabilities?.supports_reference_protection === true;
+  const referenceMode = () => ({
+    ok: true,
+    mode: 'reference',
+    warning: 'Provider 仅按主体参考图约束生成，未提供掩码或像素级保留；主体一致性必须由视觉评审或人工复核',
+  });
   if (!protection?.available) {
     const reason = protection?.reason ?? 'MISSING_SUBJECT_ASSET';
     if (simulated) {
       return { ok: true, mode: 'simulated_fallback', warning: `模拟 Provider 在掩码不可用（${reason}）时降级运行，产物不得当作真实主体保护结果` };
     }
+    if (referenceProtection) return referenceMode();
     return {
       ok: false,
       code: 'UNSUPPORTED_CAPABILITY',
@@ -538,6 +574,7 @@ export function checkSubjectProtection({ capabilities, protection, required = tr
   if (capabilities?.supports_post_composite === true && protection?.has_cutout !== false) {
     return { ok: true, mode: 'composite' };
   }
+  if (referenceProtection) return referenceMode();
   if (capabilities?.supports_post_composite === true && protection?.has_cutout === false) {
     return {
       ok: false,

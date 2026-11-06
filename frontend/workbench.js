@@ -30,6 +30,12 @@ const qualityStatusLabel = {
   publishable: '可发布', needs_review: '待复核', blocked: '阻断', not_checked: '未检查',
 };
 const checkStatusLabel = { pass: '通过', fail: '失败', unknown: '未知 / 待确认' };
+// P2：视觉评审接入状态。未知原因必须显示，不能只留一个"未知"。
+const visualReviewStatusLabel = {
+  ok: '已执行看图评审', unavailable: '未能观察待评图', not_configured: '未接入评审模型',
+  timeout: '评审调用超时', error: '评审调用失败', invalid_json: '评审返回非 JSON',
+  http_error: '评审端点报错', invalid_output: '评审输出未通过校验',
+};
 
 const LS_KEY = 'qb.workbench';
 
@@ -46,6 +52,11 @@ const state = {
   assets: [],
   versions: [],
   reports: [],
+  // P3：修订建议（只展示建议；用户确认后才提交单步重生成，不做自动循环）
+  revision: {
+    reportId: null, planId: null, plan: null, execution: null,
+    loading: false, executing: false, error: null, childRunId: null,
+  },
   exports: [],
   generationRecords: [],
   // 事件流
@@ -112,6 +123,8 @@ export function initWorkbench({ toast } = {}) {
     }
   });
   $('#wb-edit-layers')?.addEventListener('input', updateApplyState);
+  // P3：修订建议入口（规划免费，执行必须用户再次确认）
+  $('#wb-qa-checks')?.addEventListener('click', onRevisionClick);
   // E02：作品依赖面板（人工增删都需 reason，系统依赖不可删）
   $('#wb-dep-body')?.addEventListener('submit', event => void onDependencySubmit(event));
   $('#wb-dep-body')?.addEventListener('click', onDependencyClick);
@@ -566,17 +579,144 @@ function renderQA(empty = false) {
 
   // 优先显示 report.checks；没有 report 时根据 deliverable.status 构造一条占位
   const checks = report?.checks ?? buildFallbackChecks(deliverable);
+  if (state.revision.reportId !== (report?.id ?? null)) {
+    state.revision = {
+      reportId: report?.id ?? null, planId: null, plan: null, execution: null,
+      loading: false, executing: false, error: null, childRunId: null,
+    };
+  }
   holder.innerHTML = `<div class="wb-qa-summary">
       <b>质量判定</b>：${escapeHtml(qualityStatusLabel[report?.decision ?? deliverable?.status] ?? (report ? '无报告' : '待生成'))}
       ${report?.can_claim_platform_compliance === true ? ' · 已覆盖平台规则' : ''}
       ${report?.can_claim_platform_compliance === false ? ' · 平台规则未核验' : ''}
     </div>
+    ${renderVisualReview(report?.visual_review)}
+    ${renderRevisionPlan(report)}
     <div class="wb-qa-checks">${checks.map(c => renderCheckRow(c)).join('')}</div>`;
 
   // 人工复核入口：当 decision 是 needs_review 时显示
   if (report?.decision === 'needs_review' || report?.human_decision === 'needs_review') {
     reviewBlock.hidden = false;
     $('#wb-review-note').value = report?.human_review?.note ?? '';
+  }
+}
+
+function renderVisualReview(review) {
+  if (!review) return '';
+  const label = visualReviewStatusLabel[review.status] ?? review.status ?? '未知';
+  const reasons = Array.isArray(review.unknown_reasons)
+    ? review.unknown_reasons.filter(item => typeof item === 'string' && item.trim())
+    : [];
+  const codes = Array.isArray(review.appended_check_codes) ? review.appended_check_codes : [];
+  const meta = [
+    review.model,
+    review.provider,
+    review.latency_ms != null ? `${review.latency_ms}ms` : null,
+  ].filter(Boolean).map(item => escapeHtml(item)).join(' · ');
+  return `<div class="wb-qa-summary">
+      <b>视觉评审</b>：${escapeHtml(label)}${meta ? ` · ${meta}` : ''}
+      ${codes.length === 0 ? '<small>未追加检查项</small>' : `<small>已追加 ${codes.length} 项检查</small>`}
+      ${reasons.length > 0 ? `<small class="wb-check-evidence">未知原因：${escapeHtml(reasons.join('；'))}</small>` : ''}
+      <small>评审只提供证据与待复核项，不会自动修改图片。</small>
+    </div>`;
+}
+
+const revisionDecisionLabel = {
+  propose_action: '建议执行一步修订',
+  needs_material: '需要补充素材',
+  needs_review: '需要人工复核',
+  no_change: '无需修订',
+  stop: '停止修订',
+};
+const revisionStatusLabel = {
+  proposed: '模型建议', deterministic: '确定性建议', not_configured: '未配置规划模型',
+  invalid_output: '建议未通过校验', timeout: '规划超时', error: '规划失败',
+  invalid_json: '规划返回非 JSON', http_error: '规划端点报错', unavailable: '规划不可用',
+};
+
+function renderRevisionPlan(report) {
+  if (!report) return '';
+  const rev = state.revision;
+  if (!rev.plan) {
+    return `<div class="wb-qa-summary">
+      <b>修订建议</b>：${rev.loading ? '正在生成…' : '尚未生成'}
+      <button class="text-button" data-revision-plan-request ${rev.loading ? 'disabled' : ''}>生成修订建议</button>
+      <small>规划免费、不扣额度；只给出单步建议，不会自动改图或进入循环。</small>
+      ${rev.error ? `<small class="wb-check-evidence">${escapeHtml(rev.error)}</small>` : ''}
+    </div>`;
+  }
+  const plan = rev.plan;
+  const steps = (plan.steps ?? []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  const canExecute = plan.decision === 'propose_action'
+    && rev.execution?.available === true && plan.executed !== true;
+  const unavailableNote = plan.decision === 'propose_action' && rev.execution?.available !== true
+    ? `<small>该动作没有安全执行入口：${escapeHtml(rev.execution?.reason ?? '请按建议人工处理')}</small>` : '';
+  const executeBtn = canExecute
+    ? `<button class="text-button" data-revision-execute ${rev.executing ? 'disabled' : ''}>${rev.executing ? '提交中…' : '确认执行这一步（会创建新任务并扣额度）'}</button>`
+    : '';
+  const executedNote = plan.executed === true
+    ? `<small>已提交执行，子任务 ${escapeHtml(rev.childRunId ?? plan.child_run_id ?? '')}；请等新任务完成后核对，确认通过项没有退步。</small>`
+    : '';
+  return `<div class="wb-qa-summary">
+      <b>修订建议</b>：${escapeHtml(revisionDecisionLabel[plan.decision] ?? plan.decision ?? '未知')}
+      <small>状态：${escapeHtml(revisionStatusLabel[plan.status] ?? plan.status ?? '未知')}${plan.model ? ` · ${escapeHtml(plan.model)}` : ''}${plan.latency_ms != null ? ` · ${plan.latency_ms}ms` : ''}</small>
+      <ol>${steps}</ol>
+      ${unavailableNote}
+      ${executeBtn}
+      ${executedNote}
+      ${rev.error ? `<small class="wb-check-evidence">${escapeHtml(rev.error)}</small>` : ''}
+      <small>执行前服务端会重新核对：报告未过期、目标问题仍存在、商品上下文未变化。</small>
+    </div>`;
+}
+
+function onRevisionClick(event) {
+  if (event.target.closest('[data-revision-plan-request]')) {
+    void requestRevisionPlan();
+    return;
+  }
+  if (event.target.closest('[data-revision-execute]')) void executeRevisionPlan();
+}
+
+async function requestRevisionPlan() {
+  const run = state.activeRun;
+  const reportId = state.selectedReportId;
+  if (!run || !reportId || state.revision.loading) return;
+  state.revision.loading = true;
+  state.revision.error = null;
+  renderQA();
+  try {
+    const result = await api.createRevisionPlan(run.id, reportId);
+    state.revision.planId = result.plan_id;
+    state.revision.plan = result.plan;
+    state.revision.execution = result.execution ?? null;
+    state.toast(result.replayed ? '已复用同一份修订建议' : '已生成修订建议（尚未执行）');
+  } catch (error) {
+    state.revision.error = error instanceof ApiFailure ? error.message : String(error);
+  } finally {
+    state.revision.loading = false;
+    renderQA();
+  }
+}
+
+async function executeRevisionPlan() {
+  const run = state.activeRun;
+  const rev = state.revision;
+  if (!run || !rev.planId || rev.executing) return;
+  if (!window.confirm('确认执行这一步修订？会创建新任务并扣减额度，执行后仍需人工核对通过项没有退步。')) return;
+  rev.executing = true;
+  rev.error = null;
+  renderQA();
+  try {
+    const key = `revision-${rev.planId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const result = await api.executeRevisionPlan(run.id, rev.planId, key);
+    rev.plan = result.plan;
+    rev.childRunId = result.child_run_id ?? null;
+    state.toast(result.replayed ? '该建议已执行过，未重复提交' : '已提交修订执行，新任务会重新评审');
+  } catch (error) {
+    rev.error = error instanceof ApiFailure ? error.message : String(error);
+  } finally {
+    rev.executing = false;
+    renderQA();
   }
 }
 
@@ -595,6 +735,7 @@ function renderCheckRow(check) {
         ${check.required ? ' · 必过' : ''}
       </small>
       ${check.evidence ? `<small class="wb-check-evidence">证据：${escapeHtml(typeof check.evidence === 'string' ? check.evidence : JSON.stringify(check.evidence))}</small>` : ''}
+      ${Array.isArray(check.reasons) && check.reasons.length > 0 ? `<small>未知原因：${escapeHtml(check.reasons.join('；'))}</small>` : ''}
       ${check.suggested_action ? `<small>建议：${escapeHtml(check.suggested_action)}</small>` : ''}
       ${check.status === 'unknown' && check.adjudicable ? `<label><input type="checkbox" data-review-check="${escapeHtml(check.code)}">我已对照素材核对这一项</label>` : ''}
     </div>

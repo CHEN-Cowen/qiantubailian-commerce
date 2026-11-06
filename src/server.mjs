@@ -65,10 +65,14 @@ export function createApp({
   tenantMaxConcurrency = 2,
   unknownReconcileMs = null,
   tickMs = 25,
+  // 空闲套接字超时：默认与原行为一致；接入真实评审/规划等长耗时同步调用时才允许调大
+  socketTimeoutMs = 20_000,
   allowScenarioInjection = false,
   revisionMaxRounds = 3,
   provider = null,
   ocr = null,
+  visualReviewer = null,
+  revisionPlanner = null,
   providerOptions = {},
   paymentProvider = null,
   demoMode = process.env.NODE_ENV !== 'production',
@@ -85,7 +89,7 @@ export function createApp({
     store, allowedTenants, defaultTenant, defaultActor, maxUploadBytes, clock,
     initialCredits, attemptTimeoutMs, maxConcurrency, tickMs, allowScenarioInjection, revisionMaxRounds,
     providerMaxConcurrency, tenantMaxConcurrency, unknownReconcileMs,
-    provider, ocr, providerOptions, paymentProvider: paymentProvider ?? createPaymentProviderFromEnv().provider,
+    provider, ocr, visualReviewer, revisionPlanner, providerOptions, paymentProvider: paymentProvider ?? createPaymentProviderFromEnv().provider,
     demoMode, sessionTtlMs, secureCookies, emailRecoveryConfigured,
   });
   const server = http.createServer({ requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 1_000 }, (req, res) => {
@@ -145,7 +149,7 @@ export function createApp({
     res.once('finish', () => socket.end());
     server.emit('request', req, res);
   });
-  server.setTimeout(20_000, socket => socket.destroy());
+  server.setTimeout(socketTimeoutMs, socket => socket.destroy());
   let closing;
   let paymentTimer, paymentRecovery = null;
   return {

@@ -15,6 +15,7 @@ import { ApiError } from './errors.mjs';
 import { MASK_VERSION, decodePng } from './m06.mjs';
 import { checkCriticalText } from './ocr.mjs';
 import { readImageSize, sniffImageType } from './images.mjs';
+import { auditCompositeFidelity } from './product-context.mjs';
 
 export const QA_VERSION = 'm07.qa.1';
 export const CHECKER_VERSIONS = Object.freeze({
@@ -483,6 +484,8 @@ export function evaluateGenerationQuality({
         alignment_verified: composite.meta?.alignment_verified === true,
         method: composite.meta?.method ?? null,
         replaced_ratio: composite.meta?.replaced_ratio ?? null,
+        // P1：边缘 / 阴影 / 透视没有机器验收依据，固定待复核，不写进 pass
+        fidelity: auditCompositeFidelity({ composite }),
       },
       suggestedAction: '人工对照生成图与主体原图，确认商品位置、朝向与比例合理',
     }));

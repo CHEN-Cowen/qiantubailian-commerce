@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 
 /**
  * M03 持久化：原生 JSON 文件 + 文件体（blob）目录，零依赖。
@@ -42,6 +42,8 @@ const TABLES = Object.freeze([
   'question_groups',
   // E06：说明图（三种确定性排版、版本、事实审计、复核、选用与采用反馈；旧数据按空表迁移）
   'explainers',
+  // P3：修订规划建议（绑定报告与成品版本；人工确认后才执行，幂等键防重复提交）
+  'revision_plans',
 ]);
 const EMPTY_DATA = () => ({
   schema_version: 1,
@@ -60,6 +62,7 @@ const EMPTY_DATA = () => ({
   check_issues: {},
   question_groups: {},
   explainers: {},
+  revision_plans: {},
 });
 
 function normalize(raw) {
@@ -202,6 +205,14 @@ export function createStore({ dir } = {}) {
         await rename(temporary, file);
       } catch (error) {
         await rm(temporary, { force: true }).catch(() => {});
+        // 内容寻址：并发写入同一 blob 时，另一个写者可能已先完成 rename；
+        // Windows 上覆盖已存在目标会返回 EEXIST/EPERM，此时文件内容已一致，视为成功。
+        if (error.code === 'EEXIST' || error.code === 'EPERM') {
+          try {
+            await access(file);
+            return file;
+          } catch { /* 目标确实不存在则按原错误抛出 */ }
+        }
         throw error;
       }
       return file;

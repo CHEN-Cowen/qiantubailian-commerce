@@ -303,6 +303,14 @@ export const api = {
     `/api/explainers/${encodeURIComponent(explainerId)}/package`, { method: 'POST', json: {} }),
   // E07：首页待办聚合（按未知/失败/待复核/已采用分组，附服务限制与额度）
   todos: () => call('/api/todos'),
+  // P3：修订建议（规划不扣费、不执行；执行必须人工确认并带 Idempotency-Key）
+  createRevisionPlan: (runId, reportId) => call(
+    `/api/runs/${encodeURIComponent(runId)}/revision-plans`,
+    { method: 'POST', json: { report_id: reportId } }),
+  listRevisionPlans: runId => call(`/api/runs/${encodeURIComponent(runId)}/revision-plans`),
+  executeRevisionPlan: (runId, planId, idempotencyKey) => call(
+    `/api/runs/${encodeURIComponent(runId)}/revision-plans/${encodeURIComponent(planId)}/execute`,
+    { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, json: { confirm: true } }),
   // E02：作品依赖（版本级；deterministic 由系统编译，manual 由商家补关联）
   listRunDependencies: runId => call(`/api/runs/${encodeURIComponent(runId)}/dependencies`),
   listDeliverableDependencies: (runId, deliverableId) => call(
