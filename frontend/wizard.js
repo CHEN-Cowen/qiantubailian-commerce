@@ -49,6 +49,8 @@ const state = {
   file: null,
   objectUrl: null,
   uploading: false,
+  uploadTimer: null,
+  uploadStartedAt: 0,
   project: null,
   asset: null,
   assets: [],
@@ -264,6 +266,7 @@ function applyStep3Preselect() {
 // ---------- 第 1 步：上传商品 ----------
 function resetStep1() {
   state.file = null;
+  stopUploadTimer();
   if (state.objectUrl) { URL.revokeObjectURL(state.objectUrl); state.objectUrl = null; }
   $('#wiz-preview-img').removeAttribute('src');
   $('#wiz-preview').hidden = true;
@@ -271,6 +274,7 @@ function resetStep1() {
   $('#wiz-upload-result').hidden = true;
   $('#wiz-upload-error').textContent = '';
   $('#wiz-upload-retry').hidden = true;
+  $('#wiz-retry-replace').hidden = true;
   $('#wiz-next-1').disabled = true;
 }
 
@@ -311,21 +315,47 @@ async function ensureProjectDraft() {
 }
 
 async function uploadWith(file, { replace }) {
-  const project = await ensureProjectDraft();
-  const payload = await api.uploadAsset(project.id, file, {
-    role: 'subject',
-    onConflict: replace ? 'replace' : undefined,
-  });
-  return payload;
+  let project;
+  try {
+    project = await ensureProjectDraft();
+  } catch (error) {
+    error.uploadStage = 'project';
+    throw error;
+  }
+  try {
+    const payload = await api.uploadAsset(project.id, file, {
+      role: 'subject',
+      onConflict: replace ? 'replace' : undefined,
+    });
+    return payload;
+  } catch (error) {
+    error.uploadStage = 'asset';
+    throw error;
+  }
+}
+
+function stopUploadTimer() {
+  if (state.uploadTimer) { clearInterval(state.uploadTimer); state.uploadTimer = null; }
+  state.uploadStartedAt = 0;
 }
 
 async function startUpload(replace) {
   if (!state.file || state.uploading) return;
   state.uploading = true;
+  state.uploadStartedAt = Date.now();
   $('#wiz-upload-error').textContent = '';
   $('#wiz-upload-retry').hidden = true;
+  $('#wiz-retry-replace').hidden = true;
   $('#wiz-upload-status').hidden = false;
   $('#wiz-upload-status').textContent = '正在创建项目草稿并上传（上传中…）';
+  stopUploadTimer();
+  // 长耗时只提示“仍在上传”，不把等待时间当成网站失败，也不触发重复上传。
+  state.uploadTimer = setInterval(() => {
+    const seconds = Math.round((Date.now() - state.uploadStartedAt) / 1000);
+    if (seconds >= 20 && state.uploading) {
+      $('#wiz-upload-status').textContent = `正在上传（已等待 ${seconds} 秒）；服务端可能仍在处理，超时不等于失败，请勿关闭页面。`;
+    }
+  }, 10_000);
   try {
     const payload = await uploadWith(state.file, { replace });
     state.asset = payload.asset;
@@ -346,18 +376,23 @@ async function startUpload(replace) {
   } catch (error) {
     $('#wiz-upload-status').hidden = true;
     $('#wiz-upload-result').hidden = true;
+    const stage = error?.uploadStage === 'project' ? '创建项目草稿失败' : '素材上传失败';
     if (error instanceof ApiFailure && error.code === 'REFERENCE_CONFLICT') {
-      $('#wiz-upload-error').textContent = `${error.message}（可选择「替换已有主体素材并上传」）`;
+      $('#wiz-upload-error').textContent = `${stage}：${error.message}（可选择「替换已有主体素材并上传」）`;
       $('#wiz-upload-retry').hidden = false;
+      $('#wiz-retry-replace').hidden = false;
     } else if (error instanceof ApiFailure && error.code === 'SKU_EXISTS') {
       // 自动 SKU 撞号：换一个内部标识重试一次
       state.project = null;
       $('#wiz-name').disabled = false;
-      $('#wiz-upload-error').textContent = '项目草稿内部标识冲突，已重置，请重试上传。';
+      $('#wiz-upload-error').textContent = '创建项目草稿失败：内部标识冲突，已重置，请重试上传。';
+      $('#wiz-upload-retry').hidden = false;
     } else {
-      $('#wiz-upload-error').textContent = errorText(error);
+      $('#wiz-upload-error').textContent = `${stage}：${errorText(error)}`;
+      $('#wiz-upload-retry').hidden = false;
     }
   } finally {
+    stopUploadTimer();
     state.uploading = false;
   }
 }
@@ -860,8 +895,13 @@ async function continueDraft() {
       <p>浏览器本地预览已不可恢复；此素材来自服务端保存结果。</p></div>`;
     $('#wiz-next-1').disabled = false;
     const step = Math.min(Math.max(Number(draft.step) || 1, 1), 3);
-    if (step >= 3) await enterStep3();
-    else if (step === 2) await enterStep2();
+    if (step >= 3) {
+      // 恢复上次选择：模板/品牌只在目录仍存在时预选，失效项由 applyStep3Preselect 明确回落
+      state.styleTemplateId = draft.templateId ?? '';
+      state.styleBrandKitId = draft.brandKitId ?? '';
+      if (draft.platform) $('#wiz-platform').value = draft.platform;
+      await enterStep3();
+    } else if (step === 2) await enterStep2();
     else setStep(1);
   } catch (error) {
     clearDraft();
@@ -886,6 +926,7 @@ export function initWizard() {
     acceptFile(event.dataTransfer?.files?.[0]);
   });
   fileInput?.addEventListener('change', () => { acceptFile(fileInput.files?.[0]); fileInput.value = ''; });
+  $('#wiz-retry-upload')?.addEventListener('click', () => void startUpload(false));
   $('#wiz-retry-replace')?.addEventListener('click', () => void startUpload(true));
   $('#wiz-retry-change')?.addEventListener('click', () => { fileInput?.click(); });
   $('#wiz-next-1')?.addEventListener('click', () => void enterStep2());
@@ -913,8 +954,15 @@ export function initWizard() {
     setStep(target);
   }));
   $('#wiz-exit')?.addEventListener('click', () => { location.hash = 'projects'; });
-  $('#wiz-brand')?.addEventListener('change', () => { state.brandKitId = $('#wiz-brand').value; state.resolutions = {}; invalidateQuote(); void refreshPreview(); });
-  $('#wiz-platform')?.addEventListener('change', () => { state.resolutions = {}; invalidateQuote(); void refreshPreview(); });
+  $('#wiz-brand')?.addEventListener('change', () => {
+    state.brandKitId = $('#wiz-brand').value;
+    saveDraft({ brandKitId: state.brandKitId });
+    state.resolutions = {}; invalidateQuote(); void refreshPreview();
+  });
+  $('#wiz-platform')?.addEventListener('change', () => {
+    saveDraft({ platform: $('#wiz-platform').value.trim() });
+    state.resolutions = {}; invalidateQuote(); void refreshPreview();
+  });
   for (const id of ['wiz-custom-layout', 'wiz-text-x', 'wiz-text-y', 'wiz-text-width', 'wiz-text-size']) {
     document.getElementById(id)?.addEventListener('change', () => { invalidateQuote(); void refreshPreview(); });
   }
@@ -922,6 +970,7 @@ export function initWizard() {
     const card = event.target.closest('[data-wiz-template]');
     if (!card) return;
     state.templateId = card.dataset.wizTemplate;
+    saveDraft({ templateId: state.templateId });
     state.resolutions = {};
     invalidateQuote();
     renderTemplates();
@@ -931,6 +980,7 @@ export function initWizard() {
     const card = event.target.closest('[data-wiz-template]');
     if (!card) return;
     state.templateId = card.dataset.wizTemplate;
+    saveDraft({ templateId: state.templateId });
     state.resolutions = {};
     invalidateQuote();
     renderTemplates();
