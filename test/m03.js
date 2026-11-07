@@ -587,7 +587,8 @@ test('M03 前端接线：真实数据脚本引用的元素存在、白名单同�
   for (const name of ['api.js', 'real-data.js', 'm03.css']) assert.ok(STATIC_FILES.includes(name), `白名单缺少 ${name}`);
   assert.match(html, /href="m03\.css"/);
   assert.match(html, /我的项目/);
-  assert.match(html, /以下为演示数据 · 刷新即重置/);
+  // M01 去演示化：正式商品区不再混入「演示数据 · 刷新即重置」表格
+  assert.ok(!html.includes('以下为演示数据 · 刷新即重置'), '正式商品区不得再包含演示数据分隔');
   assert.match(app, /initRealData\(\{ toast \}\)/);
   assert.doesNotMatch(app, /M03 接入文件校验/);
   assert.doesNotMatch(app, /M03 接入版本与来源记录/);

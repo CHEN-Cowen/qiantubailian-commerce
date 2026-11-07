@@ -148,6 +148,42 @@ test('前端脚本不得引用已被删除的 DOM 节点（防止首屏 addEvent
   }
 });
 
+test('M04 商品信息卡与卖点候选：问题/示例、核对状态与依据识别真实执行', async () => {
+  const [html, wizard, style] = await Promise.all([
+    read('index.html'), read('wizard.js'), read('style.css'),
+  ]);
+  assert.match(html, /id="wiz-fact-cards"/, '第 2 步必须有商品信息问题卡片容器');
+  assert.match(html, /id="wiz-category"/, '必须可选择商品类型以匹配问题');
+  assert.match(html, /id="wiz-selling-points"/, '必须提供卖点填写入口');
+  assert.match(html, /id="wiz-sell-analyze"/, '卖点候选必须由用户主动生成');
+  assert.match(html, /id="wiz-critical-text"/, '包装关键文字必须可填写');
+  assert.match(wizard, /CATEGORY_PROFILES/, '问题清单必须按品类定义');
+  assert.match(wizard, /例如：\$\{escapeHtml\(card\.example\)\}/, '每个问题必须给示例');
+  assert.match(wizard, /已核对 · 会作为商品事实进入成图/, '核对后必须说明结果去向');
+  assert.match(wizard, /card\.confirmed = false/, '修改内容必须自动取消核对状态');
+  assert.match(wizard, /critical_text: collectCriticalText\(\)/, '关键文字必须真实提交到事实版本');
+  assert.match(wizard, /category: state\.category/, '商品类型必须随事实版本提交');
+  assert.match(style, /\.wiz-fact-card\.confirmed\{[^}]*--brand/);
+
+  // 卖点分析是纯函数：直接执行真实实现，而不是只看源码字符串
+  const slice = wizard.slice(wizard.indexOf('const CLAIM_PATTERNS'), wizard.indexOf('const SELL_LEVEL_LABEL'));
+  const context = vm.createContext({});
+  vm.runInContext(`${slice}\nglobalThis.__a = (s, f) => analyzeSellingPoint(s, f); globalThis.__split = splitSellingText;`, context);
+  const facts = [
+    { key: '净含量', value: '500ml', confirmed: true },
+    { key: '材质', value: '不锈钢', confirmed: false },
+  ];
+  assert.equal(context.__a('500ml 大容量', facts).level, 'ready', '已核对数字可直接使用');
+  assert.equal(context.__a('一瓶用一个月', facts).level, 'ready', '无数字无功效可直接使用');
+  assert.equal(context.__a('750ml 更划算', facts).level, 'unverified', '未核对数字必须拦截');
+  const claim = context.__a('美白提亮肤色', facts);
+  assert.equal(claim.level, 'claim', '功效词必须标为缺依据');
+  assert.equal(claim.rewrite, '提亮肤色', '改写只能删除功效词，不新增表达');
+  assert.equal(context.__a('采用不锈钢材质', facts).text, '采用不锈钢材质', '原句保持不变');
+  assert.equal(context.__a('采用不锈钢材质', facts).level, 'ready', '未确认事实不冒充已确认');
+  assert.equal(JSON.stringify(context.__split('大容量。便携；送礼')), JSON.stringify(['大容量', '便携', '送礼']));
+});
+
 // 模块03：商品与品牌复用（E1 同商品再做一套 / E2 用此风格制作新品 / E3 品牌入口）契约
 test('M03-复用 qb:open-wizard 事件、复用入口、向导复用模式与不沿用声明', async () => {
   const [html, wizard, realData, m04] = await Promise.all([

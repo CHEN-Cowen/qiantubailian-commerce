@@ -222,8 +222,8 @@
         </div>
         <ol class="wiz-steps" id="wiz-steps" aria-label="制作步骤">
           <li><button type="button" class="wiz-step is-current" data-wiz-goto="1" aria-current="step"><i>1</i><span>上传商品</span></button></li>
-          <li><button type="button" class="wiz-step" data-wiz-goto="2"><i>2</i><span>确认必要信息</span></button></li>
-          <li><button type="button" class="wiz-step" data-wiz-goto="3"><i>3</i><span>风格与交付</span></button></li>
+          <li><button type="button" class="wiz-step" data-wiz-goto="2"><i>2</i><span>确认商品信息</span></button></li>
+          <li><button type="button" class="wiz-step" data-wiz-goto="3"><i>3</i><span>选方案 · 看报价 · 生成</span></button></li>
         </ol>
         <div class="wiz-resume" id="wiz-resume" hidden>
           <p><b>检测到上次未完成的向导草稿。</b><span id="wiz-resume-note"></span></p>
@@ -266,24 +266,58 @@
           </div>
         </section>
 
-        <!-- 第 2 步 确认必要信息 -->
+        <!-- 第 2 步 确认商品信息与卖点 -->
         <section class="wiz-panel" data-wiz-panel="2" hidden>
-          <p class="state-note" id="wiz-ocr-note">正在读取文字识别结果…</p>
+          <div class="wiz-info-head">
+            <div>
+              <h3>先确认会出现在图上的商品信息</h3>
+              <p>只确认你能在原图或商品资料上核实的内容。「原图可见」只代表来源是照片，不等于你已经核对；未确认的信息不会进入成图。</p>
+            </div>
+            <label class="wiz-field">商品类型<select id="wiz-category">
+              <option value="食品/饮品">食品 / 饮品</option>
+              <option value="美妆/护肤">美妆 / 护肤</option>
+              <option value="家居/日用">家居 / 日用</option>
+              <option value="服饰/鞋包">服饰 / 鞋包</option>
+              <option value="其他">其他 / 不确定</option>
+            </select></label>
+          </div>
           <div class="wiz-form-grid">
             <label class="wiz-field">商品名称（已随项目草稿保存）<input id="wiz-truth-name" disabled></label>
           </div>
-          <p class="truth-hint">关键项必须勾选「已确认」才能确认版本；OCR 候选一律待确认，不能凭猜写入容量、尺寸、材质、成分、功效或品牌。卖点仅作信息说明，不会自动写入商品事实。</p>
-          <div class="fact-head"><span>标记</span><span>事实项</span><span>值</span><span>来源</span><span>确认</span><span></span></div>
-          <div id="wiz-facts"></div>
-          <button type="button" class="text-button" id="wiz-add-fact">＋ 添加事实项</button>
-          <label class="wiz-field">卖点（可选 · 仅作信息展示说明，不写入商品事实）<textarea id="wiz-selling-points" rows="2" placeholder="例如：舒缓、维稳屏障；若要作为事实请在上方添加事实行"></textarea></label>
+          <div class="wiz-fact-cards" id="wiz-fact-cards" aria-live="polite"></div>
+          <p class="state-note" id="wiz-ocr-note">正在读取文字识别结果…</p>
+          <details class="wiz-advanced" id="wiz-fact-more">
+            <summary>更多事实项与文字识别候选（可选）</summary>
+            <p class="truth-hint">这里用于补充非常规字段。OCR 候选一律待确认；修改任一行内容会自动取消该行的「已确认」。</p>
+            <div class="fact-head"><span>关键</span><span>事实项</span><span>值</span><span>来源</span><span>确认</span><span></span></div>
+            <div id="wiz-facts"></div>
+            <button type="button" class="text-button" id="wiz-add-fact">＋ 添加事实项</button>
+            <label class="wiz-field">包装上必须原样保留的文字（可选，每行一条）
+              <textarea id="wiz-critical-text" rows="2" maxlength="400" placeholder="例如：品牌名 月光 / 净含量 50g"></textarea>
+            </label>
+          </details>
+
+          <section class="wiz-sell">
+            <div class="wiz-sell-head">
+              <div><h3>卖点想怎么说</h3><p>一次写下要表达的卖点，系统会拆成候选句，并标出：可直接使用 / 含未确认信息 / 缺依据的功效表达。</p></div>
+              <span class="real-badge">不调用模型 · 不自动编造</span>
+            </div>
+            <textarea id="wiz-selling-points" rows="3" maxlength="600" placeholder="例如：500ml 大容量，一瓶用一个月；磨砂瓶身，放在浴室台面也清爽"></textarea>
+            <div class="wiz-sell-actions">
+              <button type="button" class="secondary" id="wiz-sell-analyze">生成卖点候选</button>
+              <span class="wiz-hint">用句号、分号或换行分隔；候选不会自动写进商品事实。</span>
+            </div>
+            <div id="wiz-sell-results" class="wiz-sell-results"></div>
+            <p class="state-note" id="wiz-sell-note"></p>
+          </section>
+
           <section class="wiz-readiness" id="wiz-readiness" hidden></section>
           <p class="form-error" id="wiz-truth-error" role="alert"></p>
           <div class="wiz-actions">
             <button class="secondary" id="wiz-back-2">返回上传</button>
             <span class="wiz-actions-main">
               <button class="secondary" id="wiz-continue-anyway" hidden>仍要继续选择交付</button>
-              <button class="primary" id="wiz-confirm-truth">确认并继续</button>
+              <button class="primary" id="wiz-confirm-truth">确认信息并继续</button>
             </span>
           </div>
         </section>

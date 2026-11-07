@@ -21,6 +21,47 @@ const STORAGE_KEY = 'qtb.wizard.draft';
 const AUTO_SKU_PREFIX = 'AUTO-';
 const AUTO_CATEGORY = '待补充';
 
+// M04：按商品类型给出可理解的问题与示例；关键项必须用户核对，照片可见不等于已确认。
+const CATEGORY_PROFILES = {
+  '食品/饮品': [
+    { key: '净含量', question: '一袋或一瓶有多少？', example: '500g / 500ml', critical: true },
+    { key: '保质期', question: '包装上写的保质期是多久？', example: '12 个月', critical: true },
+    { key: '配料', question: '主要配料有哪些？', example: '水、燕麦、乳粉', critical: false },
+    { key: '储存方式', question: '平时怎么存放？', example: '阴凉干燥处保存', critical: false },
+  ],
+  '美妆/护肤': [
+    { key: '净含量', question: '一瓶或一支有多少？', example: '50ml / 30g', critical: true },
+    { key: '适用肤质', question: '适合什么肤质使用？', example: '干性、中性肤质', critical: false },
+    { key: '核心功效', question: '商品页上写的功效是什么？', example: '保湿、舒缓（需与资料一致）', critical: false },
+    { key: '使用方法', question: '怎么使用？', example: '洁面后取适量涂抹', critical: false },
+  ],
+  '家居/日用': [
+    { key: '材质', question: '主体是什么材质？', example: '304 不锈钢 / 食品级硅胶', critical: true },
+    { key: '尺寸', question: '长宽高或容量是多少？', example: '20 × 8 × 8cm / 500ml', critical: true },
+    { key: '颜色', question: '这个 SKU 的颜色是什么？', example: '雾白', critical: false },
+    { key: '适用场景', question: '主要用在哪里？', example: '厨房台面、浴室', critical: false },
+  ],
+  '服饰/鞋包': [
+    { key: '材质', question: '面料或里料是什么？', example: '棉 95%、氨纶 5%', critical: true },
+    { key: '尺码', question: '这个 SKU 是什么尺码？', example: 'M / 38', critical: true },
+    { key: '颜色', question: '这个 SKU 的颜色是什么？', example: '燕麦色', critical: false },
+    { key: '版型', question: '版型或剪裁是什么？', example: '宽松直筒', critical: false },
+  ],
+  '其他': [
+    { key: '规格', question: '这个 SKU 的规格是什么？', example: '单件 / 500ml', critical: true },
+    { key: '材质', question: '主体材质是什么？', example: '不锈钢、硅胶', critical: false },
+    { key: '用途', question: '主要用来做什么？', example: '日常收纳', critical: false },
+  ],
+};
+
+// 功效/绝对化/比较性表达：命中后不允许直接进入成图文案，必须先有可核验依据。
+const CLAIM_PATTERNS = [
+  /美白/, /祛斑/, /祛痘/, /抗皱/, /抗衰/, /修复/, /消炎/, /杀菌/, /治疗/, /防脱/, /生发/,
+  /减肥/, /降血糖/, /降血压/, /增强免疫/, /无副作用/, /纯天然/, /零添加/, /绝对/, /全网/,
+  /国家级/, /顶级/, /第一/, /最[好佳强优]/, /100%/, /永久/, /立刻/, /瞬间/,
+];
+const NUMBER_TOKEN = /(\d+(?:\.\d+)?)\s*(ml|g|kg|cm|mm|寸|片|支|包|袋|瓶|粒|%|小时|天|年)/gi;
+
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 
@@ -37,6 +78,29 @@ const errorText = error => {
   console.error('[wizard] 未预期错误', error);
   return '无法连接本地服务，请确认服务已启动后重试';
 };
+
+const copyText = async text => {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('已复制到剪贴板');
+  } catch {
+    showToast('浏览器未允许复制，请手动选中文字复制');
+  }
+};
+
+// 把服务端拦截码翻译成用户能执行的下一步
+const BLOCKER_TEXT = {
+  NO_ASSETS: () => '还没有可用的商品原图，请回到第一步上传。',
+  NO_SUBJECT_ASSET: () => '还没有把上传的图标记为「商品主体」，无法锁定商品外形。',
+  REFERENCE_CONFLICT: () => '有重复的参考素材（例如两张主体图），需要先决定保留哪一张。',
+  NO_TRUTH_VERSION: () => '还没有保存过商品信息，请填写后再确认。',
+  NO_CRITICAL_FACT: () => '至少要有 1 项关键信息被核对，例如净含量或材质。',
+  UNCONFIRMED_CRITICAL_FACTS: item => `还有 ${item.details?.keys?.length ?? 1} 项关键信息没核对：${(item.details?.keys ?? []).join('、') || '见上方卡片'}。`,
+  SKU_MISMATCH: () => '商品信息里的编码与项目不一致，请重新打开项目后再试。',
+  TRUTH_DRAFT: () => '商品信息还是草稿状态，需要先确认一次。',
+  TRUTH_SOURCE_SUPERSEDED: item => `这些信息引用的图片已被替换，需要基于新图重新核对：${(item.details?.keys ?? []).join('、') || '见上方卡片'}。`,
+};
+const blockerText = item => (BLOCKER_TEXT[item.code]?.(item) ?? item.message ?? item.code);
 
 const randomHex = length => {
   const bytes = new Uint8Array(length);
@@ -55,6 +119,10 @@ const state = {
   asset: null,
   assets: [],
   ocr: null,
+  category: '其他',
+  factCards: [],
+  sellingPoints: '',
+  sellingResults: [],
   templates: [],
   brandKits: [],
   templateId: '',
@@ -454,11 +522,19 @@ async function enterStep2() {
     $('#wiz-facts').innerHTML = facts.length
       ? facts.map(fact => factRowHtml(fact)).join('')
       : factRowHtml({});
+    $('#wiz-critical-text').value = (detail.truth_head?.critical_text ?? [])
+      .map(item => (typeof item === 'string' ? item : item.text))
+      .filter(Boolean).join('\n');
+    state.category = pickCategory(detail.truth_head?.category ?? state.project.category);
+    $('#wiz-category').value = state.category;
+    renderFactCards(facts);
+    $('#wiz-selling-points').value = state.sellingPoints ?? '';
+    renderSellingResults();
     if (state.entryKind === 'reuse') {
       // E1 复用：事实行已从 truth_head 原样带入（key/value/critical/confirmed）。
       // 不重复跑 OCR，避免候选行与沿用行重复；修改任一行内容会自动取消该行「已确认」。
       $('#wiz-ocr-note').className = 'state-note';
-      $('#wiz-ocr-note').textContent = '已沿用现有商品事实（未重新运行文字识别）；请逐行核对，修改内容后需重新勾选「已确认」。';
+      $('#wiz-ocr-note').textContent = '已沿用现有商品事实（未重新运行文字识别）；请对照商品资料逐项核对，改动后需要重新点「已核对」。';
     } else {
       $('#wiz-ocr-note').textContent = '正在读取文字识别结果…';
       const result = await api.extractAssetFacts(state.project.id, state.asset.id);
@@ -476,6 +552,7 @@ async function enterStep2() {
             note: candidate.note ?? undefined,
           });
         }
+        hydrateCardsFromRows();
       }
     }
     setStep(2);
@@ -485,8 +562,89 @@ async function enterStep2() {
   }
 }
 
+function pickCategory(value) {
+  return CATEGORY_PROFILES[value] ? value : '其他';
+}
+
+function cardStatusText(card) {
+  if (!card.value) return card.skipped ? '暂不提供' : '待填写';
+  if (!card.confirmed) return '待核对';
+  return '已核对 · 会作为商品事实进入成图';
+}
+
+function renderFactCards(facts = []) {
+  const profile = CATEGORY_PROFILES[state.category] ?? CATEGORY_PROFILES['其他'];
+  const byKey = new Map(facts.map(fact => [String(fact.key ?? '').trim(), fact]));
+  state.factCards = profile.map(item => {
+    const existing = byKey.get(item.key);
+    return {
+      key: item.key,
+      question: item.question,
+      example: item.example,
+      critical: item.critical,
+      value: existing?.value ?? '',
+      confirmed: existing?.confirmed === true,
+      skipped: false,
+      note: existing?.note ?? '',
+    };
+  });
+  renderFactCardDom();
+}
+
+function renderFactCardDom() {
+  const node = $('#wiz-fact-cards');
+  if (!node) return;
+  node.innerHTML = state.factCards.map((card, index) => `
+    <article class="wiz-fact-card${card.confirmed ? ' confirmed' : ''}${card.skipped ? ' skipped' : ''}" data-card-index="${index}">
+      <div class="wfc-head">
+        <b>${escapeHtml(card.key)}</b>
+        ${card.critical ? '<span class="wfc-badge">关键</span>' : ''}
+        <span class="wfc-status">${escapeHtml(cardStatusText(card))}</span>
+      </div>
+      <p class="wfc-question">${escapeHtml(card.question)}<span>例如：${escapeHtml(card.example)}</span></p>
+      <input class="wfc-value" data-card-value maxlength="500" value="${escapeHtml(card.value)}"
+        placeholder="按商品资料填写，不确定就留空" aria-label="${escapeHtml(card.key)}">
+      <div class="wfc-foot">
+        <button type="button" class="secondary" data-card-confirm>已核对，确认这条</button>
+        <button type="button" class="text-button" data-card-skip>${card.skipped ? '重新填写' : '暂不提供'}</button>
+      </div>
+    </article>`).join('');
+}
+
+function updateCardStatus(cardNode, card) {
+  cardNode.classList.toggle('confirmed', card.confirmed);
+  cardNode.classList.toggle('skipped', card.skipped);
+  const status = cardNode.querySelector('.wfc-status');
+  if (status) status.textContent = cardStatusText(card);
+  const skip = cardNode.querySelector('[data-card-skip]');
+  if (skip) skip.textContent = card.skipped ? '重新填写' : '暂不提供';
+}
+
+/** 把 OCR/事实行里与分类问题同名的值回填到卡片，避免同一信息录两遍。 */
+function hydrateCardsFromRows() {
+  const cardKeys = new Set(state.factCards.map(card => card.key));
+  let changed = false;
+  for (const row of $$('#wiz-facts .fact-row')) {
+    const key = row.querySelector('[data-wiz-fact="key"]').value.trim();
+    if (!cardKeys.has(key)) continue;
+    const card = state.factCards.find(item => item.key === key);
+    const value = row.querySelector('[data-wiz-fact="value"]').value.trim();
+    // 文字识别结果一律保持「待核对」，即使原行被标记过也不直接搬运确认状态
+    if (value && !card.value) {
+      card.value = value;
+      card.confirmed = false;
+      card.note = row.title || '';
+      changed = true;
+    }
+    row.remove();
+  }
+  if (!$('#wiz-facts .fact-row')) addFactRow({});
+  if (changed) renderFactCardDom();
+}
+
 function collectFacts() {
   const facts = [];
+  const seen = new Map();
   for (const row of $$('#wiz-facts .fact-row')) {
     const key = row.querySelector('[data-wiz-fact="key"]').value.trim();
     const value = row.querySelector('[data-wiz-fact="value"]').value.trim();
@@ -502,9 +660,152 @@ function collectFacts() {
     };
     if (source) fact.source_asset_id = source;
     else fact.source_type = 'user_input';
-    facts.push(fact);
+    seen.set(key, fact);
   }
+  // 卡片是主要录入方式：只有填了值才成为事实；「已核对」才标记 confirmed。
+  for (const card of state.factCards) {
+    const value = String(card.value ?? '').trim();
+    if (!value || card.skipped) continue;
+    seen.set(card.key, {
+      key: card.key,
+      value,
+      critical: card.critical,
+      confirmed: card.confirmed === true,
+      source_type: 'user_input',
+      ...(card.note ? { note: card.note } : {}),
+    });
+  }
+  facts.push(...seen.values());
   return facts;
+}
+
+function collectCriticalText() {
+  return $('#wiz-critical-text').value
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, 20)
+    .map(text => ({ text }));
+}
+
+// ---------- 卖点候选：确定性拆分 + 依据标注，不调用模型 ----------
+function currentFactsSafe() {
+  try { return collectFacts(); } catch { return []; }
+}
+
+function splitSellingText(raw) {
+  return [...new Set(String(raw ?? '')
+    .split(/[。；;\n]+/)
+    .map(line => line.replace(/^[\s·•\-—、,，]+|[\s·•\-—、,，]+$/g, '').trim())
+    .filter(line => line.length >= 2))].slice(0, 8);
+}
+
+function claimWordsOf(sentence) {
+  return CLAIM_PATTERNS.map(pattern => sentence.match(pattern)?.[0]).filter(Boolean);
+}
+
+function rewriteWithoutClaims(sentence) {
+  let output = sentence;
+  for (const word of claimWordsOf(sentence)) output = output.split(word).join('');
+  return output.replace(/[，、,]{2,}/g, '，').replace(/^[，、,。\s]+|[，、,。\s]+$/g, '').trim();
+}
+
+function numberTokensOf(sentence) {
+  return [...String(sentence).matchAll(NUMBER_TOKEN)].map(match => `${match[1]}${match[2].toLowerCase()}`);
+}
+
+function analyzeSellingPoint(sentence, facts) {
+  const confirmedValues = facts.filter(fact => fact.confirmed).map(fact => `${fact.value}`);
+  const allValues = facts.map(fact => `${fact.key} ${fact.value}`);
+  const claims = claimWordsOf(sentence);
+  const numbers = numberTokensOf(sentence);
+  const unmatchedNumbers = numbers.filter(token => !confirmedValues.some(value =>
+    value.toLowerCase().replace(/\s+/g, '').includes(token.replace(/\s+/g, ''))));
+  if (claims.length > 0) {
+    return {
+      text: sentence,
+      level: 'claim',
+      reasons: [`「${claims.join('、')}」属于功效或绝对化表达，必须有可核验依据才能用`],
+      rewrite: rewriteWithoutClaims(sentence),
+      numbers,
+    };
+  }
+  if (unmatchedNumbers.length > 0) {
+    const knownInDraft = unmatchedNumbers
+      .filter(token => allValues.some(value => value.toLowerCase().includes(token)));
+    return {
+      text: sentence,
+      level: 'unverified',
+      reasons: knownInDraft.length > 0
+        ? [`「${knownInDraft.join('、')}」出现在还未核对的商品信息里，先核对再使用`]
+        : [`「${unmatchedNumbers.join('、')}」没有出现在已核对的信息里，不能直接写进图`],
+      rewrite: '',
+      numbers,
+    };
+  }
+  return { text: sentence, level: 'ready', reasons: [], rewrite: '', numbers };
+}
+
+const SELL_LEVEL_LABEL = { ready: '可以直接使用', unverified: '含未确认信息', claim: '缺依据的功效表达' };
+
+function renderSellingResults() {
+  const node = $('#wiz-sell-results');
+  const note = $('#wiz-sell-note');
+  if (!node || !note) return;
+  if (!state.sellingResults.length) {
+    node.innerHTML = '';
+    note.textContent = '';
+    return;
+  }
+  node.innerHTML = state.sellingResults.map((item, index) => `
+    <article class="wiz-sell-item ${item.level}" data-sell-index="${index}">
+      <div class="wsi-head"><span class="wsi-level">${escapeHtml(SELL_LEVEL_LABEL[item.level])}</span>
+        <p>${escapeHtml(item.text)}</p></div>
+      ${item.reasons.length ? `<ul class="wsi-reasons">${item.reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>` : ''}
+      ${item.rewrite ? `<p class="wsi-rewrite">去掉功效词后的版本：<b>${escapeHtml(item.rewrite)}</b></p>` : ''}
+      <div class="wsi-actions">
+        ${item.level === 'ready' ? '<button type="button" class="secondary" data-sell-add>作为卖点事实加入</button>' : ''}
+        ${item.level === 'unverified' ? '<button type="button" class="secondary" data-sell-fix>去核对商品信息</button>' : ''}
+        ${item.level === 'claim' && item.rewrite ? '<button type="button" class="secondary" data-sell-add-rewrite>使用改写版本加入事实</button>' : ''}
+        <button type="button" class="text-button" data-sell-copy>复制这句</button>
+      </div>
+    </article>`).join('');
+  const ready = state.sellingResults.filter(item => item.level === 'ready').length;
+  const blocked = state.sellingResults.length - ready;
+  note.className = blocked ? 'state-note warn' : 'state-note';
+  note.textContent = `共 ${state.sellingResults.length} 句：${ready} 句可直接使用，${blocked} 句需要补信息或改写法。只有你点「作为卖点事实加入」的句子才会写入商品事实。`;
+}
+
+function analyzeSelling() {
+  const raw = $('#wiz-selling-points').value;
+  state.sellingPoints = raw;
+  const sentences = splitSellingText(raw);
+  if (!sentences.length) {
+    state.sellingResults = [];
+    renderSellingResults();
+    $('#wiz-sell-note').textContent = '先写下想表达的卖点，再用句号、分号或换行分隔。';
+    return;
+  }
+  const facts = currentFactsSafe();
+  state.sellingResults = sentences.map(sentence => analyzeSellingPoint(sentence, facts));
+  renderSellingResults();
+}
+
+function addSellingFact(text) {
+  const value = String(text ?? '').trim();
+  if (!value) return;
+  let row = null;
+  for (const candidate of $$('#wiz-facts .fact-row')) {
+    if (candidate.querySelector('[data-wiz-fact="key"]').value.trim() === '核心卖点') { row = candidate; break; }
+  }
+  if (!row) {
+    addFactRow({ key: '核心卖点', value, confirmed: true, critical: false, note: '来自卖点候选，已由用户确认' });
+  } else {
+    row.querySelector('[data-wiz-fact="value"]').value = value;
+    row.querySelector('[data-wiz-fact="confirmed"]').checked = true;
+  }
+  $('#wiz-fact-more').open = true;
+  showToast('已加入商品事实「核心卖点」，生成时只会逐字引用这句话');
 }
 
 function renderReadiness(readiness) {
@@ -519,7 +820,7 @@ function renderReadiness(readiness) {
   $('#wiz-continue-anyway').hidden = false;
   node.innerHTML = `<h4>生产前置检查 · 还有 ${readiness.blocker_count ?? blockers.length} 项未满足</h4>
     <ul class="truth-blockers">${blockers.map(item =>
-      `<li><b>${escapeHtml(item.code)}</b>${escapeHtml(item.message)}</li>`).join('')}</ul>
+      `<li>${escapeHtml(blockerText(item))}</li>`).join('')}</ul>
     <p class="truth-hint">可以返回补充事实，也可以先继续选择不依赖这些信息的交付；生成前会按所选模板再次校验。</p>`;
   return true;
 }
@@ -540,7 +841,7 @@ async function confirmTruth() {
   }
   const unconfirmedCritical = facts.filter(fact => fact.critical && !fact.confirmed).map(fact => fact.key);
   if (unconfirmedCritical.length > 0) {
-    errorNode.textContent = `关键项 ${unconfirmedCritical.join('、')} 必须勾选「已确认」才能继续；不确定的信息请先补证据。`;
+    errorNode.textContent = `关键项 ${unconfirmedCritical.join('、')} 必须核对后才能继续；不确定的信息请先查商品资料，或改为「暂不提供」。`;
     return;
   }
   const button = $('#wiz-confirm-truth');
@@ -549,10 +850,10 @@ async function confirmTruth() {
     const payload = await api.createTruthVersion(state.project.id, {
       base_version: state.project.truth_head_version,
       sku: state.project.sku,
-      category: state.project.category,
+      category: state.category,
       confirm: true,
       facts,
-      critical_text: [],
+      critical_text: collectCriticalText(),
     });
     state.project.truth_head_version = payload.truth_version.version;
     showToast(`已确认商品事实 v${payload.truth_version.version}`);
@@ -563,7 +864,7 @@ async function confirmTruth() {
   } catch (error) {
     if (error instanceof ApiFailure && error.code === 'CONFIRMATION_BLOCKED') {
       errorNode.innerHTML = `仍有关键项未满足，未生成新版本：<ul class="truth-blockers">${(error.details?.blockers ?? [])
-        .map(item => `<li><b>${escapeHtml(item.code)}</b>${escapeHtml(item.message)}</li>`).join('')}</ul>`;
+        .map(item => `<li>${escapeHtml(blockerText(item))}</li>`).join('')}</ul>`;
       return;
     }
     if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') {
@@ -854,7 +1155,16 @@ function resetForEntry() {
   $('#wiz-name').value = '';
   $('#wiz-name').disabled = false;
   $('#wiz-facts').innerHTML = '';
+  $('#wiz-fact-cards').innerHTML = '';
+  state.factCards = [];
+  state.category = '其他';
+  state.sellingPoints = '';
+  state.sellingResults = [];
   $('#wiz-selling-points').value = '';
+  $('#wiz-sell-results').innerHTML = '';
+  $('#wiz-sell-note').textContent = '';
+  $('#wiz-critical-text').value = '';
+  $('#wiz-category').value = '其他';
   $('#wiz-platform').value = '';
   $('#wiz-brand').innerHTML = '<option value="">不使用品牌套件</option>';
   $('#wiz-custom-layout').checked = false;
@@ -931,6 +1241,71 @@ export function initWizard() {
   $('#wiz-retry-change')?.addEventListener('click', () => { fileInput?.click(); });
   $('#wiz-next-1')?.addEventListener('click', () => void enterStep2());
   $('#wiz-add-fact')?.addEventListener('click', () => addFactRow({}));
+  $('#wiz-category')?.addEventListener('change', () => {
+    // 切换商品类型只换问题清单，已填过的同名信息保留（确认状态一并保留，仍需用户点确认）
+    const keep = state.factCards.filter(card => String(card.value ?? '').trim()).map(card => ({
+      key: card.key, value: card.value, confirmed: card.confirmed, note: card.note,
+    }));
+    state.category = pickCategory($('#wiz-category').value);
+    renderFactCards(keep);
+  });
+  $('#wiz-fact-cards')?.addEventListener('input', event => {
+    const input = event.target.closest('[data-card-value]');
+    if (!input) return;
+    const node = input.closest('[data-card-index]');
+    const card = state.factCards[Number(node.dataset.cardIndex)];
+    if (input.value !== card.value) { card.confirmed = false; card.skipped = false; }
+    card.value = input.value;
+    updateCardStatus(node, card);
+  });
+  $('#wiz-fact-cards')?.addEventListener('click', event => {
+    const node = event.target.closest('[data-card-index]');
+    if (!node) return;
+    const card = state.factCards[Number(node.dataset.cardIndex)];
+    if (event.target.closest('[data-card-confirm]')) {
+      const input = node.querySelector('[data-card-value]');
+      const value = input.value.trim();
+      if (!value) {
+        showToast(`先填写「${card.key}」，例如 ${card.example}`);
+        input.focus();
+        return;
+      }
+      card.value = value;
+      card.confirmed = true;
+      card.skipped = false;
+      updateCardStatus(node, card);
+      return;
+    }
+    if (event.target.closest('[data-card-skip]')) {
+      card.skipped = !card.skipped;
+      // 「暂不提供」是明确的未确认状态，不允许沿用旧的确认结果
+      if (card.skipped) card.confirmed = false;
+      updateCardStatus(node, card);
+      if (card.skipped && card.critical) {
+        showToast(`「${card.key}」是关键信息：暂不提供将无法确认商品信息，可以先去商品资料查一下`);
+      }
+    }
+  });
+  $('#wiz-selling-points')?.addEventListener('input', () => { state.sellingPoints = $('#wiz-selling-points').value; });
+  $('#wiz-sell-analyze')?.addEventListener('click', analyzeSelling);
+  $('#wiz-sell-results')?.addEventListener('click', event => {
+    const node = event.target.closest('[data-sell-index]');
+    if (!node) return;
+    const item = state.sellingResults[Number(node.dataset.sellIndex)];
+    if (!item) return;
+    if (event.target.closest('[data-sell-add]')) { addSellingFact(item.text); return; }
+    if (event.target.closest('[data-sell-add-rewrite]')) {
+      if (!item.rewrite) { showToast('这句去掉功效词后没有可用的表达，请换一种写法'); return; }
+      addSellingFact(item.rewrite);
+      return;
+    }
+    if (event.target.closest('[data-sell-fix]')) {
+      $('#wiz-fact-cards').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      showToast('先核对上方商品信息，再回来重新生成卖点候选');
+      return;
+    }
+    if (event.target.closest('[data-sell-copy]')) void copyText(item.text);
+  });
   $('#wiz-facts')?.addEventListener('click', event => {
     const trigger = event.target.closest('[data-wiz-action="remove-fact"]');
     if (!trigger) return;
