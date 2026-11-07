@@ -184,6 +184,49 @@ test('M04 商品信息卡与卖点候选：问题/示例、核对状态与依据
   assert.equal(JSON.stringify(context.__split('大容量。便携；送礼')), JSON.stringify(['大容量', '便携', '送礼']));
 });
 
+test('M05 用途/背景与步骤拆分：可视化方案、默认背景、阻塞映射到按钮附近', async () => {
+  const [html, wizard, style] = await Promise.all([
+    read('index.html'), read('wizard.js'), read('style.css'),
+  ]);
+  assert.match(html, /data-wiz-panel="3"/);
+  assert.match(html, /data-wiz-panel="4"/, '交付与费用必须拆成独立第 4 步');
+  assert.match(html, /id="wiz-bg-filter"/, '背景必须有可执行的偏好选择');
+  assert.match(html, /data-bg-filter="plain_white"/);
+  assert.match(html, /id="wiz-to-pay"/, '第 3 步只负责选方案，费用与生成在第 4 步');
+  assert.match(html, /id="wiz-pay-blockers"/, '阻塞项必须显示在生成按钮附近');
+  assert.match(wizard, /function templateArt/, '方案卡必须有可视化示意');
+  assert.match(wizard, /排版示意，不是生成结果/, '示意必须声明不是生成结果');
+  assert.match(wizard, /BACKGROUND_LABEL/, '背景方向必须翻译成人能读的名称');
+  assert.match(wizard, /data-pay-fix="facts"/, '事实阻塞必须能直接跳到补充入口');
+  assert.match(wizard, /data-pay-fix="workbench"/, '素材阻塞必须能直接跳到工作台');
+  assert.match(wizard, /先处理上方 \$\{count\} 项/, '按钮本身要说明还不能生成');
+  assert.match(style, /\.wiz-pay-facts/);
+
+  // 背景不是生成前置：generateBlocked 只看交付冲突与生产前置，多个背景偏好不会被当成阻塞
+  const body = wizard.slice(wizard.indexOf('function generateBlocked()'), wizard.indexOf('// ---------- 第 4 步'));
+  assert.ok(!/background|bgFilter/.test(body), '背景偏好不得成为生成阻塞条件');
+  assert.match(body, /conflicts\.pending/);
+  assert.match(body, /can_start_production/);
+});
+
+test('M06 提交后同上下文追踪：真实状态、真实费用、取消与超时边界', async () => {
+  const [html, wizard] = await Promise.all([read('index.html'), read('wizard.js')]);
+  assert.match(html, /id="wiz-run-status"/);
+  assert.match(html, /id="wiz-run-deliverables"/);
+  assert.match(html, /id="wiz-run-budget"/, '必须显示本任务真实额度');
+  assert.match(html, /id="wiz-run-refresh"/);
+  assert.match(html, /id="wiz-run-cancel"/);
+  assert.match(wizard, /api\.runEvents\(runId\)/, '进度必须来自服务端事件流');
+  assert.match(wizard, /api\.getRun\(state\.runId\)/, 'SSE 断开时退化为只读轮询');
+  assert.match(wizard, /不推算百分比/, '不得用计时器伪造进度');
+  assert.match(wizard, /这不代表任务失败/, '超时不能直接归因网站故障');
+  assert.match(wizard, /reason: 'user_cancelled'/, '取消必须走真实取消接口');
+  assert.match(wizard, /budget\.captured_credits/, '费用必须取账本实际结算值');
+  // 提交成功后不再立刻跳走：先在本页展示任务，再提供进入工作台的按钮
+  const submit = wizard.slice(wizard.indexOf('const run = result.run ?? {};'), wizard.indexOf("showToast(`任务已提交"));
+  assert.ok(!/dispatchEvent\(new CustomEvent\('qb:open-workbench'/.test(submit), '提交后不得用跳转代替结果追踪');
+});
+
 // 模块03：商品与品牌复用（E1 同商品再做一套 / E2 用此风格制作新品 / E3 品牌入口）契约
 test('M03-复用 qb:open-wizard 事件、复用入口、向导复用模式与不沿用声明', async () => {
   const [html, wizard, realData, m04] = await Promise.all([

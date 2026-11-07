@@ -127,12 +127,19 @@ const state = {
   brandKits: [],
   templateId: '',
   brandKitId: '',
+  bgFilter: '',
+  recommendedTemplateId: '',
   resolutions: {},
   preview: null,
   specVersion: null,
   quote: null,
   phase: 'idle', // idle | freezing | quoting | creating | done
   idempotencyKey: '',
+  runId: '',
+  run: null,
+  runSource: null,
+  runPoll: null,
+  lastRunEventId: 0,
   // 模块03：商品与品牌复用（E1 同商品再做一套 / E2 用此风格制作新品 / E3 品牌入口）
   entry: null,          // 待应用的 qb:open-wizard 请求（进入 create 视图并重置后消费）
   entryKind: '',        // '' | 'reuse' | 'style'
@@ -878,9 +885,126 @@ async function confirmTruth() {
   }
 }
 
-// ---------- 第 3 步：风格与交付 + 真实报价 ----------
+// ---------- 第 3 步：用途/方案 + 背景建议；第 4 步：交付与费用 ----------
+const BACKGROUND_LABEL = {
+  plain_white: '纯白背景',
+  scene: '真实场景',
+  gradient_studio: '渐变影棚',
+  lifestyle: '生活方式',
+};
+const PURPOSE_LABEL = { listing: '上架主图与详情', advertising: '投放素材', social: '社媒笔记' };
+const PURPOSE_REASON = {
+  listing: '覆盖主图、卖点、场景与细节，适合首次上架',
+  advertising: '方图/竖版/横版三件套，适合信息流与开屏',
+  social: '封面与内页，适合内容种草',
+};
+const backgroundLabel = value => BACKGROUND_LABEL[value] ?? value ?? '未标注';
+
+/** 模板缩略图是排版示意，不是生成结果；用背景方向和文字块位置表达方案差异。 */
+function templateArt(item) {
+  const background = item.creative_direction?.background ?? 'scene';
+  const ratio = item.deliverables?.[0]?.ratio ?? '1:1';
+  const tall = ratio === '3:4' || ratio === '9:16';
+  const hasCopy = (item.deliverables ?? []).some(deliverable => (deliverable.text_blocks ?? []).length > 0);
+  const fill = {
+    plain_white: '#ffffff',
+    scene: '#e7eee7',
+    gradient_studio: '#e8e9f3',
+    lifestyle: '#f3ece1',
+  }[background] ?? '#eef1ee';
+  const stroke = background === 'plain_white' ? '#c9d2c9' : 'transparent';
+  return `<svg class="wiz-art" viewBox="0 0 96 96" aria-hidden="true" focusable="false">
+    <defs><linearGradient id="g-${escapeHtml(item.id)}" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="#ffffff"/>
+    </linearGradient></defs>
+    <rect x="4" y="4" width="88" height="88" rx="8" fill="url(#g-${escapeHtml(item.id)})" stroke="${stroke}"/>
+    ${background === 'scene' ? '<path d="M4 70h88" stroke="#cdd9cd" stroke-width="2"/><circle cx="72" cy="30" r="9" fill="#dbe7db"/>' : ''}
+    ${background === 'lifestyle' ? '<rect x="62" y="14" width="18" height="26" rx="3" fill="#e6d8c3"/>' : ''}
+    ${background === 'gradient_studio' ? '<circle cx="24" cy="28" r="14" fill="#ffffff88"/>' : ''}
+    <rect x="${tall ? 34 : 28}" y="${tall ? 20 : 30}" width="${tall ? 28 : 40}" height="${tall ? 46 : 36}" rx="5" fill="#ffffff" stroke="#93a893"/>
+    <rect x="${tall ? 40 : 35}" y="${tall ? 30 : 38}" width="${tall ? 16 : 26}" height="6" rx="2" fill="#b9cdb9"/>
+    ${hasCopy ? `<rect x="14" y="${tall ? 74 : 72}" width="42" height="4" rx="2" fill="#5d7a5d"/><rect x="14" y="${tall ? 82 : 80}" width="28" height="4" rx="2" fill="#9bb09b"/>` : ''}
+  </svg>`;
+}
+
+function templateCard(item, selected) {
+  const reason = state.recommendedTemplateId === item.id ? purposeReason(item) : '';
+  return `<button type="button" class="wiz-template-card${selected ? ' selected' : ''}" data-wiz-template="${escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}">
+    ${templateArt(item)}
+    <span class="wiz-card-body">
+      <b>${escapeHtml(item.name)}${state.recommendedTemplateId === item.id ? '<em class="wiz-recommend">推荐</em>' : ''}</b>
+      <small>${escapeHtml(PURPOSE_LABEL[item.purpose] ?? item.purpose ?? '交付方案')} · ${item.deliverable_count ?? (item.deliverables?.length ?? 0)} 项交付</small>
+      <small class="wiz-card-bg">背景：${escapeHtml(backgroundLabel(item.creative_direction?.background))}</small>
+      ${reason ? `<small class="wiz-card-reason">${escapeHtml(reason)}</small>` : ''}
+    </span>
+  </button>`;
+}
+
+function purposeReason(item) {
+  return PURPOSE_REASON[item.purpose] ?? '按当前商品信息可用';
+}
+
+/** 推荐规则是确定性的用途规则：优先上架包；不做视觉理解，也不假装已分析图片。 */
+function recommendTemplate(templates) {
+  if (!templates.length) return '';
+  return (templates.find(item => item.purpose === 'listing') ?? templates[0]).id;
+}
+
+function visibleTemplates() {
+  const filter = state.bgFilter;
+  return filter ? state.templates.filter(item => item.creative_direction?.background === filter) : state.templates;
+}
+
+function renderTemplates() {
+  const list = visibleTemplates();
+  const recommended = list.slice(0, 3);
+  const rest = list.slice(3);
+  $('#wiz-templates').innerHTML = recommended.length
+    ? recommended.map(item => templateCard(item, item.id === state.templateId)).join('')
+    : '<p class="real-empty">这个背景方向下没有可用方案，已保留原方案；可切回「跟随方案」。</p>';
+  $('#wiz-templates-more').innerHTML = rest.map(item => templateCard(item, item.id === state.templateId)).join('');
+  $('#wiz-templates-more').closest('details').hidden = rest.length === 0;
+  renderBackgroundNote();
+  updateToPayButton();
+}
+
+function renderBackgroundNote() {
+  const note = $('#wiz-bg-note');
+  if (!note) return;
+  const item = state.templates.find(template => template.id === state.templateId);
+  if (!item) { note.textContent = '选一个方案后，这里会显示它的背景方向。'; return; }
+  const direction = item.creative_direction ?? {};
+  const parts = [
+    `背景：${backgroundLabel(direction.background)}`,
+    direction.lighting ? `光线：${direction.lighting}` : '',
+    direction.camera ? `视角：${direction.camera}` : '',
+  ].filter(Boolean);
+  note.textContent = `${parts.join(' · ')}。不需要手写背景提示词；主图若受平台纯白要求限制，下方会给出可直接执行的处理。`;
+}
+
+function applyTemplateChoice(id) {
+  state.templateId = id;
+  saveDraft({ templateId: id });
+  state.resolutions = {};
+  invalidateQuote();
+  renderTemplates();
+  void refreshPreview();
+}
+
+function backgroundFixList(result) {
+  const conflicts = [...(result?.payload?.conflicts?.pending ?? []), ...(result?.payload?.conflicts?.unresolvable ?? [])];
+  const holder = $('#wiz-bg-fixes');
+  if (!holder) return;
+  const targets = conflicts.filter(item => (item.options ?? []).length > 0);
+  holder.innerHTML = targets.length === 0
+    ? '<p class="real-note">当前方案的背景没有被平台规则阻断，不需要额外填写。</p>'
+    : targets.map(item => `<div class="wiz-bg-fix"><p>${escapeHtml(item.message)}</p><span class="wiz-bg-fix-actions">
+        ${item.options.slice(0, 2).map(option => `<button type="button" class="secondary" data-bg-fix="${escapeHtml(item.key)}" data-bg-fix-option="${escapeHtml(option.id)}">${escapeHtml(option.label)}</button>`).join('')}
+      </span></div>`).join('');
+}
+
 async function enterStep3() {
-  const errorNode = $('#wiz-generate-error');
+  const errorNode = $('#wiz-plan-error');
   errorNode.textContent = '';
   state.quote = null;
   state.specVersion = null;
@@ -892,6 +1016,8 @@ async function enterStep3() {
     state.templates = templates.templates ?? [];
     state.brandKits = kits.brand_kits ?? [];
     applyStep3Preselect(); // 模块03：E1 沿用 spec 快照 / E2·E3 预选风格（仅目录中仍存在的项）
+    state.recommendedTemplateId = recommendTemplate(state.templates);
+    if (!state.templateId) state.templateId = state.recommendedTemplateId;
     renderTemplates();
     renderBrandOptions();
     setStep(3);
@@ -903,21 +1029,21 @@ async function enterStep3() {
   }
 }
 
-function templateCard(item, selected) {
-  return `<button type="button" class="wiz-template-card${selected ? ' selected' : ''}" data-wiz-template="${escapeHtml(item.id)}" aria-pressed="${selected ? 'true' : 'false'}">
-    <b>${escapeHtml(item.name)}</b>
-    <span>${escapeHtml(item.purpose ?? '')}</span>
-    <small>${item.deliverable_count ?? (item.deliverables?.length ?? 0)} 项交付</small>
-  </button>`;
+function updateToPayButton() {
+  const button = $('#wiz-to-pay');
+  if (!button) return;
+  button.disabled = !state.templateId;
 }
 
-function renderTemplates() {
-  const recommended = state.templates.slice(0, 3);
-  const rest = state.templates.slice(3);
-  $('#wiz-templates').innerHTML = recommended.length
-    ? recommended.map(item => templateCard(item, item.id === state.templateId)).join('')
-    : '<p class="real-empty">未读取到服务端模板目录。</p>';
-  $('#wiz-templates-more').innerHTML = rest.map(item => templateCard(item, item.id === state.templateId)).join('');
+async function enterStep4() {
+  if (!state.templateId) return;
+  const errorNode = $('#wiz-generate-error');
+  errorNode.textContent = '';
+  setStep(4);
+  saveDraft({ projectId: state.project?.id, assetId: state.asset?.id, step: 4 });
+  renderPaySummary();
+  renderPayBlockers();
+  updateGenerateButton();
 }
 
 function renderBrandOptions() {
@@ -954,17 +1080,21 @@ function invalidateQuote() {
 }
 
 async function refreshPreview() {
-  const errorNode = $('#wiz-generate-error');
+  const errorNode = $('#wiz-plan-error');
   errorNode.textContent = '';
-  if (!state.project || !state.templateId) { $('#wiz-delivery').innerHTML = ''; $('#wiz-spec-notes').innerHTML = ''; updateGenerateButton(); return; }
+  if (!state.project || !state.templateId) { $('#wiz-delivery').innerHTML = ''; $('#wiz-spec-notes').innerHTML = ''; backgroundFixList(null); updateGenerateButton(); return; }
   $('#wiz-delivery').innerHTML = '<p class="truth-hint">正在按当前选择推导交付清单与冲突…</p>';
   try {
     const result = await api.previewSpec(state.project.id, specPayload());
+    // 快速切换方案时，旧请求可能后返回；只接受当前模板的结果，避免覆盖新输入
+    if (result.payload?.template?.id && result.payload.template.id !== state.templateId) return;
     state.preview = result;
     renderPreview(result);
+    backgroundFixList(result);
   } catch (error) {
     state.preview = null;
     $('#wiz-delivery').innerHTML = '';
+    backgroundFixList(null);
     if (error instanceof ApiFailure && error.details?.conflicts) {
       $('#wiz-spec-notes').innerHTML = `<section class="wiz-notes"><h4>未处理的冲突</h4><ul class="truth-blockers">${error.details.conflicts
         .map(item => `<li><b>${escapeHtml(item.code)}</b>${escapeHtml(item.message)}</li>`).join('')}</ul></section>`;
@@ -974,6 +1104,7 @@ async function refreshPreview() {
     }
   }
   updateGenerateButton();
+  if (state.step === 4) { renderPaySummary(); renderPayBlockers(); }
 }
 
 function renderPreview(result) {
@@ -1024,7 +1155,7 @@ function renderPreview(result) {
     ${missingRefs.length + warnings.length ? `<section class="wiz-notes"><h4>规则与模板提示</h4><ul class="truth-warnings">${[...missingRefs, ...warnings]
       .map(item => `<li>${escapeHtml(item.message)}</li>`).join('')}</ul></section>` : ''}
     ${readiness.can_start_production ? '' : `<section class="wiz-notes"><h4>生产前置未满足</h4><ul class="truth-blockers">${readiness.blockers
-      .map(item => `<li><b>${escapeHtml(item.code)}</b>${escapeHtml(item.message)}</li>`).join('')}</ul></section>`}`;
+      .map(item => `<li>${escapeHtml(blockerText(item))}</li>`).join('')}</ul></section>`}`;
   // 已选处理方式回填，避免重渲染后选择丢失
   for (const select of $$('#wiz-spec-notes [data-wiz-conflict]')) {
     const chosen = state.resolutions[select.dataset.wizConflict];
@@ -1041,14 +1172,97 @@ function generateBlocked() {
     || !readiness.can_start_production;
 }
 
+// ---------- 第 4 步：交付摘要 + 阻塞修复入口 + 真实费用 ----------
+function payFixActions(blocker) {
+  switch (blocker.code) {
+    case 'NO_CRITICAL_FACT':
+    case 'UNCONFIRMED_CRITICAL_FACTS':
+    case 'NO_TRUTH_VERSION':
+    case 'TRUTH_DRAFT':
+    case 'TRUTH_SOURCE_SUPERSEDED':
+      return '<button type="button" class="secondary" data-pay-fix="facts">去补商品信息 →</button>';
+    case 'NO_ASSETS':
+    case 'NO_SUBJECT_ASSET':
+    case 'REFERENCE_CONFLICT':
+      return '<button type="button" class="secondary" data-pay-fix="workbench">去工作台处理素材 →</button>';
+    default:
+      return '';
+  }
+}
+
+function renderPayBlockers() {
+  const holder = $('#wiz-pay-blockers');
+  if (!holder) return;
+  const preview = state.preview;
+  if (!preview) {
+    holder.innerHTML = '<section class="wiz-notes"><h4>还没有拿到交付清单</h4><p>请先返回方案页确认交付清单；如果一直加载失败，检查服务是否在线后重试。</p><button type="button" class="secondary" data-pay-fix="plan">返回方案重试 →</button></section>';
+    return;
+  }
+  const conflicts = [...preview.payload.conflicts.pending, ...preview.payload.conflicts.unresolvable];
+  const blockers = preview.readiness.can_start_production ? [] : preview.readiness.blockers;
+  if (blockers.length === 0 && conflicts.length === 0) {
+    holder.innerHTML = '<p class="truth-ok">当前配置满足生成前置，没有需要先处理的问题。</p>';
+    return;
+  }
+  holder.innerHTML = `<section class="wiz-notes"><h4>生成前还需要处理 ${blockers.length + conflicts.length} 项</h4>
+    <ul class="pay-blockers">
+      ${blockers.map(item => `<li><span>${escapeHtml(blockerText(item))}</span>${payFixActions(item)}</li>`).join('')}
+      ${conflicts.map(item => `<li><span>${escapeHtml(item.message)}</span>${
+        item.options.length === 0
+          ? '<span class="pay-noway">平台硬约束没有可接受的处理方式</span>'
+          : '<button type="button" class="secondary" data-pay-fix="plan">去方案页处理 →</button>'}</li>`).join('')}
+    </ul></section>`;
+}
+
+function renderPaySummary() {
+  const holder = $('#wiz-pay-summary');
+  if (!holder) return;
+  const item = state.templates.find(template => template.id === state.templateId);
+  const preview = state.preview;
+  const payload = preview?.payload;
+  const deliverables = payload?.deliverables ?? item?.deliverables ?? [];
+  const required = deliverables.filter(deliverable => deliverable.required);
+  const optional = deliverables.filter(deliverable => !deliverable.required);
+  const imageCount = required.reduce((sum, deliverable) => sum + (Number(deliverable.count) || 1), 0);
+  const brandId = $('#wiz-brand')?.value ?? '';
+  const brandName = state.brandKits.find(kit => kit.id === brandId)?.name;
+  const platform = ($('#wiz-platform')?.value ?? '').trim() || state.project?.platform || '未指定';
+  const direction = item?.creative_direction ?? {};
+  holder.innerHTML = `<section class="wiz-pay-card">
+    <div class="wiz-pay-main">
+      <h4>${escapeHtml(item?.name ?? '交付方案')}<span>${escapeHtml(PURPOSE_LABEL[item?.purpose] ?? '')}</span></h4>
+      <ul class="wiz-pay-facts">
+        <li><b>背景</b><span>${escapeHtml(backgroundLabel(direction.background))}</span></li>
+        <li><b>光线</b><span>${escapeHtml(direction.lighting ?? '跟随方案')}</span></li>
+        <li><b>交付</b><span>默认制作 ${required.length} 项必需交付，约 ${imageCount} 张图${optional.length ? `；另有 ${optional.length} 项可选` : ''}</span></li>
+        <li><b>品牌</b><span>${brandName ? escapeHtml(brandName) : '不使用品牌配方'}</span></li>
+        <li><b>平台</b><span>${escapeHtml(platform)}</span></li>
+      </ul>
+    </div>
+    <p class="real-note">可选交付与数量会改变费用：上下方清单勾选/数量调整后会重新取价。费用以服务端报价为准，本页不做估算。</p>
+  </section>`;
+}
+
 function updateGenerateButton() {
   const button = $('#wiz-generate');
+  if (!button) return;
   if (state.phase === 'done') { button.disabled = true; button.textContent = '任务已提交'; return; }
   if (state.phase !== 'idle') { button.disabled = true; return; } // 文案由调用方给出
   if (!state.templateId) { button.disabled = true; button.textContent = '生成'; return; }
   const blocked = generateBlocked();
   button.disabled = blocked;
-  button.textContent = state.quote ? '确认生成' : '生成';
+  if (blocked) {
+    const preview = state.preview;
+    const count = preview
+      ? preview.payload.conflicts.pending.length + preview.payload.conflicts.unresolvable.length
+        + (preview.readiness.can_start_production ? 0 : preview.readiness.blockers.length)
+      : 0;
+    button.textContent = preview ? `先处理上方 ${count} 项` : '正在加载交付清单…';
+    return;
+  }
+  button.textContent = state.quote
+    ? `确认生成 · 最多 ${state.quote.max_credits} 点`
+    : '获取真实报价';
 }
 
 function renderQuoteSummary() {
@@ -1064,6 +1278,114 @@ function renderQuoteSummary() {
     <p>${escapeHtml(note)}</p>
     <p class="real-note">报价有效期至 ${formatTime(quote.expires_at)}；过期或配置变化后需重新取价。开始时按上限预留，未发生部分在任务结束后释放。</p>
   </div>`;
+}
+
+// ---------- 提交后的同上下文追踪：只显示服务端状态 ----------
+const RUN_STATUS_TEXT = {
+  queued: '排队中', running: '生成中', evaluating: '质检中',
+  awaiting_confirmation: '待确认额度', completed: '已完成',
+  limit_reached: '已达重试上限', failed: '失败', cancelled: '已取消',
+};
+const RUN_TERMINAL = new Set(['completed', 'limit_reached', 'failed', 'cancelled']);
+const RUN_EVENT_TEXT = {
+  budget_reserved: '预留额度', queued: '进入队列', generation: '生成',
+  hard_check: '硬校验', revision: '修订', settled: '结算', cancelled: '取消',
+};
+
+function stopRunTracking() {
+  if (state.runSource) { state.runSource.close(); state.runSource = null; }
+  if (state.runPoll) { clearInterval(state.runPoll); state.runPoll = null; }
+}
+
+function renderRunTracking(run) {
+  const status = run.status ?? 'queued';
+  const budget = run.budget ?? {};
+  const deliverables = run.deliverables ?? [];
+  const statusNode = $('#wiz-run-status');
+  statusNode.textContent = RUN_STATUS_TEXT[status] ?? status;
+  statusNode.className = `run-status ${status}`;
+  const terminal = RUN_TERMINAL.has(status);
+  $('#wiz-done-note').textContent = run.id
+    ? `任务 ${run.id}${run.terminal_reason ? ` · 结束原因：${run.terminal_reason}` : ''}`
+    : '任务已提交，正在读取任务编号。';
+  $('#wiz-run-deliverables').innerHTML = deliverables.length === 0
+    ? '<li class="real-empty">交付清单尚未返回，稍后刷新可见。</li>'
+    : deliverables.map(item => `<li>
+        <b>${escapeHtml(item.label ?? item.deliverable_id ?? '交付项')}</b>
+        <span class="run-chip ${escapeHtml(item.status ?? 'pending')}">${escapeHtml(item.status ?? 'pending')}</span>
+        ${item.credits ? `<span>${escapeHtml(String(item.credits))} 额度</span>` : ''}
+      </li>`).join('');
+  $('#wiz-run-budget').textContent = budget.reserved_credits === undefined
+    ? '额度以账面记录为准，正在读取…'
+    : `本任务额度：预留 ${budget.reserved_credits ?? 0} · 已结算 ${budget.captured_credits ?? 0} · 已释放 ${budget.released_credits ?? 0}`;
+  const cancel = $('#wiz-run-cancel');
+  cancel.hidden = terminal || run.cancel_requested === true;
+  cancel.disabled = terminal || run.cancel_requested === true;
+  const refresh = $('#wiz-run-refresh');
+  refresh.hidden = terminal;
+  if (terminal) {
+    $('#wiz-run-note').textContent = status === 'completed'
+      ? '任务已完成，可前往工作台逐张查看、修改与下载。未发生部分已按账本释放。'
+      : `任务已结束（${RUN_STATUS_TEXT[status] ?? status}），可在工作台查看原因并决定是否重试；重试会重新取价。`;
+  }
+}
+
+async function refreshRunState() {
+  if (!state.runId) return;
+  try {
+    const result = await api.getRun(state.runId);
+    state.run = result.run;
+    renderRunTracking(result.run);
+  } catch (error) {
+    // 网络或服务超时只说明“状态待确认”，不能直接判定任务失败
+    $('#wiz-run-note').textContent = `暂时取不到最新状态（${errorText(error)}）。这不代表任务失败，可点「立即刷新状态」重试。`;
+  }
+}
+
+function startRunTracking(runId) {
+  stopRunTracking();
+  if (!runId) return;
+  state.runId = runId;
+  try {
+    state.runSource = api.runEvents(runId);
+    state.runSource.addEventListener('message', event => {
+      let payload;
+      try { payload = JSON.parse(event.data); } catch { return; }
+      if (!payload || typeof payload.sequence !== 'number') return;
+      if (payload.sequence <= state.lastRunEventId) return;
+      state.lastRunEventId = payload.sequence;
+      const timeline = $('#wiz-run-note');
+      const stage = RUN_EVENT_TEXT[payload.stage] ?? payload.stage ?? '';
+      timeline.textContent = `最新事件 #${payload.sequence} · ${stage} · ${payload.status ?? ''} · ${formatTime(payload.timestamp)}；状态来自服务端，不推算百分比。`;
+      void refreshRunState();
+    });
+    state.runSource.addEventListener('error', () => {
+      // SSE 断开不代表任务失败，退化为轮询；轮询同样只读
+      if (state.runSource) { state.runSource.close(); state.runSource = null; }
+      if (!state.runPoll) state.runPoll = setInterval(() => void refreshRunState(), 8000);
+    });
+  } catch {
+    state.runPoll = setInterval(() => void refreshRunState(), 8000);
+  }
+  // 首帧用创建返回的状态，随后立刻拉一次完整状态（含交付项与账本）
+  void refreshRunState();
+}
+
+async function cancelTrackedRun() {
+  if (!state.runId) return;
+  const button = $('#wiz-run-cancel');
+  button.disabled = true;
+  button.textContent = '正在请求取消…';
+  try {
+    const result = await api.cancelRun(state.runId, { reason: 'user_cancelled' });
+    renderRunTracking(result.run);
+    showToast('已请求取消；未发生的部分按账本释放，已发生的部分按实际结算');
+  } catch (error) {
+    showToast(`取消失败：${errorText(error)}`);
+  } finally {
+    button.textContent = '取消任务';
+    button.disabled = false;
+  }
 }
 
 async function onGenerate() {
@@ -1103,11 +1425,11 @@ async function onGenerate() {
       state.phase = 'done';
       clearDraft();
       const run = result.run ?? {};
-      $('#wiz-done-note').textContent =
-        `任务 ${run.id ?? '—'} 当前状态「${run.status ?? 'queued'}」；报价预留与结算以额度账本为准。`;
+      renderRunTracking(run);
       $('#wiz-done').hidden = false;
       updateGenerateButton();
-      window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: state.project.id } }));
+      showToast(`任务已提交（${run.id ?? '—'}），进度显示在本页`);
+      startRunTracking(run.id);
     }
   } catch (error) {
     state.phase = 'idle';
@@ -1145,11 +1467,17 @@ function resetForEntry() {
   state.resolutions = {};
   state.templateId = '';
   state.brandKitId = '';
+  state.bgFilter = '';
+  state.recommendedTemplateId = '';
   state.entryKind = '';
   state.styleTemplateId = '';
   state.styleBrandKitId = '';
   state.reuseSpec = null;
   state.phase = 'idle';
+  stopRunTracking();
+  state.runId = '';
+  state.run = null;
+  state.lastRunEventId = 0;
   state.idempotencyKey = newIdempotencyKey(); // 每次打开向导重新生成幂等键
   resetStep1();
   $('#wiz-name').value = '';
@@ -1170,10 +1498,22 @@ function resetForEntry() {
   $('#wiz-custom-layout').checked = false;
   $('#wiz-delivery').innerHTML = '';
   $('#wiz-spec-notes').innerHTML = '';
+  $('#wiz-plan-error').textContent = '';
+  $('#wiz-pay-summary').innerHTML = '';
+  $('#wiz-pay-blockers').innerHTML = '';
+  $('#wiz-bg-fixes').innerHTML = '';
+  $('#wiz-bg-note').textContent = '正在读取方案的背景方向…';
+  for (const item of $$('#wiz-bg-filter [data-bg-filter]')) item.classList.toggle('selected', item.dataset.bgFilter === '');
+  $('#wiz-to-pay').disabled = true;
   $('#wiz-quote').hidden = true;
   $('#wiz-quote').innerHTML = '';
-  $('#wiz-reuse').hidden = true;
   $('#wiz-done').hidden = true;
+  $('#wiz-done-note').textContent = '';
+  $('#wiz-run-deliverables').innerHTML = '';
+  $('#wiz-run-budget').textContent = '';
+  $('#wiz-run-status').textContent = '排队中';
+  $('#wiz-run-status').className = 'run-status queued';
+  $('#wiz-reuse').hidden = true;
   $('#wiz-generate-error').textContent = '';
   $('#wiz-truth-error').textContent = '';
   $('#wiz-generate').textContent = '生成';
@@ -1204,13 +1544,14 @@ async function continueDraft() {
       <p>${escapeHtml(state.asset.filename)} · ${state.asset.width}×${state.asset.height}px · 素材 ID ${escapeHtml(state.asset.id)} · sha256 ${escapeHtml(shortHash(state.asset.sha256))}</p>
       <p>浏览器本地预览已不可恢复；此素材来自服务端保存结果。</p></div>`;
     $('#wiz-next-1').disabled = false;
-    const step = Math.min(Math.max(Number(draft.step) || 1, 1), 3);
+    const step = Math.min(Math.max(Number(draft.step) || 1, 1), 4);
     if (step >= 3) {
       // 恢复上次选择：模板/品牌只在目录仍存在时预选，失效项由 applyStep3Preselect 明确回落
       state.styleTemplateId = draft.templateId ?? '';
       state.styleBrandKitId = draft.brandKitId ?? '';
       if (draft.platform) $('#wiz-platform').value = draft.platform;
       await enterStep3();
+      if (step >= 4) await enterStep4();
     } else if (step === 2) await enterStep2();
     else setStep(1);
   } catch (error) {
@@ -1325,7 +1666,8 @@ export function initWizard() {
     const target = Number(button.dataset.wizGoto);
     if (target > state.step) return;
     if (target === 3 && state.step === 2) { void enterStep3(); return; }
-    if (target === 2 && state.step === 3) { setStep(2); return; }
+    if (target === 4 && state.step === 3) { void enterStep4(); return; }
+    if (target === 2 && state.step >= 3) { setStep(2); return; }
     setStep(target);
   }));
   $('#wiz-exit')?.addEventListener('click', () => { location.hash = 'projects'; });
@@ -1344,22 +1686,44 @@ export function initWizard() {
   $('#wiz-templates')?.addEventListener('click', event => {
     const card = event.target.closest('[data-wiz-template]');
     if (!card) return;
-    state.templateId = card.dataset.wizTemplate;
-    saveDraft({ templateId: state.templateId });
-    state.resolutions = {};
-    invalidateQuote();
-    renderTemplates();
-    void refreshPreview();
+    applyTemplateChoice(card.dataset.wizTemplate);
   });
   $('#wiz-templates-more')?.addEventListener('click', event => {
     const card = event.target.closest('[data-wiz-template]');
     if (!card) return;
-    state.templateId = card.dataset.wizTemplate;
-    saveDraft({ templateId: state.templateId });
-    state.resolutions = {};
-    invalidateQuote();
+    applyTemplateChoice(card.dataset.wizTemplate);
+  });
+  $('#wiz-bg-filter')?.addEventListener('click', event => {
+    const chip = event.target.closest('[data-bg-filter]');
+    if (!chip) return;
+    state.bgFilter = chip.dataset.bgFilter ?? '';
+    for (const item of $$('#wiz-bg-filter [data-bg-filter]')) item.classList.toggle('selected', item === chip);
+    const list = visibleTemplates();
+    // 背景偏好只影响可选方案；当前方案不匹配时切到该背景下的推荐方案
+    if (state.templateId && !list.some(item => item.id === state.templateId)) {
+      const next = list.find(item => item.id === state.recommendedTemplateId) ?? list[0];
+      if (next) { applyTemplateChoice(next.id); return; }
+    }
     renderTemplates();
+  });
+  $('#wiz-bg-fixes')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-bg-fix]');
+    if (!button) return;
+    state.resolutions[button.dataset.bgFix] = button.dataset.bgFixOption;
+    invalidateQuote();
+    showToast('已按你的选择处理该规则冲突，正在刷新清单');
     void refreshPreview();
+  });
+  $('#wiz-to-pay')?.addEventListener('click', () => void enterStep4());
+  $('#wiz-back-4')?.addEventListener('click', () => setStep(3));
+  $('#wiz-pay-blockers')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-pay-fix]');
+    if (!button) return;
+    if (button.dataset.payFix === 'facts') { setStep(2); return; }
+    if (button.dataset.payFix === 'plan') { setStep(3); return; }
+    if (button.dataset.payFix === 'workbench' && state.project) {
+      window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: state.project.id } }));
+    }
   });
   $('#wiz-spec-notes')?.addEventListener('change', event => {
     const select = event.target.closest('[data-wiz-conflict]');
@@ -1369,6 +1733,8 @@ export function initWizard() {
     void refreshPreview();
   });
   $('#wiz-generate')?.addEventListener('click', () => void onGenerate());
+  $('#wiz-run-refresh')?.addEventListener('click', () => void refreshRunState());
+  $('#wiz-run-cancel')?.addEventListener('click', () => void cancelTrackedRun());
   $('#wiz-open-workbench')?.addEventListener('click', () => {
     if (state.project) window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: state.project.id } }));
   });

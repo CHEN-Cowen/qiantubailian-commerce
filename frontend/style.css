@@ -162,6 +162,39 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .wiz-template-card:hover{border-color:var(--brand-line)}
 .wiz-template-card.selected{border-color:var(--brand);background:var(--brand-soft);box-shadow:var(--ring)}
 .wiz-template-card.selected b{color:var(--brand-strong)}
+.wiz-art{width:100%;height:auto;border-radius:6px;display:block;background:var(--surface-alt)}
+.wiz-card-body{display:grid;gap:3px}
+.wiz-card-bg{color:var(--muted)!important}
+.wiz-card-reason{color:var(--brand)!important;line-height:1.5}
+.wiz-recommend{font-style:normal;font-size:9px;font-weight:600;color:var(--brand-strong);background:var(--brand-soft);
+  border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:1px}
+.wiz-panel-head p{margin:4px 0 0;font-size:11px;color:var(--muted);line-height:1.7}
+.wiz-bg{border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px 14px;background:var(--surface-alt)}
+.wiz-bg-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap}
+.wiz-bg-head h4{margin:0 0 4px;font-size:12px;color:var(--brand-strong)}
+.wiz-bg-head p{margin:0;font-size:11px;color:var(--muted);line-height:1.7;max-width:620px}
+.wiz-bg-filter{display:flex;gap:6px;flex-wrap:wrap}
+.wiz-bg-filter .chip{border:1px solid var(--line);background:var(--surface);border-radius:999px;
+  padding:4px 10px;font-size:11px;color:var(--muted);font-family:inherit}
+.wiz-bg-filter .chip.selected{border-color:var(--brand);color:var(--brand-strong);background:var(--brand-soft)}
+.wiz-bg-fixes{display:grid;gap:8px;margin-top:10px}
+.wiz-bg-fix{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:9px 11px;display:grid;gap:7px}
+.wiz-bg-fix p{margin:0;font-size:11px;color:var(--ink);line-height:1.6}
+.wiz-bg-fix-actions{display:flex;gap:8px;flex-wrap:wrap}
+.wiz-bg-fix-actions .secondary{padding:5px 9px;font-size:11px}
+.wiz-pay-card{display:grid;gap:10px}
+.wiz-pay-main{border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px 14px;background:var(--surface)}
+.wiz-pay-main h4{margin:0 0 8px;font-size:13px;color:var(--brand-strong);display:flex;gap:8px;align-items:baseline}
+.wiz-pay-main h4 span{font-size:11px;font-weight:400;color:var(--muted)}
+.wiz-pay-facts{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.wiz-pay-facts li{display:flex;gap:10px;font-size:11px;line-height:1.6}
+.wiz-pay-facts b{color:var(--muted);font-weight:500;min-width:36px}
+.wiz-pay-facts span{color:var(--ink)}
+.pay-blockers{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.pay-blockers li{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:8px 10px;font-size:11px;line-height:1.6}
+.pay-blockers .secondary{padding:5px 9px;font-size:11px}
+.pay-noway{color:#8A1F1F}
 .wiz-more>summary,.wiz-advanced>summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--brand);padding:4px 0}
 .wiz-more[open]>summary,.wiz-advanced[open]>summary{margin-bottom:10px}
 .wiz-more,.wiz-advanced{border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px 12px;background:var(--surface)}
@@ -248,6 +281,15 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .wiz-done{border:1px solid var(--brand-line);background:var(--brand-soft);border-radius:var(--radius-sm);padding:14px 16px}
 .wiz-done p{margin:0 0 8px;font-size:12px;color:var(--brand-strong);line-height:1.6}
 .wiz-done b{font-size:13px}
+.wiz-done-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.wiz-done-head b{flex:1}
+.wiz-run-deliverables{list-style:none;margin:0 0 8px;padding:0;display:grid;gap:5px}
+.wiz-run-deliverables li{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--muted);
+  background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 9px}
+.wiz-run-deliverables li b{font-size:11px;color:var(--ink);flex:1}
+.wiz-run-budget{margin:0 0 8px;font-size:11px;color:var(--muted)}
+.wiz-done-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.wiz-done-actions .secondary{padding:6px 10px;font-size:11px}
 /* 演示素材样例：真实模型生成，仅作展示，不参与真实商品与交付 */
 .sample-sheet{margin-top:12px;border:1px solid var(--line,#E1E6D9);border-radius:10px;padding:10px 14px;background:#fff}
 .sample-sheet summary{cursor:pointer;font-size:12px;color:var(--muted,#62705C)}

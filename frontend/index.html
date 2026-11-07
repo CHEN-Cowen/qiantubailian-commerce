@@ -223,7 +223,8 @@
         <ol class="wiz-steps" id="wiz-steps" aria-label="制作步骤">
           <li><button type="button" class="wiz-step is-current" data-wiz-goto="1" aria-current="step"><i>1</i><span>上传商品</span></button></li>
           <li><button type="button" class="wiz-step" data-wiz-goto="2"><i>2</i><span>确认商品信息</span></button></li>
-          <li><button type="button" class="wiz-step" data-wiz-goto="3"><i>3</i><span>选方案 · 看报价 · 生成</span></button></li>
+          <li><button type="button" class="wiz-step" data-wiz-goto="3"><i>3</i><span>选方案与背景</span></button></li>
+          <li><button type="button" class="wiz-step" data-wiz-goto="4"><i>4</i><span>确认交付与费用</span></button></li>
         </ol>
         <div class="wiz-resume" id="wiz-resume" hidden>
           <p><b>检测到上次未完成的向导草稿。</b><span id="wiz-resume-note"></span></p>
@@ -322,18 +323,32 @@
           </div>
         </section>
 
-        <!-- 第 3 步 风格与交付 + 真实报价 + 生成 -->
+        <!-- 第 3 步 用途/方案 + 背景建议 + 交付清单 -->
         <section class="wiz-panel" data-wiz-panel="3" hidden>
-          <h3 class="wiz-section-title">推荐风格 <span>单选一个模板</span></h3>
-          <div class="wiz-templates" id="wiz-templates"></div>
-          <details class="wiz-more"><summary>更多模板</summary><div class="wiz-templates" id="wiz-templates-more"></div></details>
-          <div class="wiz-row">
-            <label class="wiz-field">品牌配方<select id="wiz-brand"><option value="">不使用品牌套件</option></select></label>
-            <span class="wiz-hint">无品牌也可以直接开始，不强制先建品牌库。</span>
+          <div class="wiz-panel-head">
+            <div><h3 class="wiz-section-title">选一个用途与方案 <span>默认已选推荐方案，换方案会立即刷新清单</span></h3>
+              <p>方案决定交付哪些图、尺寸和文字位置；背景与光线跟随方案，不需要你手写提示词。</p></div>
           </div>
-          <div id="wiz-delivery"></div>
-          <div id="wiz-spec-notes"></div>
-          <details class="wiz-advanced"><summary>高级设置 · 平台、文字排版与主体框</summary>
+          <div class="wiz-templates" id="wiz-templates"></div>
+          <details class="wiz-more"><summary>查看更多模板</summary><div class="wiz-templates" id="wiz-templates-more"></div></details>
+          <section class="wiz-bg" id="wiz-bg">
+            <div class="wiz-bg-head">
+              <div><h4>背景建议</h4><p id="wiz-bg-note">正在读取方案的背景方向…</p></div>
+              <div class="wiz-bg-filter" id="wiz-bg-filter" role="group" aria-label="背景偏好">
+                <button type="button" class="chip selected" data-bg-filter="">跟随方案</button>
+                <button type="button" class="chip" data-bg-filter="plain_white">纯白</button>
+                <button type="button" class="chip" data-bg-filter="scene">真实场景</button>
+                <button type="button" class="chip" data-bg-filter="gradient_studio">渐变影棚</button>
+                <button type="button" class="chip" data-bg-filter="lifestyle">生活方式</button>
+              </div>
+            </div>
+            <div id="wiz-bg-fixes" class="wiz-bg-fixes"></div>
+          </section>
+          <details class="wiz-advanced"><summary>高级设置 · 品牌、平台与文字排版（可选）</summary>
+            <div class="wiz-row">
+              <label class="wiz-field">品牌配方<select id="wiz-brand"><option value="">不使用品牌套件</option></select></label>
+              <span class="wiz-hint">无品牌也可以直接开始，不强制先建品牌库。</span>
+            </div>
             <label class="wiz-field">目标平台<input id="wiz-platform" maxlength="40" placeholder="例如：天猫（可留空）"></label>
             <label class="wiz-check"><input type="checkbox" id="wiz-custom-layout"> 使用自定义文字排版</label>
             <div class="wiz-row wiz-row-4">
@@ -344,16 +359,40 @@
             </div>
             <div class="wiz-row"><button type="button" class="text-button" id="wiz-subject-link">调整商品主体框 → 前往项目工作台</button></div>
           </details>
+          <div id="wiz-delivery"></div>
+          <div id="wiz-spec-notes"></div>
+          <div id="wiz-plan-error" class="form-error" role="alert"></div>
+          <div class="wiz-actions">
+            <button class="secondary" id="wiz-back-3">返回确认信息</button>
+            <button class="primary" id="wiz-to-pay" disabled>查看交付与费用 →</button>
+          </div>
+        </section>
+
+        <!-- 第 4 步 交付确认 + 真实报价 + 生成 -->
+        <section class="wiz-panel" data-wiz-panel="4" hidden>
+          <h3 class="wiz-section-title">确认交付与费用 <span>费用以服务端报价为准，点击后才会冻结配置</span></h3>
+          <div id="wiz-pay-summary"></div>
+          <div id="wiz-pay-blockers"></div>
           <section class="wiz-quote" id="wiz-quote" hidden></section>
           <p class="form-error" id="wiz-generate-error" role="alert"></p>
           <div class="wiz-actions">
-            <button class="secondary" id="wiz-back-3">返回确认信息</button>
+            <button class="secondary" id="wiz-back-4">返回方案</button>
             <button class="primary" id="wiz-generate" disabled>生成</button>
           </div>
           <section class="wiz-done" id="wiz-done" hidden>
-            <p><b>任务已提交。</b><span id="wiz-done-note"></span></p>
-            <p class="real-note">真实进度以工作台任务状态与事件流为准，这里不虚构进度百分比。</p>
-            <button class="primary" id="wiz-open-workbench">打开工作台查看 →</button>
+            <div class="wiz-done-head">
+              <b>本次任务</b>
+              <span class="run-status queued" id="wiz-run-status">排队中</span>
+            </div>
+            <p class="wiz-done-note" id="wiz-done-note"></p>
+            <ul class="wiz-run-deliverables" id="wiz-run-deliverables"></ul>
+            <p class="wiz-run-budget" id="wiz-run-budget"></p>
+            <p class="real-note" id="wiz-run-note">状态来自服务端任务事件，按真实状态显示，不推算百分比。</p>
+            <div class="wiz-done-actions">
+              <button class="secondary" id="wiz-run-refresh">立即刷新状态</button>
+              <button class="secondary" id="wiz-run-cancel" hidden>取消任务</button>
+              <button class="primary" id="wiz-open-workbench">查看进度并下载 →</button>
+            </div>
           </section>
         </section>
       </section>
