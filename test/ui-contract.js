@@ -17,8 +17,8 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   }
   assert.match(html, /短视频首帧[\s\S]*后续阶段/);
   assert.match(html, /详情页模块[\s\S]*后续阶段/);
-  assert.match(html, /data-open-project="skin" role="button" tabindex="0"/);
-  assert.match(html, /data-open-project="lamp" role="button" tabindex="0"/);
+  assert.ok(!html.includes('以下为演示数据'), '正式「我的商品」区不得再展示演示数据分隔与表格');
+  assert.ok(!html.includes('data-open-project="skin"'), '正式商品列表不得挂演示项目入口');
   assert.match(app, /function setView\(view\)/);
   assert.match(app, /function openDrawer\(\)/);
   assert.match(app, /project !== 'skin'/);
@@ -33,8 +33,9 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   const samples = ['sample-cream-original', 'sample-cream-hero', 'sample-cream-scene', 'sample-cream-benefit', 'sample-cream-detail', 'sample-lamp-hero'];
   for (const name of samples) {
     assert.ok(STATIC_FILES.includes(`assets/demo/${name}.jpg`), `STATIC_FILES 缺少 assets/demo/${name}.jpg`);
-    assert.ok(html.includes(`./assets/demo/${name}.jpg`), `index.html 未引用 ${name}.jpg`);
   }
+  // 正式商品区已去演示化；示例图片只保留在明确标注、默认隐藏的旧展示区
+  assert.ok(html.includes('./assets/demo/sample-cream-hero.jpg'), '示例图引用丢失');
   assert.match(style, /\.sample-photo\{[^}]*object-fit:cover/);
   assert.match(html, /真实模型生成样例/);
 });

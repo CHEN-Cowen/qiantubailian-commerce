@@ -29,7 +29,7 @@
         <button class="nav-item" data-view="library">品牌与模板</button>
       </nav>
       <div class="top-actions">
-        <span class="mock-badge" id="data-note-button" role="button" tabindex="0" title="查看数据说明"><span class="dot"></span>演示边界</span>
+        <span class="mock-badge" id="data-note-button" role="button" tabindex="0" title="查看数据说明"><span class="dot"></span>数据说明</span>
         <button class="credit-chip" data-open="pricing" id="topbar-credits" title="额度、套餐与使用规则"><b id="topbar-credit-value">—</b> 可用额度</button>
         <button class="icon-button" id="help-button" aria-label="查看说明" title="查看说明">?</button>
         <button class="avatar" aria-label="账户菜单">我</button>
@@ -208,25 +208,10 @@
             <div><h2>我的项目</h2></div>
             <span class="real-badge">自动保存 · 刷新不丢失</span>
           </div>
-          <p class="real-note">以下项目与商品事实自动保存，刷新不会丢失。下方演示数据仅用于功能展示，与真实数据互不影响。</p>
+          <p class="real-note">以下项目与商品事实自动保存，刷新不会丢失。</p>
           <div class="real-list" id="real-list"><p class="real-empty">正在读取真实项目…</p></div>
           <p class="real-hint">每个项目都有统一工作台：上传→核对事实→选效果→确认报价→生成→修改→下载。创建后自动从工作台开始，刷新或重开浏览器会恢复已有任务。</p>
         </section>
-        <div class="real-divider"><span>以下为演示数据 · 刷新即重置</span></div>
-        <div class="filter-bar"><div class="segmented"><button class="selected">全部项目 <b>2</b></button><button>进行中 <b>1</b></button><button>待复核 <b>1</b></button></div><label class="search"><span>⌕</span><input placeholder="搜索商品名称或 SKU" aria-label="搜索项目"></label></div>
-        <div class="project-table" hidden><div class="table-head"><span>项目</span><span>目标平台</span><span>进度</span><span>质量状态</span><span>最近更新</span><span></span></div><div class="table-row" data-open-project="skin" role="button" tabindex="0" aria-label="打开月光舒缓面霜项目"><div class="table-project"><div class="tiny-cover cover-skin"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="月光舒缓面霜缩略图样例" onerror="this.style.display='none'"><div class="cover-product"></div></div><span><b>月光舒缓面霜</b><small>SKU MC-50 · 5 件交付物</small></span></div><span>天猫旗舰店</span><span><b>72%</b><small>3 / 5 已完成</small></span><span class="status-pill amber">待复核</span><span>12 分钟前</span><button class="row-arrow">→</button></div><div class="table-row" data-open-project="lamp" role="button" tabindex="0" aria-label="查看雾白便携台灯状态"><div class="table-project"><div class="tiny-cover cover-lamp"><img class="sample-photo" src="./assets/demo/sample-lamp-hero.jpg" loading="lazy" alt="雾白便携台灯缩略图样例" onerror="this.style.display='none'"><div class="lamp-object"></div></div><span><b>雾白便携台灯</b><small>SKU WL-08 · 3 件交付物</small></span></div><span>京东自营</span><span><b>38%</b><small>素材准备中</small></span><span class="status-pill blue">制作中</span><span>昨天</span><button class="row-arrow">→</button></div></div>
-        <p class="sample-note">封面与素材图片为真实模型生成样例</p>
-        <details class="sample-sheet">
-          <summary>查看演示素材样例（真实模型生成，仅作展示）</summary>
-          <div class="sample-sheet-grid">
-            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-original.jpg" loading="lazy" alt="面霜原图样例" onerror="this.style.display='none'"></div>
-            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="面霜主图样例" onerror="this.style.display='none'"></div>
-            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="面霜场景图样例" onerror="this.style.display='none'"></div>
-            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="面霜卖点图样例" onerror="this.style.display='none'"></div>
-            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="面霜细节图样例" onerror="this.style.display='none'"></div>
-            <div class="tiny-cover"><img class="sample-photo" src="./assets/demo/sample-lamp-hero.jpg" loading="lazy" alt="台灯主图样例" onerror="this.style.display='none'"></div>
-          </div>
-        </details>
       </section>
 
       <!-- 模块02：首次制作一页三步向导（上传商品 → 确认必要信息 → 风格与交付），取代旧 project-dialog 弹窗 -->
@@ -573,7 +558,7 @@
   <div class="toast" id="toast" role="status"></div>
   <dialog id="upload-dialog" class="real-dialog" aria-labelledby="upload-dialog-title"><button class="dialog-close" data-close-dialog="upload-dialog" aria-label="关闭">×</button><p class="eyebrow">上传素材</p><h2 id="upload-dialog-title">上传真实商品素材</h2><p class="real-note">服务端校验真实文件类型、体积、哈希与项目归属；每个项目最多 6 张生效素材。</p><form id="upload-form" class="real-form"><label>归属项目<select id="upload-project" aria-label="归属项目"></select></label><label>参考职责<select id="upload-role" aria-label="参考职责"><option value="subject">主体（可作为事实来源）</option><option value="packaging">包装（可作为事实来源）</option><option value="detail">细节（可作为事实来源）</option><option value="style">风格（不作为事实来源）</option></select></label><label>图片文件<input type="file" id="upload-file" accept="image/jpeg,image/png,image/webp" required></label><p class="real-note">主体与包装为单槽职责：已有素材时会要求显式选择保留哪一张，不会静默覆盖。最短边低于 1024px 可保存但会提示补图。</p><p class="form-error" id="upload-error" role="alert"></p><div id="upload-result" hidden></div><div class="real-actions"><button type="button" class="secondary" id="upload-replace" hidden>替换现有素材并上传</button><button type="button" class="secondary" data-close-dialog="upload-dialog">关闭</button><button type="submit" class="primary" id="upload-submit">上传</button></div></form></dialog>
   <dialog id="truth-dialog" class="real-dialog real-dialog-wide" aria-labelledby="truth-title"><button class="dialog-close" data-close-dialog="truth-dialog" aria-label="关闭">×</button><p class="eyebrow">商品事实</p><h2 id="truth-title">商品事实</h2><div id="truth-body"></div></dialog>
-  <dialog id="help-dialog"><button class="dialog-close" id="close-help">×</button><p class="eyebrow">关于数据</p><h2>真实数据与演示数据是分开的</h2><p>你的项目、素材、任务与导出记录会自动保存；带「演示数据」标记的区域仅用于功能展示，刷新即重置，不会写入你的真实数据。</p><button class="primary" id="help-ok">知道了</button></dialog>
+  <dialog id="help-dialog"><button class="dialog-close" id="close-help">×</button><p class="eyebrow">关于数据</p><h2>你的数据与示例是分开的</h2><p>登录后的商品、素材、任务、费用与导出记录都会保存在你的账号下。首页未登录时的「示例演示」只用于说明流程：不调用生成模型、不扣额度、不上传文件，也不会写入真实商品。带「示例」标记的图片为演示素材，不能作为交付结果。</p><button class="primary" id="help-ok">知道了</button></dialog>
   <dialog id="flow-dialog" aria-labelledby="flow-title"><button class="dialog-close" id="close-flow" aria-label="关闭演示">×</button><p class="eyebrow">演示流程 · 刷新重置</p><h2 id="flow-title">新品上架包</h2><div id="flow-content"></div><p id="flow-error" role="alert"></p><div class="flow-actions"><button class="secondary" id="flow-back">上一步</button><button class="primary" id="flow-next">下一步</button></div></dialog>
   <!-- R07：价格与额度管理 dialog -->
   <dialog id="pricing-dialog" class="real-dialog real-dialog-wide" aria-labelledby="pricing-title">
