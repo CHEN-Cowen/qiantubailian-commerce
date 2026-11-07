@@ -867,7 +867,7 @@ async function confirmTruth() {
     const readiness = await api.readiness(state.project.id);
     const blocked = renderReadiness(readiness);
     saveDraft({ projectId: state.project.id, assetId: state.asset?.id, step: 2 });
-    if (!blocked) setStep(3);
+    if (!blocked) await enterStep3();
   } catch (error) {
     if (error instanceof ApiFailure && error.code === 'CONFIRMATION_BLOCKED') {
       errorNode.innerHTML = `仍有关键项未满足，未生成新版本：<ul class="truth-blockers">${(error.details?.blockers ?? [])
@@ -1768,6 +1768,9 @@ export function initWizard() {
     if (event.detail?.view === 'create') { resetForEntry(); applyEntry(); }
     else state.entry = null; // 用户中途改去其它视图时丢弃未消费的复用请求
   });
+  // 直接打开 #create（或刷新）时 app.js 的首次路由事件早于本模块注册，
+  // 这里补一次初始化，否则幂等键等入口状态会保持空值。
+  if (location.hash === '#create') { resetForEntry(); applyEntry(); }
 }
 
 if (typeof document !== 'undefined') initWizard();

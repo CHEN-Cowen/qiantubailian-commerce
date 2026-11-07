@@ -159,23 +159,6 @@ $$('.asset-card').forEach(card => {
   card.tabIndex = 0; card.setAttribute('role', 'button');
   card.addEventListener('keydown', event => { if (['Enter', ' '].includes(event.key)) { event.preventDefault(); card.click(); } });
 });
-const projectEmpty = document.createElement('p');
-projectEmpty.className = 'filter-empty'; projectEmpty.textContent = '没有匹配项目，请调整搜索词或筛选。'; projectEmpty.hidden = true;
-$('.project-table').after(projectEmpty);
-let projectFilter = 0;
-function filterProjects() {
-  const query = $('.search input').value.trim().toLowerCase();
-  let count = 0;
-  $$('.table-row').forEach((row, index) => {
-    row.hidden = !row.textContent.toLowerCase().includes(query) || (projectFilter === 1 && index !== 1) || (projectFilter === 2 && index !== 0);
-    if (!row.hidden) count++;
-  });
-  projectEmpty.hidden = count !== 0;
-}
-$('.search input').addEventListener('input', filterProjects);
-$$('.segmented button').forEach((button, index) => button.addEventListener('click', () => {
-  projectFilter = index; $$('.segmented button').forEach(item => item.classList.toggle('selected', item === button)); filterProjects();
-}));
 const assetEmpty = document.createElement('p'); assetEmpty.textContent = '此筛选下没有素材。'; assetEmpty.hidden = true; $('.asset-grid').after(assetEmpty);
 $$('.check-row input').forEach((input, index) => input.addEventListener('change', () => {
   $$('.check-row input').forEach(other => { other.checked = other === input; });

@@ -116,17 +116,12 @@ test('M02 向导真实函数分支：确认拦截、失败重试、成功进入�
   assert.equal(closed, 1); assert.equal(opened, 'skin');
 });
 
-test('M02 项目搜索无结果与分类筛选执行真实函数', async () => {
+test('M01 正式工作区不保留演示项目搜索与筛选', async () => {
   const app = await read('app.js');
-  const rows = [{ textContent: '月光 MC-50', hidden: false }, { textContent: '台灯 WL-08', hidden: false }];
-  const search = { value: '不存在' }; const empty = { hidden: true };
-  const context = vm.createContext({ $: () => search, $$: () => rows, projectEmpty: empty, projectFilter: 0 });
-  vm.runInContext(app.slice(app.indexOf('function filterProjects()'), app.indexOf("$('.search input').addEventListener")), context);
-  vm.runInContext('filterProjects()', context);
-  assert.ok(rows.every(row => row.hidden)); assert.equal(empty.hidden, false);
-  search.value = ''; context.projectFilter = 1;
-  vm.runInContext('filterProjects()', context);
-  assert.equal(rows[0].hidden, true); assert.equal(rows[1].hidden, false); assert.equal(empty.hidden, true);
+  const html = await read('index.html');
+  // 演示项目表已下线；对应的搜索/筛选逻辑必须一并移除，避免引用已删除节点
+  assert.doesNotMatch(app, /filterProjects|projectEmpty/u);
+  assert.doesNotMatch(html, /project-table/u);
 });
 
 test('前端脚本不得引用已被删除的 DOM 节点（防止首屏 addEventListener 崩溃）', async () => {

@@ -263,7 +263,7 @@
           </div>
           <div class="wiz-actions">
             <span class="wiz-hint" id="wiz-step1-hint">选择文件后会自动创建项目草稿并上传，SKU 使用 AUTO- 内部标识，不会伪造商品事实。</span>
-            <button class="primary" id="wiz-next-1" disabled>下一步：确认必要信息</button>
+            <button class="primary" id="wiz-next-1" disabled>下一步：确认商品信息</button>
           </div>
         </section>
 
@@ -349,7 +349,8 @@
               <label class="wiz-field">品牌配方<select id="wiz-brand"><option value="">不使用品牌套件</option></select></label>
               <span class="wiz-hint">无品牌也可以直接开始，不强制先建品牌库。</span>
             </div>
-            <label class="wiz-field">目标平台<input id="wiz-platform" maxlength="40" placeholder="例如：天猫（可留空）"></label>
+            <label class="wiz-field">目标平台<input id="wiz-platform" maxlength="40" placeholder="例如：天猫、京东、抖音"></label>
+            <p class="wiz-hint">留空只做通用校验；平台规则未核验的成品不会被标记为可发布，下载包会列明缺项。</p>
             <label class="wiz-check"><input type="checkbox" id="wiz-custom-layout"> 使用自定义文字排版</label>
             <div class="wiz-row wiz-row-4">
               <label>距左侧（%）<input id="wiz-text-x" type="number" min="0" max="95" value="8"></label>
