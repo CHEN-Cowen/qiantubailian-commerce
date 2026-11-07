@@ -2064,6 +2064,11 @@ export function createJobs({
       for (const attempt of stillFlying) {
         let polled;
         try { polled = provider.poll({ provider_job_id: attempt.provider_job_id }); } catch { polled = { status: 'unknown' }; }
+        // 取消与结果落地可能在同一瞬间发生；再查一次，确保已产出的迟到结果进入审计，
+        // 而不是被误记为 abandoned（查单是只读操作，不会新增提交或费用）。
+        if (polled.status === 'queued' || polled.status === 'submitted' || polled.status === 'running') {
+          try { polled = provider.poll({ provider_job_id: attempt.provider_job_id }); } catch { /* 保持首次查单结论 */ }
+        }
         if (polled.status === 'succeeded') await settleAttemptSuccess(data, run, attempt, polled.result, events, at);
         else attempt.status = 'abandoned';
       }

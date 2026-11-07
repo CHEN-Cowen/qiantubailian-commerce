@@ -99,17 +99,19 @@ test('修订协议：过期报告、越权动作、越预算、未授权素材�
   assert.ok(result.errors.some(error => error.code === 'UNRESOLVED_ISSUES'));
 });
 
-test('离线评测：36 条计划案例按商品划分，全部标签待人工确认且指标不可计算', async () => {
+test('离线评测：36 条计划案例按商品划分，保留集 12 条确认标签且指标基数可计算', async () => {
   const report = await evaluate({ skipMaterials: true });
   assert.equal(report.ok, true, JSON.stringify(report.errors));
   assert.equal(report.dataset.rows, 36);
   assert.equal(report.dataset.products, 12);
   assert.equal(report.dataset.devProducts, 8);
   assert.equal(report.dataset.holdoutProducts, 4);
-  assert.equal(report.dataset.labeled, 0);
-  assert.equal(report.dataset.labelsPending, 36);
-  assert.equal(report.effect_metrics.available, false);
-  assert.match(report.effect_metrics.reason, /没有任何人工确认标签/);
+  assert.equal(report.dataset.labeled, 12);
+  assert.equal(report.dataset.labelsPending, 24);
+  assert.equal(report.effect_metrics.available, true);
+  assert.equal(report.effect_metrics.denominators.labeledCases, 12);
+  assert.equal(report.effect_metrics.denominators.pendingHumanConfirmation, 24);
+  assert.equal(report.effect_metrics.denominators.totalCases, 36);
   assert.equal(report.protocol.reviewerFixturesOk, report.protocol.reviewerFixtures);
   assert.equal(report.protocol.refinerFixturesOk, report.protocol.refinerFixtures);
   assert.equal(report.protocol.negativeRejected, report.protocol.negativeCases);
