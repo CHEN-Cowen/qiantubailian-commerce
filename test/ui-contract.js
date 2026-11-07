@@ -227,6 +227,22 @@ test('M06 提交后同上下文追踪：真实状态、真实费用、取消与�
   assert.ok(!/dispatchEvent\(new CustomEvent\('qb:open-workbench'/.test(submit), '提交后不得用跳转代替结果追踪');
 });
 
+test('M07 结果编辑/版本/下载闭环与存量功能入口保持可用', async () => {
+  const [wizard, workbench, realData, api] = await Promise.all([
+    read('wizard.js'), read('workbench.js'), read('real-data.js'), read('api.js'),
+  ]);
+  assert.match(api, /downloadExportUrl: exportId => `\/api\/exports\//, '下载必须指向真实导出接口');
+  assert.match(workbench, /api\.downloadExportUrl\(exp\.id\)/, '工作台交付清单必须可下载');
+  assert.match(workbench, /修改|修订|revision/i, '工作台必须保留修改入口');
+  assert.match(workbench, /历史版本/);
+  assert.match(realData, /历史版本/, '我的作品必须能看到版本');
+  assert.match(realData, /api\.downloadExportUrl\(deliveredExport\.id\)/, '作品下载必须走真实导出');
+  // 提交后进入工作台时定位到本次任务，直接看编辑、版本与下载
+  assert.match(wizard, /runId: state\.runId \|\| undefined/, '工作台入口需携带本次任务');
+  // 存量维护入口（商品信息/SKU/品牌模板）继续由真实数据区提供
+  assert.match(realData, /qb:open-workbench/, '商品维护仍进入同一工作台');
+});
+
 // 模块03：商品与品牌复用（E1 同商品再做一套 / E2 用此风格制作新品 / E3 品牌入口）契约
 test('M03-复用 qb:open-wizard 事件、复用入口、向导复用模式与不沿用声明', async () => {
   const [html, wizard, realData, m04] = await Promise.all([

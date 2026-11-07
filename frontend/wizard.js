@@ -1736,7 +1736,12 @@ export function initWizard() {
   $('#wiz-run-refresh')?.addEventListener('click', () => void refreshRunState());
   $('#wiz-run-cancel')?.addEventListener('click', () => void cancelTrackedRun());
   $('#wiz-open-workbench')?.addEventListener('click', () => {
-    if (state.project) window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: state.project.id } }));
+    if (state.project) {
+      // 带上本次任务，工作台直接定位到该任务的结果、修改与下载
+      window.dispatchEvent(new CustomEvent('qb:open-workbench', {
+        detail: { projectId: state.project.id, runId: state.runId || undefined },
+      }));
+    }
   });
   $('#wiz-subject-link')?.addEventListener('click', () => {
     if (!state.project) return;
