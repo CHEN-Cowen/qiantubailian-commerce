@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # 在 Linux 目标机上执行部署：解包、安装生产依赖、重启 systemd 服务、健康检查。
-# 由 .github/workflows/deploy.yml 在服务器上的自托管 Runner 中调用，也可手动执行。
-# 发布包由 `git archive` 生成，不含 node_modules、runtime 与 .env，因此不会覆盖密钥和业务数据。
+# 由 scripts/poll-deploy.sh（systemd 定时器）调用，也可手动执行。
+# 发布包只含版本库文件，不含 node_modules、runtime 与 .env，因此不会覆盖密钥和业务数据。
 #
-# 用法：deploy-linux.sh <部署目录> <发布包> <systemd 服务名> [健康检查地址] [超时秒数]
+# 用法：deploy-linux.sh <部署目录> <发布包> <systemd 服务名> [健康检查地址] [超时秒数] [去掉几层目录前缀]
+# 自定义前缀的包（如 codeload 的 qiantubailian-commerce-<tag>/）传 1；git archive 生成的包传 0。
 set -euo pipefail
 
 TARGET_PATH="${1:-}"
@@ -11,11 +12,12 @@ ARCHIVE="${2:-}"
 SERVICE_NAME="${3:-}"
 HEALTH_URL="${4:-http://127.0.0.1:3000/readyz}"
 HEALTH_TIMEOUT_SECONDS="${5:-90}"
+STRIP_COMPONENTS="${6:-0}"
 
 step() { printf '==> %s\n' "$1"; }
 
 if [[ -z "$TARGET_PATH" || -z "$ARCHIVE" || -z "$SERVICE_NAME" ]]; then
-  echo "用法：$0 <部署目录> <发布包> <systemd 服务名> [健康检查地址] [超时秒数]" >&2
+  echo "用法：$0 <部署目录> <发布包> <systemd 服务名> [健康检查地址] [超时秒数] [去前缀层数]" >&2
   exit 2
 fi
 [[ -d "$TARGET_PATH" ]] || { echo "部署目录不存在：$TARGET_PATH" >&2; exit 1; }
@@ -48,10 +50,10 @@ start_app() {
 trap start_app EXIT
 
 step "解包 $ARCHIVE → $TARGET_PATH"
-tar -xzf "$ARCHIVE" -C "$TARGET_PATH"
+tar -xzf "$ARCHIVE" -C "$TARGET_PATH" --strip-components="$STRIP_COMPONENTS"
 rm -f "$ARCHIVE"
 
-# Runner 若以 root 运行，解包出来的文件会变成 root 所有；保持原目录属主，避免后续非 root 操作失败。
+# 以 root 运行时（如 systemd 定时器），解包出来的文件会变成 root 所有；保持原目录属主，避免后续非 root 操作失败。
 if [[ $EUID -eq 0 ]]; then
   chown -R "$(stat -c '%u:%g' "$TARGET_PATH")" "$TARGET_PATH"
 fi
