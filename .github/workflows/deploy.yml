@@ -1,0 +1,118 @@
+name: Deploy
+
+# 只允许手动触发，且必须输入 confirm=deploy；不会随 push 自动上线。
+# 目标机为单实例 Node 服务（见 docs/commercialization/部署手册.md）：
+# 同机 loopback 监听 + HTTPS 反向代理 + systemd 托管。
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 要部署的分支、标签或提交
+        required: true
+        default: master
+      confirm:
+        description: 输入 deploy 以确认本次为生产部署
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: 验证并部署
+    if: github.event.inputs.confirm == 'deploy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    env:
+      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+    steps:
+      - name: 检查部署配置
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE }}
+        run: |
+          missing=""
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_PATH DEPLOY_SERVICE; do
+            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::缺少部署配置:$missing（在仓库 Settings → Secrets and variables → Actions 中配置）"
+            exit 1
+          fi
+
+      - name: 检出待部署代码
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: npm
+
+      - name: 按锁文件安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 语法与静态检查
+        run: npm run check
+
+      - name: 全量测试
+        run: npm test
+
+      - name: 启动冒烟
+        run: npm run smoke
+
+      - name: 打包（只含版本库内文件）
+        run: git archive --format=tar.gz -o release.tgz HEAD
+
+      - name: 配置 SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${DEPLOY_PORT:-22}" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: 上传发布包
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          scp -P "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key release.tgz \
+            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/qtb-release.tgz"
+
+      - name: 远端安装、重启并健康检查
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE }}
+        run: |
+          ssh -p "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" bash -euo pipefail -s <<REMOTE
+          cd "$DEPLOY_PATH"
+          tar xzf /tmp/qtb-release.tgz
+          rm -f /tmp/qtb-release.tgz
+          npm ci --omit=dev --no-audit --no-fund
+          sudo systemctl restart "$DEPLOY_SERVICE"
+          for attempt in \$(seq 1 20); do
+            if curl -fsS "${DEPLOY_HEALTH_URL:-http://127.0.0.1:3000/readyz}" > /dev/null; then
+              echo "部署后健康检查通过"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "部署后健康检查失败"
+          exit 1
+          REMOTE

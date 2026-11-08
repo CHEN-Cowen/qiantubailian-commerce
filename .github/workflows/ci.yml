@@ -1,0 +1,41 @@
+name: CI
+
+# 目标：push 与 PR 都自动跑语法检查、全量测试与启动冒烟，
+# 避免像之前那样只有本地一次性验证、远端没有任何保护。
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: 检查与测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.2'
+          cache: npm
+
+      - name: 按锁文件安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 语法与静态检查
+        run: npm run check
+
+      - name: 全量测试
+        run: npm test
+
+      - name: 启动冒烟
+        run: npm run smoke

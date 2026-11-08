@@ -25,7 +25,7 @@
 
 ## 已知阻塞与外部条件
 
-- 无 CI/CD 配置（仓库无 `.github/workflows`），推送即交付，无自动部署。
+- CI 已补充（`.github/workflows/ci.yml`：push/PR 跑 check、test、smoke）；CD 为手动触发（`.github/workflows/deploy.yml`），需先配置部署 Secrets，推送不会自动上线。
 - 本机 Node v24.20.0 高于仓库要求（22.x），本地测试与验收可运行。
 - 真实供应商、真实支付与生产数据未授权使用，相关能力不宣称已上线。
 - 平台规则未核验（`PLATFORM_RULES`）为服务端质量门禁，人类复核不可裁决；向导已提示选择目标平台，未选择时成品不会被标记为可发布。
