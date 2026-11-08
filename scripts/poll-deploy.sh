@@ -12,8 +12,9 @@ WORK_DIR=/opt/qtb-deploy/work
 
 mkdir -p "$WORK_DIR"
 
-LATEST_TAG="$(git ls-remote --tags --refs "https://github.com/${REPO_SLUG}.git" 'refs/tags/deploy-*' \
-  | awk '{print $2}' | sed 's#^refs/tags/##' | sort -V | tail -1)"
+# github.com 偶发连接超时（git 默认会卡 135 秒），限制在 30 秒内失败，等下一轮再试。
+LATEST_TAG="$(timeout 30 git ls-remote --tags --refs "https://github.com/${REPO_SLUG}.git" 'refs/tags/deploy-*' 2>/dev/null \
+  | awk '{print $2}' | sed 's#^refs/tags/##' | sort -V | tail -1 || true)"
 if [[ -z "$LATEST_TAG" ]]; then
   echo '没有 deploy-* 标签，跳过'
   exit 0
@@ -41,6 +42,12 @@ echo "$LATEST_TAG" > "$STATE_FILE"
 SCRIPT_DIR="$WORK_DIR/script"
 rm -rf "$SCRIPT_DIR"
 mkdir -p "$SCRIPT_DIR"
-tar -xzf "$ARCHIVE" -C "$SCRIPT_DIR" --strip-components=1 --wildcards '*/scripts/deploy-linux.sh'
+tar -xzf "$ARCHIVE" -C "$SCRIPT_DIR" --strip-components=1 --wildcards '*/scripts/deploy-linux.sh' '*/scripts/poll-deploy.sh'
 bash "$SCRIPT_DIR/scripts/deploy-linux.sh" \
   "$TARGET_PATH" "$ARCHIVE" "$SERVICE_NAME" "$HEALTH_URL" 90 1
+
+# 部署成功后，用包内的新版轮询脚本替换自身，下一轮生效；这样调整定时器逻辑不再需要手动重装。
+if ! cmp -s "$SCRIPT_DIR/scripts/poll-deploy.sh" /opt/qtb-deploy/deploy.sh; then
+  install -m 0755 "$SCRIPT_DIR/scripts/poll-deploy.sh" /opt/qtb-deploy/deploy.sh
+  echo '轮询脚本已更新，下一轮生效'
+fi
