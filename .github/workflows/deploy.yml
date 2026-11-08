@@ -1,8 +1,8 @@
 name: Deploy
 
 # 只允许手动触发，且必须输入 confirm=deploy；不会随 push 自动上线。
-# 目标机为 Windows 单实例 Node 服务：OpenSSH Server + 进程托管（Windows 服务 / NSSM / pm2 / 计划任务）。
-# 远端实际动作见 scripts/deploy-windows.ps1。
+# 运行在服务器上的 Windows 自托管 Runner 中，因此不需要 SSH、密钥或开放端口。
+# 首次使用：仓库 Settings → Actions → Runners → New self-hosted runner，按页面命令安装并启动。
 on:
   workflow_dispatch:
     inputs:
@@ -23,33 +23,17 @@ concurrency:
 
 jobs:
   deploy:
-    name: 验证并部署到 Windows
+    name: 验证并部署到本机
     if: github.event.inputs.confirm == 'deploy'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 45
     environment: production
     env:
-      DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
-      DEPLOY_RESTART_MODE: ${{ secrets.DEPLOY_RESTART_MODE }}
-      DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_SERVICE: ${{ vars.DEPLOY_SERVICE }}
+      DEPLOY_RESTART_MODE: ${{ vars.DEPLOY_RESTART_MODE }}
+      DEPLOY_HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
     steps:
-      - name: 检查部署配置
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE }}
-        run: |
-          missing=""
-          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY DEPLOY_PATH DEPLOY_SERVICE; do
-            if [ -z "${!name:-}" ]; then missing="$missing $name"; fi
-          done
-          if [ -n "$missing" ]; then
-            echo "::error::缺少部署配置:$missing（在仓库 Settings → Secrets and variables → Actions 中配置）"
-            exit 1
-          fi
-
       - name: 检出待部署代码
         uses: actions/checkout@v5
         with:
@@ -73,35 +57,27 @@ jobs:
       - name: 启动冒烟
         run: npm run smoke
 
+      - name: 检查部署变量
+        shell: powershell
+        run: |
+          if (-not $env:DEPLOY_PATH) { throw '缺少仓库变量 DEPLOY_PATH（Settings → Secrets and variables → Actions → Variables）' }
+          if (-not $env:DEPLOY_SERVICE) { throw '缺少仓库变量 DEPLOY_SERVICE（Windows 服务名 / NSSM / pm2 应用名 / 计划任务名）' }
+
       - name: 打包（只含版本库内文件）
-        run: git archive --format=tar.gz -o release.tgz HEAD
-
-      - name: 配置 SSH
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        shell: powershell
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -p "${DEPLOY_PORT:-22}" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+          $archive = Join-Path $env:RUNNER_TEMP 'qtb-release.tgz'
+          git archive --format=tar.gz -o $archive HEAD
+          if ($LASTEXITCODE -ne 0) { throw '打包失败' }
 
-      - name: 上传发布包与部署脚本
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      - name: 解包、安装、重启并健康检查
+        shell: powershell
         run: |
-          scp -P "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key release.tgz \
-            "$DEPLOY_USER@$DEPLOY_HOST:qtb-release.tgz"
-          scp -P "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key scripts/deploy-windows.ps1 \
-            "$DEPLOY_USER@$DEPLOY_HOST:qtb-deploy.ps1"
-
-      - name: 远端解包、安装、重启并健康检查
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE }}
-        run: |
-          ssh -p "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
-            "powershell -NoProfile -ExecutionPolicy Bypass -File qtb-deploy.ps1 -TargetPath $DEPLOY_PATH -ServiceName $DEPLOY_SERVICE -RestartMode ${DEPLOY_RESTART_MODE:-auto} -HealthUrl ${DEPLOY_HEALTH_URL:-http://127.0.0.1:3000/readyz}"
+          $arguments = @{
+            TargetPath = $env:DEPLOY_PATH
+            Archive    = Join-Path $env:RUNNER_TEMP 'qtb-release.tgz'
+            ServiceName = $env:DEPLOY_SERVICE
+          }
+          if ($env:DEPLOY_RESTART_MODE) { $arguments.RestartMode = $env:DEPLOY_RESTART_MODE }
+          if ($env:DEPLOY_HEALTH_URL) { $arguments.HealthUrl = $env:DEPLOY_HEALTH_URL }
+          & "$env:GITHUB_WORKSPACE\scripts\deploy-windows.ps1" @arguments
