@@ -1,7 +1,7 @@
 name: Deploy
 
 # 只允许手动触发，且必须输入 confirm=deploy；不会随 push 自动上线。
-# 运行在服务器上的 Windows 自托管 Runner 中，因此不需要 SSH、密钥或开放端口。
+# 运行在服务器上的 Linux 自托管 Runner 中，因此不需要 SSH、密钥或开放端口。
 # 首次使用：仓库 Settings → Actions → Runners → New self-hosted runner，按页面命令安装并启动。
 on:
   workflow_dispatch:
@@ -25,13 +25,12 @@ jobs:
   deploy:
     name: 验证并部署到本机
     if: github.event.inputs.confirm == 'deploy'
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 45
     environment: production
     env:
       DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
       DEPLOY_SERVICE: ${{ vars.DEPLOY_SERVICE }}
-      DEPLOY_RESTART_MODE: ${{ vars.DEPLOY_RESTART_MODE }}
       DEPLOY_HEALTH_URL: ${{ vars.DEPLOY_HEALTH_URL }}
     steps:
       - name: 检出待部署代码
@@ -58,26 +57,20 @@ jobs:
         run: npm run smoke
 
       - name: 检查部署变量
-        shell: powershell
         run: |
-          if (-not $env:DEPLOY_PATH) { throw '缺少仓库变量 DEPLOY_PATH（Settings → Secrets and variables → Actions → Variables）' }
-          if (-not $env:DEPLOY_SERVICE) { throw '缺少仓库变量 DEPLOY_SERVICE（Windows 服务名 / NSSM / pm2 应用名 / 计划任务名）' }
+          [ -n "$DEPLOY_PATH" ] || { echo "缺少仓库变量 DEPLOY_PATH（Settings → Secrets and variables → Actions → Variables）" >&2; exit 1; }
+          [ -n "$DEPLOY_SERVICE" ] || { echo "缺少仓库变量 DEPLOY_SERVICE（systemd 服务名，如 qiantubailian）" >&2; exit 1; }
 
       - name: 打包（只含版本库内文件）
-        shell: powershell
         run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'qtb-release.tgz'
-          git archive --format=tar.gz -o $archive HEAD
-          if ($LASTEXITCODE -ne 0) { throw '打包失败' }
+          archive="$RUNNER_TEMP/qtb-release.tgz"
+          git archive --format=tar.gz -o "$archive" HEAD
+          ls -lh "$archive"
 
       - name: 解包、安装、重启并健康检查
-        shell: powershell
         run: |
-          $arguments = @{
-            TargetPath = $env:DEPLOY_PATH
-            Archive    = Join-Path $env:RUNNER_TEMP 'qtb-release.tgz'
-            ServiceName = $env:DEPLOY_SERVICE
-          }
-          if ($env:DEPLOY_RESTART_MODE) { $arguments.RestartMode = $env:DEPLOY_RESTART_MODE }
-          if ($env:DEPLOY_HEALTH_URL) { $arguments.HealthUrl = $env:DEPLOY_HEALTH_URL }
-          & "$env:GITHUB_WORKSPACE\scripts\deploy-windows.ps1" @arguments
+          bash scripts/deploy-linux.sh \
+            "$DEPLOY_PATH" \
+            "$RUNNER_TEMP/qtb-release.tgz" \
+            "$DEPLOY_SERVICE" \
+            "${DEPLOY_HEALTH_URL:-http://127.0.0.1:3000/readyz}"
