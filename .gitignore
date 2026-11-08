@@ -6,7 +6,8 @@ scenes
 node_modules/
 coverage/
 logs/
-runtime/
+# 仅忽略仓库根目录的运行数据；docs/ai-development/runtime 是服务端加载的提示词资源
+/runtime/
 *.log
 *.pem
 *.key
