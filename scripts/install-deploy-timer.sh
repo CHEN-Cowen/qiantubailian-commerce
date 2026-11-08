@@ -13,9 +13,8 @@ DEST_DIR=/opt/qtb-deploy
 
 install -d -m 0755 "$DEST_DIR"
 install -m 0755 "$SRC_DIR/poll-deploy.sh" "$DEST_DIR/deploy.sh"
-install -m 0755 "$SRC_DIR/deploy-linux.sh" "$DEST_DIR/deploy-linux.sh"
+rm -f "$DEST_DIR/deploy-linux.sh"
 bash -n "$DEST_DIR/deploy.sh"
-bash -n "$DEST_DIR/deploy-linux.sh"
 
 cat > /etc/systemd/system/qtb-deploy.service <<'UNIT'
 [Unit]
@@ -27,6 +26,8 @@ After=network-online.target
 Type=oneshot
 ExecStart=/opt/qtb-deploy/deploy.sh
 Nice=10
+# npm ci 在首次安装或依赖变动时可能超过默认的 90 秒，避免 systemd 中途杀掉部署导致服务停着。
+TimeoutStartSec=1800
 UNIT
 
 cat > /etc/systemd/system/qtb-deploy.timer <<'UNIT'

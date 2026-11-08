@@ -37,6 +37,8 @@ if [[ -x "$NODE_DIR/npm" ]]; then
 else
   NPM_BIN="npm"
 fi
+# 自带 Node 不在 PATH 里时，npm 的 /usr/bin/env node 会找不到解释器，因此显式加入。
+export PATH="$NODE_DIR:$PATH"
 "$NODE_DIR/node" --version
 
 step "停止服务（$SERVICE_NAME）"

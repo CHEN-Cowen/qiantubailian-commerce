@@ -37,6 +37,10 @@ mkdir -p "$(dirname "$STATE_FILE")"
 echo "$LATEST_TAG" > "$STATE_FILE"
 
 # codeload 包带一层 qiantubailian-commerce-<tag>/ 前缀，因此 strip 1。
-# 使用安装时固定下来的脚本副本，避免首次部署时目标目录里还没有这个脚本。
-bash /opt/qtb-deploy/deploy-linux.sh \
+# 用包内最新的 deploy-linux.sh 执行，这样部署逻辑随版本一起更新，不需要重装定时器。
+SCRIPT_DIR="$WORK_DIR/script"
+rm -rf "$SCRIPT_DIR"
+mkdir -p "$SCRIPT_DIR"
+tar -xzf "$ARCHIVE" -C "$SCRIPT_DIR" --strip-components=1 --wildcards '*/scripts/deploy-linux.sh'
+bash "$SCRIPT_DIR/scripts/deploy-linux.sh" \
   "$TARGET_PATH" "$ARCHIVE" "$SERVICE_NAME" "$HEALTH_URL" 90 1
