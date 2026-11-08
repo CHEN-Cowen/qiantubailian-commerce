@@ -1,0 +1,48 @@
+name: Discover Windows App
+
+# 一次性只读排查：确认自托管 Runner 所在机器上，应用是哪个目录、用什么方式托管、监听哪个端口。
+# 结果直接看本次运行日志，用来填写仓库变量 DEPLOY_PATH / DEPLOY_SERVICE / DEPLOY_HEALTH_URL。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    steps:
+      - name: 服务与进程
+        shell: powershell
+        run: |
+          Write-Host '== 监听 3000/3210/8080/80/443 的进程 =='
+          Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+            Where-Object { $_.LocalPort -in 3000, 3210, 8080, 80, 443 } |
+            Select-Object LocalAddress, LocalPort, OwningProcess | Format-Table -AutoSize
+
+          Write-Host '== Node 进程命令行 =='
+          Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue |
+            Select-Object ProcessId, ExecutablePath, CommandLine | Format-List
+
+          Write-Host '== 名称或路径包含 node/qtb/qian 的 Windows 服务 =='
+          Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.PathName -match 'node|qtb|qiantu|qian' } |
+            Select-Object Name, State, StartMode, PathName | Format-List
+
+          Write-Host '== NSSM / pm2 / 计划任务 =='
+          if (Get-Command nssm -ErrorAction SilentlyContinue) { & nssm list 2>&1 }
+          if (Get-Command pm2 -ErrorAction SilentlyContinue) { & pm2 list 2>&1 }
+          Get-ScheduledTask -ErrorAction SilentlyContinue |
+            Where-Object { $_.TaskName -match 'node|qtb|qiantu|qian' } |
+            Select-Object TaskName, State | Format-Table -AutoSize
+
+          Write-Host '== 健康检查探测 =='
+          foreach ($url in 'http://127.0.0.1:3000/healthz', 'http://127.0.0.1:3210/healthz') {
+            try {
+              $response = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 3
+              Write-Host "$url -> HTTP $($response.StatusCode)"
+            } catch {
+              Write-Host "$url -> 不可用"
+            }
+          }
