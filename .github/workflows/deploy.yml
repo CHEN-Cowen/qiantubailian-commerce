@@ -1,8 +1,8 @@
 name: Deploy
 
 # 只允许手动触发，且必须输入 confirm=deploy；不会随 push 自动上线。
-# 目标机为单实例 Node 服务（见 docs/commercialization/部署手册.md）：
-# 同机 loopback 监听 + HTTPS 反向代理 + systemd 托管。
+# 目标机为 Windows 单实例 Node 服务：OpenSSH Server + 进程托管（Windows 服务 / NSSM / pm2 / 计划任务）。
+# 远端实际动作见 scripts/deploy-windows.ps1。
 on:
   workflow_dispatch:
     inputs:
@@ -23,13 +23,14 @@ concurrency:
 
 jobs:
   deploy:
-    name: 验证并部署
+    name: 验证并部署到 Windows
     if: github.event.inputs.confirm == 'deploy'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production
     env:
       DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+      DEPLOY_RESTART_MODE: ${{ secrets.DEPLOY_RESTART_MODE }}
       DEPLOY_HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
     steps:
       - name: 检查部署配置
@@ -85,34 +86,22 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${DEPLOY_PORT:-22}" -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
 
-      - name: 上传发布包
+      - name: 上传发布包与部署脚本
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
         run: |
           scp -P "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key release.tgz \
-            "$DEPLOY_USER@$DEPLOY_HOST:/tmp/qtb-release.tgz"
+            "$DEPLOY_USER@$DEPLOY_HOST:qtb-release.tgz"
+          scp -P "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key scripts/deploy-windows.ps1 \
+            "$DEPLOY_USER@$DEPLOY_HOST:qtb-deploy.ps1"
 
-      - name: 远端安装、重启并健康检查
+      - name: 远端解包、安装、重启并健康检查
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
           DEPLOY_SERVICE: ${{ secrets.DEPLOY_SERVICE }}
         run: |
-          ssh -p "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" bash -euo pipefail -s <<REMOTE
-          cd "$DEPLOY_PATH"
-          tar xzf /tmp/qtb-release.tgz
-          rm -f /tmp/qtb-release.tgz
-          npm ci --omit=dev --no-audit --no-fund
-          sudo systemctl restart "$DEPLOY_SERVICE"
-          for attempt in \$(seq 1 20); do
-            if curl -fsS "${DEPLOY_HEALTH_URL:-http://127.0.0.1:3000/readyz}" > /dev/null; then
-              echo "部署后健康检查通过"
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "部署后健康检查失败"
-          exit 1
-          REMOTE
+          ssh -p "${DEPLOY_PORT:-22}" -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" \
+            "powershell -NoProfile -ExecutionPolicy Bypass -File qtb-deploy.ps1 -TargetPath $DEPLOY_PATH -ServiceName $DEPLOY_SERVICE -RestartMode ${DEPLOY_RESTART_MODE:-auto} -HealthUrl ${DEPLOY_HEALTH_URL:-http://127.0.0.1:3000/readyz}"
