@@ -18,7 +18,7 @@ test('R06 首页文案：移除绝对承诺', async () => {
   assert.match(html, /主体区域检查与本地合成/);
   assert.match(html, /实际效果需验收/);
   assert.match(html, /未核验项如实说明/);
-  assert.match(html, /不强求.*一定能上架/);
+  assert.match(html, /不承诺.*一定能上架/);
 });
 
 test('R06 导航清晰：我的商品 / 品牌与模板 / 我的作品', async () => {
