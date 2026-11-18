@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>千图百炼 · 商品视觉工作台</title>
-  <meta name="description" content="从真实商品素材到可发布视觉资产的商品视觉生产与校验工作台。">
+  <meta name="description" content="千图百炼：上新生成主图、场景图和细节图，换季或换包装时在同一项目按需更新。">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="m03.css">
   <link rel="stylesheet" href="m04.css">
@@ -35,18 +35,18 @@
         <button class="avatar" aria-label="账户菜单">我</button>
       </div>
       <nav class="hp-nav" aria-label="首页导航">
-        <button type="button" data-hp-scroll="scenes">使用场景</button>
-        <button type="button" data-hp-scroll="evidence">功能介绍</button>
+        <button type="button" data-hp-scroll="scenes">样片示例</button>
+        <button type="button" data-hp-scroll="evidence">持续更新</button>
         <button type="button" data-hp-scroll="start">开始使用</button>
       </nav>
       <div class="hp-guest-actions">
         <button type="button" class="hp-menu-toggle" id="hp-menu-toggle" aria-expanded="false" aria-controls="hp-mobile-menu">导航</button>
-        <button type="button" class="hp-login" id="hp-login">登录 / 注册</button>
+        <button type="button" class="hp-login" id="hp-login" data-hp-workspace>进入工作台</button>
       </div>
     </header>
     <div class="hp-mobile-menu" id="hp-mobile-menu" hidden>
-      <button type="button" data-hp-scroll="scenes">使用场景</button>
-      <button type="button" data-hp-scroll="evidence">功能介绍</button>
+      <button type="button" data-hp-scroll="scenes">样片示例</button>
+      <button type="button" data-hp-scroll="evidence">持续更新</button>
       <button type="button" data-hp-scroll="start">开始使用</button>
     </div>
 
@@ -54,20 +54,44 @@
       <section class="view active" id="home-view" data-view-panel="home">
         <div class="home-loading" id="home-loading">正在确认登录状态…</div>
 
-        <!-- 未登录：新用户首页（A 页头在 header 内，B-G 见下） -->
-        <div class="home-landing" id="guest-home" hidden>
-          <section class="hp-hero" aria-label="更新或首次制作商品图">
-            <div class="hp-hero-text">
-              <p class="hp-eyebrow">商品图 · 持续更新</p>
-              <h1>商品变了，<br><em>图片跟上。</em></h1>
-              <p class="hp-lead">上传一张商品原图，确认关键信息，选一个方案。生成前看清真实报价，生成后在当前页面追踪进度并下载。</p>
-              <div class="hp-actions">
-                <button class="hp-entry" id="hp-update" type="button">更新商品图</button>
-                <button class="hp-entry" id="hp-create" type="button">首次制作商品图</button>
+        <div class="home-landing diffuser-home" id="guest-home" hidden>
+          <section class="diffuser-hero" aria-labelledby="diffuser-title">
+            <div class="diffuser-intro">
+              <h1 id="diffuser-title">商品图，可以一直更新</h1>
+              <p>上新做一套，换季或换包装时，只改需要的图。</p>
+              <div class="diffuser-actions">
+                <button type="button" class="diffuser-primary" data-hp-workspace>进入工作台</button>
+                <button type="button" data-hp-scroll="scenes">看样片 <span aria-hidden="true">↓</span></button>
               </div>
-              <p class="hp-micro">免费改字 · 保留满意版本 · 未登录可先看示例</p>
             </div>
-            <div class="hp-hero-side">
+            <img class="diffuser-cover" src="assets/demo/diffuser-hero.jpg" width="1552" height="515" alt="柑橘与浅色石台上的琥珀色藤条香薰">
+          </section>
+          <section class="diffuser-section" id="scenes" aria-labelledby="diffuser-samples-title">
+            <p class="diffuser-kicker">示例项目 · 柑橘藤条香薰</p>
+            <h2 id="diffuser-samples-title">首次上新，生成一整套图</h2>
+            <div class="diffuser-samples">
+              <figure><img loading="lazy" src="assets/demo/diffuser-white.jpg" width="290" height="259" alt="香薰瓶正面白底图"><figcaption>白底主图</figcaption></figure>
+              <figure><img loading="lazy" src="assets/demo/diffuser-scene.jpg" width="290" height="259" alt="香薰瓶的柑橘主题场景"><figcaption>场景图</figcaption></figure>
+              <figure><img loading="lazy" src="assets/demo/diffuser-detail.jpg" width="288" height="259" alt="香薰瓶瓶口、藤条和标签的特写"><figcaption>细节图</figcaption></figure>
+            </div>
+          </section>
+          <section class="diffuser-section diffuser-update" id="evidence" aria-labelledby="diffuser-update-title">
+            <p class="diffuser-kicker">同一个商品 · 换季示例</p>
+            <h2 id="diffuser-update-title">只更新需要改的那张</h2>
+            <p>换季时给香薰补一张秋季场景，原来的主图和细节图继续用。</p>
+            <div class="diffuser-samples diffuser-pair">
+              <figure><img loading="lazy" src="assets/demo/diffuser-hero.jpg" width="1552" height="515" alt="更新前的柑橘主题场景"><figcaption>更新前 · 柑橘场景</figcaption></figure>
+              <figure><img loading="lazy" src="assets/demo/diffuser-autumn.jpg" width="429" height="256" alt="更新后的秋叶主题场景"><figcaption>更新后 · 秋季场景</figcaption></figure>
+            </div>
+          </section>
+          <section class="diffuser-section diffuser-start" id="start" aria-labelledby="diffuser-start-title">
+            <h2 id="diffuser-start-title">用你的商品，做第一套图</h2>
+            <button type="button" class="diffuser-primary" data-hp-workspace>进入工作台</button>
+            <div class="diffuser-actions diffuser-secondary">
+              <button id="hp-create" type="button">首次制作商品图</button>
+              <button id="hp-update" type="button">更新商品图</button>
+            </div>
+            <details class="diffuser-process"><summary>查看商品规格变更演示</summary>
               <div class="hp-demo" id="hp-demo" aria-label="商品变化四步演示">
                 <div class="hp-demo-head"><strong>一次更新，四步完成</strong><span class="hp-tag">示例演示</span></div>
                 <div class="hp-demo-body">
@@ -89,72 +113,9 @@
                   </div>
                 </div>
               </div>
-            </div>
+            </details>
           </section>
-
-          <section class="hp-section" id="scenes" aria-label="日常维护场景">
-            <div class="hp-section-head">
-              <div><span class="hp-eyebrow">日常维护</span><h2>变了，也不用重来。</h2></div>
-              <p>改规格、分 SKU、补说明。</p>
-            </div>
-            <div class="hp-grid">
-              <article class="hp-card">
-                <span class="hp-number">01 / 商品变了</span>
-                <div class="hp-diagram"><span class="hp-tile">50g × 1</span><span aria-hidden="true">→</span><span class="hp-tile">50g × 2</span></div>
-                <h3>改规格</h3>
-                <p>找到受影响图片，其余保留。</p>
-                <button class="hp-card-link" type="button" data-hp-scene="impact"><span>查看影响清单</span><span aria-hidden="true">→</span></button>
-              </article>
-              <article class="hp-card">
-                <span class="hp-number">02 / 规格多了</span>
-                <div class="hp-diagram"><span class="hp-tile">单支装</span><span class="hp-tile">双支装</span><span class="hp-tile">礼盒装</span></div>
-                <h3>分清 SKU</h3>
-                <p>按规格核对，分组导出。</p>
-                <button class="hp-card-link" type="button" data-hp-scene="compare"><span>查看核对过程</span><span aria-hidden="true">→</span></button>
-              </article>
-              <article class="hp-card">
-                <span class="hp-number">03 / 买家问了</span>
-                <div class="hp-diagram"><span class="hp-tile">“里面有几支？”</span><span aria-hidden="true">→</span><span class="hp-tile">清单图</span></div>
-                <h3>补张说明图</h3>
-                <p>尺寸、包含物、规格差别，一图说明。</p>
-                <button class="hp-card-link" type="button" data-hp-scene="question"><span>体验问题分流</span><span aria-hidden="true">→</span></button>
-              </article>
-            </div>
-          </section>
-
-          <section class="hp-evidence" id="evidence" aria-label="功能依据">
-            <div class="hp-evidence-intro">
-              <span class="hp-eyebrow">看得见的处理依据</span>
-              <h2>改哪里，<br>一眼清楚。</h2>
-              <p>有依据地更新，确认后再交付。</p>
-              <span class="hp-tag">流程说明 · 非真实经营数据</span>
-              <p class="hp-honest">主体区域检查与本地合成只能约束可验证的部分，实际效果需验收；平台规则未核验项如实说明，不强求「一定能上架」。</p>
-            </div>
-            <div class="hp-proof-list">
-              <div class="hp-proof"><b>↗ 找到关联图片</b><small>按已记录的关联查找，旧图需核对。</small></div>
-              <div class="hp-proof"><b>◎ 保留满意版本</b><small>只更新选中的图片。</small></div>
-              <div class="hp-proof"><b>✎ 区分免费与付费</b><small>改字免费，生成前确认报价。</small></div>
-              <div class="hp-proof"><b>✓ 复核后整理导出</b><small>附替换清单，手动更新店铺。</small></div>
-            </div>
-          </section>
-
-          <section class="hp-cta" id="start" aria-label="开始使用">
-            <span class="hp-eyebrow">现在开始</span>
-            <h2>让商品图，跟上每次变化。</h2>
-            <p>从一个商品开始。</p>
-            <button class="hp-cta-btn" id="hp-cta-update" type="button">更新商品图 ↗</button>
-          </section>
-
-          <footer class="hp-footer">
-            <div class="hp-footer-brand"><strong>千图百炼</strong><p>快捷创意 · 商品视觉工作台</p></div>
-            <div class="hp-footer-links">
-              <button type="button" data-hp-scroll="scenes">使用场景</button>
-              <button type="button" data-hp-scroll="evidence">功能介绍</button>
-              <button type="button" data-hp-scroll="start">开始使用</button>
-              <button type="button" id="hp-footer-login">登录 / 注册</button>
-            </div>
-            <p class="hp-footer-note">短视频首帧、详情页模块等能力将在后续阶段开放。示例演示不调用生成模型、不扣额度、不上传文件，也不写入真实商品。</p>
-          </footer>
+          <footer class="diffuser-footer"><strong>千图百炼</strong><span>图片为设计示例，不代表实际生成结果。</span></footer>
         </div>
 
         <!-- 已登录：工作首页，数字与待办来自当前账户的真实数据 -->

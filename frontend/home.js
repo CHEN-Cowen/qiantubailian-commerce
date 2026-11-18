@@ -151,7 +151,7 @@ function takeIntent() {
     if (!raw) return null;
     sessionStorage.removeItem(INTENT_KEY);
     const parsed = JSON.parse(raw);
-    if (!['update', 'create'].includes(parsed?.kind)) return null;
+    if (!['update', 'create', 'workspace'].includes(parsed?.kind)) return null;
     if (Date.now() - Number(parsed.at ?? 0) > INTENT_TTL_MS) return null;
     return parsed.kind;
   } catch { return null; }
@@ -217,6 +217,20 @@ async function openProjectPicker() {
   }
 }
 
+async function openWorkspace() {
+  if (window.__qtbAuthState?.demoMode && !window.__qtbAuthState?.authenticated) {
+    navigate('create');
+    return;
+  }
+  try {
+    const { projects } = await api.listProjects();
+    navigate(Array.isArray(projects) && projects.length === 0 ? 'create' : 'projects');
+  } catch {
+    // The project view can show the fetch error with its existing retry action.
+    navigate('projects');
+  }
+}
+
 function startEntry(kind) {
   const auth = window.__qtbAuthState ?? {};
   if (!auth.authenticated && !auth.demoMode) {
@@ -224,11 +238,12 @@ function startEntry(kind) {
     openAuthGate({
       demoHint: kind === 'update'
         ? '登录后会继续你刚才选择的「更新商品图」。'
-        : '登录后会继续你刚才选择的「首次制作商品图」。',
+        : kind === 'workspace' ? '登录后进入工作台。' : '登录后会继续你刚才选择的「首次制作商品图」。',
     });
     return;
   }
   if (kind === 'update') void openProjectPicker();
+  else if (kind === 'workspace') void openWorkspace();
   else navigate('create');
 }
 
@@ -258,6 +273,7 @@ async function boot() {
   const intent = takeIntent();
   if (intent === 'update') void openProjectPicker();
   if (intent === 'create') navigate('create');
+  if (intent === 'workspace') void openWorkspace();
 }
 
 /* ---------- 交互接线 ---------- */
@@ -273,7 +289,7 @@ function bind() {
   $('#hp-update')?.addEventListener('click', () => startEntry('update'));
   $('#hp-create')?.addEventListener('click', () => startEntry('create'));
   $('#hp-cta-update')?.addEventListener('click', () => startEntry('update'));
-  $('#hp-login')?.addEventListener('click', () => openAuthGate());
+  $$('[data-hp-workspace]').forEach(button => button.addEventListener('click', () => startEntry('workspace')));
   $('#hp-footer-login')?.addEventListener('click', () => openAuthGate());
   $('#work-new-project')?.addEventListener('click', () => startEntry('create'));
 

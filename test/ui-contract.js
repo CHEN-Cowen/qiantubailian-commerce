@@ -12,11 +12,11 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   const [html, app, style, viewport] = await Promise.all([
     read('index.html'), read('app.js'), read('style.css'), read('viewport.css'),
   ]);
-  for (const text of ['快捷创意', '我的商品', '我的作品', '商品事实已确认', '质量检查', '专业模式', '演示项目 · 刷新重置']) {
+  for (const text of ['商品图，可以一直更新', '我的商品', '我的作品', '商品事实已确认', '质量检查', '专业模式', '演示项目 · 刷新重置']) {
     assert.match(html, new RegExp(text));
   }
-  assert.match(html, /短视频首帧[\s\S]*后续阶段/);
-  assert.match(html, /详情页模块[\s\S]*后续阶段/);
+  assert.match(html, /图片为设计示例，不代表实际生成结果/);
+
   assert.ok(!html.includes('以下为演示数据'), '正式「我的商品」区不得再展示演示数据分隔与表格');
   assert.ok(!html.includes('data-open-project="skin"'), '正式商品列表不得挂演示项目入口');
   assert.match(app, /function setView\(view\)/);

@@ -20,16 +20,19 @@ test('首页分流：未登录新用户首页与已登录工作首页同时存�
   assert.match(home, /work.*hidden/);
 });
 
-test('首屏两个入口同级，规格与文案符合原型', async () => {
+test('首页提供正式工作台入口和独立的静态香薰样片', async () => {
   const html = await read('frontend/index.html');
-  assert.match(html, /id="hp-update"[^>]*>更新商品图</);
-  assert.match(html, /id="hp-create"[^>]*>首次制作商品图</);
-  const css = await read('frontend/home.css');
-  assert.match(css, /\.hp-entry[^}]*width:\s*180px/s);
-  assert.match(css, /\.hp-entry[^}]*height:\s*48px/s);
-  assert.match(css, /#DEECA6/);
-  assert.match(css, /#213D2B/);
-  assert.match(css, /#D0E48C/);
+  assert.match(html, /data-hp-workspace>进入工作台/);
+  assert.match(html, /商品图，可以一直更新/);
+  assert.match(html, /示例项目 · 柑橘藤条香薰/);
+  const server = await read('src/server.mjs');
+  const photos = [...new Set([...html.matchAll(/src="(assets\/demo\/diffuser-[a-z]+\.jpg)"/g)].map(match => match[1]))];
+  assert.equal(photos.length, 5);
+  for (const photo of photos) {
+    assert.ok(server.includes(`'${photo}'`));
+    const bytes = await readFile(path.join(ROOT, 'frontend', photo));
+    assert.deepEqual([...bytes.subarray(0, 3)], [255, 216, 255]);
+  }
 });
 
 test('未登录入口先保留意图并打开登录闸口，登录后继续', async () => {
