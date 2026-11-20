@@ -903,6 +903,12 @@ const backgroundLabel = value => BACKGROUND_LABEL[value] ?? value ?? '未标注'
 /** 模板缩略图是排版示意，不是生成结果；用背景方向和文字块位置表达方案差异。 */
 function templateArt(item) {
   const background = item.creative_direction?.background ?? 'scene';
+  const photo = {
+    plain_white: 'diffuser-white.jpg',
+    scene: 'diffuser-scene.jpg',
+    lifestyle: 'diffuser-autumn.jpg',
+  }[background];
+  if (photo) return `<img class="wiz-art wiz-sample-photo" src="assets/demo/${photo}" alt="香薰背景样片示意" loading="lazy">`;
   const ratio = item.deliverables?.[0]?.ratio ?? '1:1';
   const tall = ratio === '3:4' || ratio === '9:16';
   const hasCopy = (item.deliverables ?? []).some(deliverable => (deliverable.text_blocks ?? []).length > 0);

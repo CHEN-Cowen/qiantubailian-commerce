@@ -65,7 +65,13 @@
                 <button type="button" data-hp-scroll="scenes">看样片 <span aria-hidden="true">↓</span></button>
               </div>
             </div>
-            <img class="diffuser-cover" src="assets/demo/diffuser-hero.jpg" width="1552" height="515" alt="柑橘与浅色石台上的琥珀色藤条香薰">
+            <div class="landing-showcase" aria-label="柑橘藤条香薰样片">
+              <figure class="landing-main"><img class="diffuser-cover" src="assets/demo/diffuser-hero.jpg" width="1552" height="515" alt="柑橘与浅色石台上的琥珀色藤条香薰"><figcaption>柑橘藤条香薰 · 场景示例</figcaption></figure>
+              <div class="landing-thumbs">
+                <figure><img src="assets/demo/diffuser-white.jpg" alt="香薰白底主图"><figcaption>白底主图</figcaption></figure>
+                <figure><img src="assets/demo/diffuser-detail.jpg" alt="香薰包装细节"><figcaption>包装细节</figcaption></figure>
+              </div>
+            </div>
           </section>
           <section class="diffuser-section" id="scenes" aria-labelledby="diffuser-samples-title">
             <p class="diffuser-kicker">示例项目 · 柑橘藤条香薰</p>
@@ -124,17 +130,11 @@
         <div class="work-home" id="work-home" hidden>
           <div class="work-head">
             <div>
-              <p class="hp-eyebrow">我的工作首页</p>
-              <h1>今天，先把这些图片处理好。</h1>
-              <p class="work-head-note">最近的商品变化与未完成事项，都在这里。</p>
+              <h1 id="work-title">商品图工作台</h1>
+              <p class="work-head-note" id="work-next">从商品实拍开始，一次制作多张上架图。</p>
             </div>
             <button class="work-new" id="work-new-project" type="button">＋ 制作一套商品图</button>
           </div>
-          <nav class="work-nav" aria-label="工作首页导航">
-            <button type="button" data-work-scroll="work-todos">待办事项</button>
-            <button type="button" data-work-scroll="work-summary">工作概览</button>
-            <button type="button" data-work-scroll="work-delivery">最近交付</button>
-          </nav>
           <section class="work-section" id="work-todos" aria-label="待办事项">
             <div class="work-section-head">
               <h2>继续处理</h2>
@@ -142,17 +142,17 @@
             </div>
             <div id="home-todos" class="home-todos" aria-live="polite"><p class="real-empty">正在读取待办…</p></div>
           </section>
-          <section id="work-summary" aria-label="工作概览">
-            <div class="metric-strip" id="home-metrics"><p>正在读取工作概览…</p></div>
-            <p class="work-metric-note" id="work-metrics-note">指标来自不同记录，可能重叠，不做合计。</p>
-          </section>
           <section class="work-section" aria-label="最近商品">
             <div class="work-section-head">
-              <div><h2>最近商品</h2><p>从最近的商品继续制作或查看商品事实。</p></div>
+              <h2 id="work-recent-title">最近商品</h2>
               <button class="text-button" data-view="projects">查看全部 →</button>
             </div>
             <div id="home-real-projects"></div>
             <div class="project-list" id="home-demo-projects" hidden></div>
+          </section>
+          <section id="work-summary" aria-label="工作概览">
+            <div class="metric-strip" id="home-metrics"><p>正在读取工作概览…</p></div>
+            <p class="work-metric-note" id="work-metrics-note">指标来自不同记录，可能重叠，不做合计。</p>
           </section>
           <section class="work-section" id="work-delivery" aria-label="最近交付">
             <div class="work-section-head">
@@ -165,7 +165,7 @@
       </section>
 
       <section class="view" id="projects-view" data-view-panel="projects">
-        <div class="page-heading compact"><div><p class="eyebrow">我的商品</p><h1>我的商品</h1><p class="heading-note">每个商品都保留事实、素材与原图；可继续制作、再做一套，或从已有风格制作新品。</p></div><button type="button" class="secondary" id="batch-open">多 SKU 批量制作</button><button class="primary" id="projects-new"><span>＋</span> 新建商品</button></div>
+        <div class="page-heading compact"><div><p class="eyebrow">我的商品</p><h1>我的商品</h1><p class="heading-note">每个商品都保留事实、素材与原图；可继续制作、再做一套，或从已有风格制作新品。</p></div><div class="project-heading-actions"><button type="button" class="secondary" id="batch-open">多 SKU 批量制作</button><button class="primary" id="projects-new"><span>＋</span> 新建商品</button></div></div>
         <section class="real-projects" id="real-projects" aria-live="polite">
           <div class="real-head">
             <div><h2>我的项目</h2></div>
@@ -180,7 +180,7 @@
       <!-- 模块02：首次制作一页三步向导（上传商品 → 确认必要信息 → 风格与交付），取代旧 project-dialog 弹窗 -->
       <section class="view" id="create-view" data-view-panel="create" hidden>
         <div class="page-heading compact">
-          <div><p class="eyebrow">首次制作</p><h1>三步开始制作</h1><p class="heading-note">上传商品 → 确认必要信息 → 风格与交付；费用在生成前用真实报价说明，不硬编码。</p></div>
+          <div><h1>制作一套商品图</h1><p class="heading-note">上传实拍，选好图片和风格，确认费用后开始制作。</p></div>
           <button class="secondary" id="wiz-exit">返回</button>
         </div>
         <ol class="wiz-steps" id="wiz-steps" aria-label="制作步骤">

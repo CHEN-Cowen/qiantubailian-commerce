@@ -225,15 +225,13 @@ function renderHomeRealProjects() {
   const demo = $('#home-demo-projects');
   if (!holder) return;
   const projects = state.projects ?? [];
+  $('#work-recent-title').textContent = projects.length ? '最近商品' : '上架套图样片';
   if (projects.length === 0) {
-    holder.innerHTML = `<div class="empty-state">
-      <h3>还没有商品</h3>
-      <p>先建立商品档案并关联图片，才能查看变更影响、待办与交付记录。</p>
-      <div class="state-actions">
-        <button type="button" data-home-create>建立商品档案</button>
-        <button type="button" data-home-projects>查看我的商品</button>
-      </div>
-    </div>`;
+    holder.innerHTML = `<div class="work-samples">
+      <figure><img src="assets/demo/diffuser-white.jpg" alt="香薰白底样片"><figcaption>白底主图</figcaption></figure>
+      <figure><img src="assets/demo/diffuser-scene.jpg" alt="香薰场景样片"><figcaption>桌面场景图</figcaption></figure>
+      <figure><img src="assets/demo/diffuser-detail.jpg" alt="香薰细节样片"><figcaption>包装细节图</figcaption></figure>
+    </div><p class="work-empty-note">样片示例 · 添加第一个商品后，这里会显示你的商品。</p>`;
     if (demo) demo.hidden = true;
     return;
   }
@@ -245,7 +243,7 @@ function renderHomeRealProjects() {
   holder.innerHTML = `<div class="project-list">${recent.map(project => {
     const readiness = project.readiness ?? { can_start_production: false };
     const ready = readiness.can_start_production;
-    const statusText = ready ? '可开始生产' : `阻断 ${readiness.blocker_count ?? 1} 项`;
+    const statusText = ready ? '可制作' : '待补资料';
     const statusClass = ready ? 'status-pill green' : 'status-pill amber';
     return `<article class="project-card" data-project-id="${escapeHtml(project.id)}">
       <div class="project-cover real-cover"><div class="cover-product">${escapeHtml(project.name.slice(0, 2))}</div></div>
@@ -256,10 +254,8 @@ function renderHomeRealProjects() {
         </div>
         <p>${escapeHtml(project.category)}${project.platform ? ` · ${escapeHtml(project.platform)}` : ''} · 生效素材 ${project.active_asset_count ?? 0} · 事实 v${project.truth_head_version ?? 0}</p>
         <div class="project-foot">
-          <button class="text-button" data-action="truth">商品事实</button>
-          <button class="text-button" data-action="spec">生产配置</button>
-          <button class="text-button" data-action="workbench">打开工作台 →</button>
-          <button class="text-button" data-action="remake">再做一套</button><button class="text-button" data-action="update-images">更新包装或规格</button>
+          <button class="secondary" data-action="workbench">打开商品工作台</button>
+          <button class="text-button" data-action="update-images">更新包装或规格</button>
         </div>
       </div>
     </article>`;
@@ -267,6 +263,7 @@ function renderHomeRealProjects() {
   // home-real-projects 里的 data-action=workbench/truth/spec 复用 onRealListClick 已经监听的 data-action 机制——
   // 但项目卡片上没带 data-project-id，补一下
   holder.querySelectorAll('[data-project-id]').forEach(card => {
+    void loadRecentProductImage(card);
     card.addEventListener('click', event => {
       const trigger = event.target.closest('[data-action]');
       if (!trigger) {
@@ -2510,13 +2507,7 @@ async function loadTodos() {
 function renderTodos(payload) {
   const holder = $('#home-todos');
   if (!holder) return;
-  const summary = payload.summary ?? {};
-  const chips = `<div class="todo-summary">
-    <span class="todo-chip unknown">未知 ${summary.unknown ?? 0}</span>
-    <span class="todo-chip failed">失败 ${summary.failed ?? 0}</span>
-    <span class="todo-chip review">待复核 ${summary.awaiting_review ?? 0}</span>
-    <span class="todo-chip adopted">已采用 ${summary.adopted ?? 0}</span>
-  </div>`;
+
   const limits = payload.limits ?? {};
   const budget = payload.budget ?? {};
   const limitsHtml = `<details class="todo-limits">
@@ -2527,19 +2518,15 @@ function renderTodos(payload) {
     <p>可用额度 ${budget.available ?? 0} 张（预留 ${budget.reserved ?? 0} 张）。额度不足时不会入队，也不调用供应商。</p>
   </details>`;
   const groups = (payload.groups ?? []).filter(group => group.total > 0);
+  const total = groups.filter(group => group.key !== 'adopted').reduce((sum, group) => sum + group.total, 0);
+  $('#work-title').textContent = total ? '继续处理商品图' : '制作一套商品图';
+  $('#work-next').textContent = total ? `有 ${total} 项需要处理，直接打开对应商品继续。` : '从商品实拍开始，一次制作多张上架图。';
   if (groups.length === 0) {
-    holder.innerHTML = `${chips}<div class="empty-state">
-      <h3>当前没有待处理事项</h3>
-      <p>未知、失败与待复核都是 0；新任务可以从「制作新商品图」或商品页进入。</p>
-      <div class="state-actions">
-        <button type="button" data-home-create>制作新商品图</button>
-        <button type="button" data-home-projects>查看我的商品</button>
-      </div>
-    </div>${limitsHtml}`;
+    holder.innerHTML = `<p class="work-empty-note">暂无待处理事项</p>${limitsHtml}`;
     return;
   }
   const projects = state.projects ?? [];
-  holder.innerHTML = `${chips}<div class="todo-groups">${groups.map(group => `
+  holder.innerHTML = `<div class="todo-groups">${groups.map(group => `
     <div class="todo-group" data-group="${escapeHtml(group.key)}">
       <div class="todo-group-head"><h3>${escapeHtml(group.label)}</h3><span>${group.total}</span></div>
       <p class="todo-group-hint">${escapeHtml(TODO_GROUP_HINT[group.key] ?? '')}</p>
@@ -2789,6 +2776,24 @@ const WORK_RUN_STATUS_LABEL = {
   needs_review: '待复核', budget_confirmation: '待确认额度', completed: '已完成',
   failed: '失败', cancelled: '已取消',
 };
+
+async function loadRecentProductImage(card) {
+  try {
+    const { runs } = await api.listRunsByProject(card.dataset.projectId);
+    const run = runs.find(item => item.status === 'completed');
+    if (!run || !card.isConnected) return;
+    const versions = await api.listRunVersions(run.id);
+    const version = versions.versions.find(item => item.active);
+    if (!version || !card.isConnected) return;
+    const cover = card.querySelector('.project-cover');
+    const img = new Image();
+    img.alt = card.querySelector('h3').textContent + '成品预览';
+    img.addEventListener('load', () => cover.replaceChildren(img), { once: true });
+    img.src = workVersionImageUrl(run.id, version.id);
+  } catch {
+    // The initial remains visible when the account has no available preview.
+  }
+}
 
 function workVersionImageUrl(runId, versionId) {
   return `/api/runs/${encodeURIComponent(runId)}/versions/${encodeURIComponent(versionId)}/content`;
