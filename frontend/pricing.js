@@ -96,7 +96,7 @@ function render() {
   const payment = state.payment ?? {};
   // 后端 evaluatePaymentCapability 返回 can_checkout / real_money / mode
   const canPurchase = payment.can_checkout === true && payment.real_money === true;
-  const acceptance = payment.acceptance ?? 'simulated_only';
+
 
   const plansHtml = plans.map(plan => {
     plan.free = plan.kind === 'experience' || plan.price_cents === 0;
@@ -147,9 +147,7 @@ function render() {
     <section class="pricing-section">
       <h2>套餐与价格</h2>
       <p class="real-hint">
-        价格全部来自服务端，前端不可篡改。当前支付能力：
-        <b>${escapeHtml(payment.provider ?? '未配置')}</b> ·
-        ${escapeHtml(payment.note ?? acceptance)}
+        可以先试做，再按成品张数与使用期限选择套餐。
       </p>
       <div class="pricing-grid">${plansHtml}</div>
     </section>

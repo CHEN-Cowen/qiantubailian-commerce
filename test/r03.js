@@ -352,7 +352,10 @@ test('R03 体验额度：绑定第一个商品后不能再给第二个商品；�
 // ---------- 3. 套餐目录与到期快照 ----------
 test('R03 套餐：体验 3 张/1 商品；付费包价格、有效期与不结转规则明确；订单发放幂等', () => {
   const catalog = listCommercePlans();
-  assert.equal(catalog.plans.length, 4);
+  const season = commercePlanById('plan_season_120');
+  assert.equal(season.credits, 120);
+  assert.equal(season.price_cents, 20700);
+  assert.equal(season.validity_days, 90);
   const trial = commercePlanById('plan_first_trial');
   assert.equal(trial.credits, 3);
   assert.equal(trial.products, 1);

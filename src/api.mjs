@@ -1,3 +1,4 @@
+import { compileRevisionInstruction, formatFactText } from './execution.mjs';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -109,7 +110,7 @@ const newId = prefix => `${prefix}_${randomBytes(8).toString('hex')}`;
 // P3：能复用现有重生成流程执行的动作。其余动作（格式转换/缩画布/文字重排）本阶段没有安全入口，
 // 规划可以建议，但服务端明确拒绝执行，避免"点了确认却做了另一件事"。
 const EXECUTABLE_REVISION_ACTIONS = Object.freeze([
-  'regenerate_image', 'regenerate_background', 'recompose_subject',
+  'regenerate_image', 'regenerate_background', 'recompose_subject', 'recompose_text',
 ]);
 const now = () => new Date().toISOString();
 const fingerprintOf = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -3548,7 +3549,7 @@ export function createApi({
     const factTexts = {};
     for (const change of order.diff?.facts ?? []) {
       if (change.change === 'removed' || !change.to) continue;
-      factTexts[change.key] = String(change.to.value ?? '');
+      factTexts[change.key] = formatFactText(change.to);
     }
     const result = await jobs.recomposeVersionFacts({
       ctx,
@@ -4774,7 +4775,7 @@ export function createApi({
    * specVersion（E03）：变更单重生成使用按新事实冻结的快照，而非源任务旧 spec。
    * expectedCredits（E03）：实际报价高于已确认报价时拒绝（在预留额度之前）。
    */
-  async function launchRegeneration({ ctx, sourceRunId, deliverableId, sourceVersionId = null, idempotencyKey, specVersion = null, expectedCredits = null }) {
+  async function launchRegeneration({ ctx, sourceRunId, deliverableId, sourceVersionId = null, idempotencyKey, specVersion = null, expectedCredits = null, revisionInstruction = null }) {
     const prepared = await store.read(data => {
       const sourceRun = Object.values(data.runs ?? {})
         .find(item => item.tenant_id === ctx.tenantId && item.id === sourceRunId);
@@ -4828,6 +4829,7 @@ export function createApi({
         source_version_id: sourceVersionId,
         spec_version: prepared.spec.version,
         scenario,
+        ...(revisionInstruction ? { revision_instruction_hash: revisionInstruction.hash } : {}),
       }),
       regeneration: {
         source_run_id: sourceRunId,
@@ -4835,6 +4837,7 @@ export function createApi({
         source_version_id: sourceVersionId,
         // E03：变更单重生成显式冻结了新 spec 快照，报价一致性对照新快照而非源任务旧 spec
         spec_override: specVersion != null,
+        revision_instruction: revisionInstruction,
       },
     });
     return { created, prepared };
@@ -6965,7 +6968,7 @@ export function createApi({
     });
     if (record.status === 'executed') {
       return send(200, {
-        plan_id: planId, plan: record.plan, child_run_id: record.child_run_id,
+        plan_id: planId, plan: record.plan, child_run_id: record.child_run_id, version_id: record.execution?.version_id,
         executed: true, replayed: true, note: '同一确认已执行过，未重复提交',
       });
     }
@@ -7007,9 +7010,42 @@ export function createApi({
         current: input.run.product_context.context_hash,
       });
     }
+    if (record.action === 'recompose_text') {
+      if (!input.version || input.version.report_id !== record.report_id || !input.truth) {
+        throw new ApiError(409, 'VERSION_CONFLICT', '请在当前选用版本上重新检查文字后再修复');
+      }
+      const factTexts = Object.fromEntries((input.truth.facts ?? [])
+        .filter(fact => fact.confirmed === true)
+        .map(fact => [fact.key, formatFactText(fact)]));
+      const result = await jobs.recomposeVersionFacts({
+        ctx, runId, deliverableId: record.deliverable_id, baseVersionId: input.version.id,
+        factTexts, truthVersion: input.truth.version, note: '按已确认商品事实修复文字',
+      });
+      const plan = { ...record.plan, executed: true, version_id: result.version.id };
+      await store.mutate(data => {
+        const item = data.revision_plans[planId];
+        item.status = 'executed';
+        item.executed_at = new Date(clock()).toISOString();
+        item.executed_by = ctx.actorId;
+        item.execution = { action: record.action, idempotency_key: idempotencyKey, version_id: result.version.id };
+        item.plan = plan;
+      });
+      return send(201, {
+        plan_id: planId, plan, version_id: result.version.id, activated: result.activated,
+        executed: true, requires_recheck: true,
+      });
+    }
+    const revisionInstruction = compileRevisionInstruction({
+      actions: stillOpen.map(check => ({
+        code: check.code,
+        instruction: record.plan.instruction,
+        region: check.evidence?.region ?? null,
+      })),
+      preserveChecks: (input.report.checks ?? []).filter(check => check.status === 'pass'),
+    });
     const sourceVersionId = record.source_version_id?.startsWith('ver_') ? record.source_version_id : null;
     const { created, prepared } = await launchRegeneration({
-      ctx, sourceRunId: runId, deliverableId: record.deliverable_id,
+      ctx, sourceRunId: runId, deliverableId: record.deliverable_id, revisionInstruction,
       sourceVersionId, idempotencyKey,
     });
     const executedAt = new Date(clock()).toISOString();

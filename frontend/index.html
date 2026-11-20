@@ -60,7 +60,8 @@
               <h1 id="diffuser-title">商品图，可以一直更新</h1>
               <p>上新做一套，换季或换包装时，只改需要的图。</p>
               <div class="diffuser-actions">
-                <button type="button" class="diffuser-primary" data-hp-workspace>进入工作台</button>
+                <button type="button" class="diffuser-primary" data-hp-entry="create">制作商品图</button>
+                <button type="button" data-hp-entry="update">更新已有商品图</button>
                 <button type="button" data-hp-scroll="scenes">看样片 <span aria-hidden="true">↓</span></button>
               </div>
             </div>
@@ -86,7 +87,6 @@
           </section>
           <section class="diffuser-section diffuser-start" id="start" aria-labelledby="diffuser-start-title">
             <h2 id="diffuser-start-title">用你的商品，做第一套图</h2>
-            <button type="button" class="diffuser-primary" data-hp-workspace>进入工作台</button>
             <div class="diffuser-actions diffuser-secondary">
               <button id="hp-create" type="button">首次制作商品图</button>
               <button id="hp-update" type="button">更新商品图</button>
@@ -468,9 +468,12 @@
               </div>
             </div>
             <div class="wb-canvas-footer">
-              <div id="wb-canvas-meta"></div>
+              <div>
+                <p id="wb-next-step" class="real-note" role="status" hidden></p>
+                <div id="wb-canvas-meta"></div>
+              </div>
               <div class="wb-canvas-actions">
-                <button class="secondary" id="wb-revise-btn" hidden>局部修订</button>
+                <button class="secondary" id="wb-revise-btn" hidden>调整制作方案</button>
                 <button class="primary" id="wb-download-active" hidden>下载当前版本</button>
               </div>
             </div>

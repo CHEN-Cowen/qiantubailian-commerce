@@ -14,7 +14,7 @@
 import { ApiError } from './errors.mjs';
 import { appendEntry, grantExperienceCredits } from './credits.mjs';
 
-export const PLANS_VERSION = 'plans-2026-10-r03';
+export const PLANS_VERSION = 'plans-2026-11-r04';
 
 export const USAGE_EXAMPLE = Object.freeze({
   description: '1 个商品 = 1 张主图 + 2 张场景图 = 3 张额度',
@@ -91,6 +91,22 @@ export const COMMERCE_PLANS = Object.freeze([
     priority_queue: false,
     note: '月包按到账起 30 天计算，不自动续费；当前未承诺批量或优先队列权益',
     terms: '¥199 / 150 张，到账起 30 天内有效，未用不结转',
+  }),
+  Object.freeze({
+    id: 'plan_season_120',
+    name: '季度更新包',
+    kind: 'one_time',
+    credits: 120,
+    products: null,
+    price_cents: 20700,
+    currency: 'CNY',
+    validity_days: 90,
+    auto_renew: false,
+    rollover: false,
+    includes_batch: false,
+    priority_queue: false,
+    note: '适合将 120 张图分批用于换季、换包装或补图',
+    terms: '¥207 / 120 张，到账起 90 天内有效，未用不结转',
   }),
 ]);
 

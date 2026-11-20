@@ -134,7 +134,7 @@ test('M04 模板目录：交付清单含比例/尺寸/格式/必需标记，且�
   const { port } = await start(t);
   const list = await request(port, '/api/catalog/templates', { headers: as() });
   assert.equal(list.status, 200);
-  assert.equal(list.json.templates.length, 3);
+  assert.ok(list.json.templates.some(item => item.id === 'tpl_single_white' && item.required_deliverable_count === 1));
   const listing = list.json.templates.find(item => item.id === 'tpl_listing_pack');
   assert.equal(listing.required_deliverable_count, 3);
   assert.equal(listing.recommended_budget.max_attempts, 3);

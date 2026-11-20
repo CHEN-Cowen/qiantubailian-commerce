@@ -13,7 +13,14 @@
  */
 import { createHash } from 'node:crypto';
 
-export const EXECUTION_VERSION = 'r04.execution.1';
+export function formatFactText(fact) {
+  const value = String(fact.value ?? '');
+  const unit = String(fact.unit ?? '').trim();
+  if (!value || !unit || value.toLowerCase().endsWith(unit.toLowerCase())) return value;
+  return value + ' ' + unit;
+}
+
+export const EXECUTION_VERSION = 'r04.execution.3';
 export const TEXT_POLICY = Object.freeze({
   render_text_by_provider: false,
   reason: '精确文字与 Logo 由可编辑排版层叠加，避免生成模型绘制文字导致乱码或错字',
@@ -69,7 +76,7 @@ function textLayerTexts({ textBlocks = [], truth }) {
       layers.push({
         source: 'fact',
         fact_key: key,
-        text: String(fact.value),
+        text: formatFactText(fact),
         critical: fact.critical === true,
         editable_text: true,
       });
@@ -122,7 +129,17 @@ export function compileTextLayers({ deliverable, truth, brandKitVersion = null }
   return { layers: compiled, missing, layout: deliverable?.type ?? null };
 }
 
-function promptSections({ project, spec, truth, brandKitVersion, deliverable, layers, missing }) {
+const SHOT_GUIDANCE = Object.freeze({
+  main_image: '使用商品参考图已有的视角，完整展示商品，边缘留出安全距离；商品为第一视觉焦点。',
+  selling_point: '保留可验证卖点对应的真实结构，确保商品和文字预留区分开；避免用悬浮图标或标签暗示未经确认的功能。',
+  scene_image: '选择能解释商品用途的实景，道具少而明确；商品与台面接触自然，投影、反射与现场光向一致，道具不遮挡关键部件或包装。',
+  detail_image: '围绕参考图中可见的真实材质、工艺或关键部件取景；保留足够的识别线索，不补绘参考图看不见的结构。',
+  ad_vertical: '完整保留商品轮廓，建立清楚的纵向视觉层级，避免把商品或关键识别信息贴在上下边缘。',
+  ad_landscape: '控制横幅中的主体比例，使用负空间组织画面，避免用拉伸或裁剪填满横幅。',
+  social_inner: '使用自然的拍摄视角和可辨识的真实细节，让商品用途在无额外文字的情况下可理解。',
+});
+
+function promptSections({ project, spec, truth, brandKitVersion, deliverable, layers, missing, sceneDirection }) {
   const facts = (truth?.facts ?? []).filter(fact => fact.confirmed === true);
   const criticalFacts = facts.filter(fact => fact.critical === true);
   const otherFacts = facts.filter(fact => fact.critical !== true);
@@ -131,18 +148,27 @@ function promptSections({ project, spec, truth, brandKitVersion, deliverable, la
   const banned = brandKitVersion?.banned_expressions ?? [];
   const palette = brandKitVersion?.palette ?? null;
   const lines = [];
-  lines.push(`【任务】生成「${deliverable.label}」（${deliverable.type ?? 'image'}，${deliverable.width}×${deliverable.height}，比例 ${deliverable.ratio ?? '按尺寸'}）。`);
+  lines.push(`【任务】生成「${deliverable.label}」（${deliverable.type ?? 'image'}），画布 ${deliverable.width}×${deliverable.height}。`);
   lines.push(`【商品】${project?.name ?? '未命名商品'}${project?.category ? `，品类 ${project.category}` : ''}${project?.sku ? `，SKU ${project.sku}` : ''}。`);
   if (criticalFacts.length > 0) {
-    lines.push(`【已确认关键事实】${criticalFacts.map(fact => `${fact.key}：${fact.value}`).join('；')}。只能原样呈现，不得改写、扩写或新增功效。`);
+    lines.push(`【已确认关键事实】${criticalFacts.map(fact => `${fact.key}：${formatFactText(fact)}`).join('；')}。只能原样呈现，不得改写、扩写或新增功效。`);
   }
   if (otherFacts.length > 0) {
-    lines.push(`【其他已确认事实】${otherFacts.map(fact => `${fact.key}：${fact.value}`).join('；')}。未确认信息一律不得出现在画面中。`);
+    lines.push(`【其他已确认事实】${otherFacts.map(fact => `${fact.key}：${formatFactText(fact)}`).join('；')}。未确认信息一律不得出现在画面中。`);
   }
   if ((truth?.critical_text ?? []).length > 0) {
     lines.push(`【包装关键文字】${truth.critical_text.map(item => item.text).join(' / ')}。必须与原始包装像素一致，不得重绘或替换。`);
   }
-  lines.push(`【背景】${deliverable.background ?? direction.background ?? '按模板'}；【光线】${direction.lighting ?? '按模板'}；【构图】${direction.whitespace ?? '无特殊要求'}，${direction.camera ?? '平视'}。`);
+  const background = deliverable.background ?? direction.background;
+  if (background === 'plain_white') {
+    lines.push('【画面】纯白无缝背景，商品完整居中，保留自然接触阴影；背景不出现道具、图案或渐变。');
+  } else {
+    lines.push(`【画面】${SHOT_GUIDANCE[deliverable.type] ?? '商品主体清晰，并与环境在透视和光线上一致。'}`);
+    lines.push(`【摄影方向】背景 ${background ?? '简洁'}；光线 ${direction.lighting ?? '柔和均匀'}；${direction.whitespace ?? '保留画面呼吸空间'}；机位 ${direction.camera ?? '与参考图一致'}，若参考图缺少所需视角，沿用可见视角。`);
+  }
+  if (deliverable.type === 'scene_image' && background !== 'plain_white' && sceneDirection) {
+    lines.push(`【场景执行】${sceneDirection.guidance.join('')} 若与上文摄影方向冲突，按上文执行；若与文字留白冲突，以实际文字区域为准。`);
+  }
   if (palette) {
     lines.push(`【品牌色】主色 ${palette.primary}${palette.secondary?.length ? `，辅色 ${palette.secondary.join('、')}` : ''}；只用于场景与排版氛围，不得改变商品本体颜色。`);
   }
@@ -153,8 +179,11 @@ function promptSections({ project, spec, truth, brandKitVersion, deliverable, la
   if (banned.length > 0) lines.push(`【禁用表达】${banned.join('、')}；任何情况下都不得出现。`);
   if (forbidden.length > 0) lines.push(`【不可改变】${forbidden.join('、')}。`);
   if (layers.length > 0) {
-    lines.push('【文字层】画面的营销文字与 Logo 由系统排版层叠加：请留出对应留白区域，不要在图像中绘制或改写任何文字、数字、Logo。');
+    const zones = [...new Set(layers.map(layer =>
+      `左侧起点 ${pct(layer.x)}、纵向位置 ${pct(layer.y)}、宽 ${pct(layer.width)}`))];
+    lines.push(`【文字层】为后置排版留出低纹理区域（自画布左上角量起）：${zones.join('；')}。这些区域避开商品轮廓和关键部件。`);
   }
+  lines.push('【图中文字】保留商品本身已有的包装文字与标识。营销标题、价格、规格角标和独立品牌 Logo 由系统后置排版，底图不新增这些元素。');
   lines.push('【主体保护】商品形状、包装文字、Logo 与颜色必须与参考图完全一致；只允许调整光线、阴影与场景。');
   lines.push(`【平台】${spec?.channel?.platform ?? '未指定'}；尺寸与格式按冻结快照输出，不额外裁切。平台审核结论未核验，不要声称一定能通过审核。`);
   if (missing.length > 0) {
@@ -166,11 +195,13 @@ function promptSections({ project, spec, truth, brandKitVersion, deliverable, la
 /**
  * 编译整份执行计划：一次生成、逐交付物可查。
  */
-export function compileExecutionPlan({ project, spec, truth, brandKitVersion = null } = {}) {
+export function compileExecutionPlan({ project, spec, truth, brandKitVersion = null, sceneDirections = {} } = {}) {
   const deliverables = [];
   for (const item of spec?.deliverables ?? []) {
     const { layers, missing } = compileTextLayers({ deliverable: item, truth, brandKitVersion });
+    const sceneDirection = item.type === 'scene_image' ? sceneDirections[item.id] : null;
     deliverables.push({
+      ...(sceneDirection ? { scene_direction: sceneDirection } : {}),
       template_deliverable_id: item.id,
       label: item.label,
       type: item.type,
@@ -189,7 +220,7 @@ export function compileExecutionPlan({ project, spec, truth, brandKitVersion = n
       text_layers: layers,
       missing_text: missing,
       forbidden_changes: [...(spec?.template?.forbidden_changes ?? [])],
-      prompt: promptSections({ project, spec, truth, brandKitVersion, deliverable: item, layers, missing }),
+      prompt: promptSections({ project, spec, truth, brandKitVersion, deliverable: item, layers, missing, sceneDirection }),
     });
   }
   const usedFacts = (truth?.facts ?? []).filter(fact => fact.confirmed === true)
@@ -244,10 +275,13 @@ export function compileRevisionInstruction({ actions = [], preserveChecks = [], 
     label: action.label ?? null,
     instruction: action.instruction ?? action.message ?? null,
     target: action.target ?? null,
+    region: action.region ?? null,
   }));
   const preserve = preserveChecks.map(item => (typeof item === 'string' ? item : item?.code ?? String(item)));
   const text = [
     `【修订第 ${round} 轮】只修复以下问题：${targets.map(item => `${item.code ?? 'ISSUE'}${item.instruction ? `（${item.instruction}）` : ''}`).join('；') || '无具体项'}。`,
+    ...targets.filter(item => item.region).map(item =>
+      `【问题位置 ${item.code}】相对原成品左上角，问题框为 [${item.region.map(pct).join('、')}]（左、上、右、下）。这是复核定位，不能用作像素锁定。`),
     preserve.length > 0 ? `【必须保留】${preserve.join('、')} 已通过，不得回退或改动。` : '【必须保留】已通过项不得回退。',
     '不要顺带做审美改版；无法确认的项保持原样并标注未知。',
   ].join('\n');

@@ -241,6 +241,9 @@ export function buildIssueCatalog({ report, availableActions = [] } = {}) {
         hard_gate: check.hard_gate === true,
         required: check.required === true,
         evidence: issueReason(check),
+        region: check.evidence?.region ?? null,
+        reference_image_ids: check.evidence?.reference_image_ids ?? [],
+        suggested_fix: check.suggested_action ?? null,
         allowed_actions: candidates,
         needs_material: kind === 'fail' && candidates.length === 0,
       };

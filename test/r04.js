@@ -263,7 +263,9 @@ test('R04 编译：事实、品牌、构图、平台与文字层都进入执行�
   assert.match(scene.prompt, /最好/, '禁用表达必须进入指令');
   assert.match(scene.prompt, /不得改变包装文字/, '模板不可改变项必须进入指令');
   assert.doesNotMatch(scene.prompt, /新疆/, '未确认事实不得进入指令');
-  assert.match(scene.prompt, /不要在图像中绘制或改写任何文字/, '文字层策略必须进入指令');
+  assert.match(scene.prompt, /后置排版留出低纹理区域.*左侧起点 8%、纵向位置 12%、宽 50%/u);
+  assert.match(scene.prompt, /保留商品本身已有的包装文字与标识/u);
+  assert.match(scene.prompt, /营销标题、价格、规格角标和独立品牌 Logo 由系统后置排版/u);
 
   const texts = scene.text_layers.map(layer => layer.text);
   assert.ok(texts.includes('10ml'), '事实文字层必须存在');

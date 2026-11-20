@@ -1,3 +1,4 @@
+import { planSceneDirections } from './scene-direction.mjs';
 import { decodeToPng, renderLayers, prepareSubjectMask, draftPreview } from './raster.mjs';
 /**
  * M05 任务执行骨架：GenerationJob 状态机、Attempt、事件流水、取消、超时与恢复。
@@ -183,23 +184,6 @@ export function createJobs({
       subjectAsset: subject, packagingAsset: packaging, styleAssets: styles,
       cutoutSha256: mask.available && mask.cutout_sha256 ? mask.cutout_sha256 : null, maxReferences,
     });
-    if (!mask.available) {
-      return {
-        protection: mask,
-        references: plan.references,
-        reference_images: [],
-        dropped: plan.dropped,
-        capacity_exceeded: plan.capacity_exceeded,
-        required_count: plan.required_count,
-        mask_ref: capabilities.simulated === true ? `mask:simulated:${mask.reason}` : null,
-      };
-    }
-
-    const maskFile = await store.putBlob(mask.maskBytes, mask.sha256, 'png');
-    const cutoutFile = mask.cutoutBytes
-      ? await store.putBlob(mask.cutoutBytes, mask.cutout_sha256, 'png')
-      : null;
-
     // 参考图按职责顺序转成 data URI；只有 sent_to_provider 的才编码，去背图永远不发送
     const referenceImages = [];
     for (const reference of plan.references) {
@@ -216,6 +200,23 @@ export function createJobs({
         data_uri: `data:${asset.mime};base64,${bytes.toString('base64')}`,
       });
     }
+
+    if (!mask.available) {
+      return {
+        protection: mask,
+        references: plan.references,
+        reference_images: referenceImages,
+        dropped: plan.dropped,
+        capacity_exceeded: plan.capacity_exceeded,
+        required_count: plan.required_count,
+        mask_ref: capabilities.simulated === true ? `mask:simulated:${mask.reason}` : null,
+      };
+    }
+
+    const maskFile = await store.putBlob(mask.maskBytes, mask.sha256, 'png');
+    const cutoutFile = mask.cutoutBytes
+      ? await store.putBlob(mask.cutoutBytes, mask.cutout_sha256, 'png')
+      : null;
 
     return {
       protection: {
@@ -290,7 +291,12 @@ export function createJobs({
       assets: Object.values(data.assets ?? {}).filter(item =>
         item.tenant_id === ctx.tenantId && item.project_id === project.id),
     }));
+    const sceneDirections = await planSceneDirections({
+      project, spec, brandKitVersion: compileInputs.brandKitVersion,
+      deliverableIds: new Set(quote.lines.map(line => line.deliverable_id)),
+    });
     const executionPlan = compileExecutionPlan({
+      sceneDirections,
       project, spec, truth: compileInputs.truth, brandKitVersion: compileInputs.brandKitVersion,
     });
     // P1：项目 / SKU / 事实 / 素材 / 品牌 / 规格一次性冻结为 context_hash；
@@ -470,9 +476,11 @@ export function createJobs({
               prompt: (() => {
                 const compiled = executionForDeliverable(executionPlan, { deliverableId: line.deliverable_id });
                 const base = compiled?.prompt ?? `生成「${line.label}」；商品主体必须与参考图完全一致，不得改变形状、文字、Logo 与颜色。`;
+                const instruction = regeneration?.revision_instruction?.text;
+                const directedPrompt = instruction ? base + '\n\n' + instruction : base;
                 return units === 1
-                  ? base
-                  : `${base}\n【同组一致】这是第 ${unit}/${units} 张，必须与同组其他图片保持一致的风格、光线与构图语言。`;
+                  ? directedPrompt
+                  : `${directedPrompt}\n【同组一致】这是第 ${unit}/${units} 张，必须与同组其他图片保持一致的风格、光线与构图语言。`;
               })(),
               execution_ref: {
                 version: executionPlan.version,
@@ -1836,7 +1844,7 @@ export function createJobs({
         ?.filter(item => item.sent_to_provider !== false).length ?? 0;
       // R04：修订指令具体到错误码与必须保留项；Provider 拿到的是可执行的修订要求，不是"再试一次"
       const revisionInstruction = compileRevisionInstruction({
-        actions: plan.actions, preserveChecks: plan.preserve_checks, round: revision.round + 1,
+        actions: plan.actions, preserveChecks: plan.preserve_checks, round: revision.round,
       });
       const request = {
         request_hash: sha({
@@ -2753,7 +2761,9 @@ export function createJobs({
         if (!baseBytes) {
           throw new ApiError(409, 'TEXT_EDIT_RENDER_FAILED', '补拍素材文件不可读取，无法合成');
         }
-        baseHash = asset.sha256;
+        baseBytes = await decodeToPng(baseBytes);
+        baseHash = createHash('sha256').update(baseBytes).digest('hex');
+        await store.putBlob(baseBytes, baseHash, 'png');
       } else {
         baseBytes = await store.readBlob(version.overlay_base_hash, 'png');
         if (!baseBytes) {
@@ -2822,6 +2832,7 @@ export function createJobs({
       nextVersion.note = note;
       nextVersion.created_by = createdBy;
       nextVersion.adopted_from = null;
+      nextVersion.replacement_asset_id = baseAssetId ?? version.replacement_asset_id ?? null;
 
       const publishable = report.decision === 'publishable';
       if (publishable) {

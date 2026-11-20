@@ -457,7 +457,7 @@ function renderCenter(empty = false) {
   const versionsOfThis = state.versions.filter(v => v.deliverable_id === state.selectedDeliverableId);
   if (versionsOfThis.length === 0) {
     toolbar.textContent = deliverable?.label ?? state.selectedDeliverableId;
-    meta.innerHTML = `<div><b>${escapeHtml(deliverable?.label)}</b> 还没有版本产物（${escapeHtml(deliverable?.status ?? 'pending')}）</div>`;
+    meta.textContent = runTerminal.has(state.activeRun.status) ? '本项没有可查看的成图。请在任务记录中查看结束原因。' : '正在等待成图。离开页面后可从项目继续查看。';
     return;
   }
 
@@ -500,8 +500,15 @@ function renderCenter(empty = false) {
 
   if (runTerminal.has(state.activeRun.status)) {
     // 修订按钮只在任务终态后才不会被新扣费覆盖；这里保留"局部修订"入口引导到重新执行 run
-    reviseBtn.hidden = false; reviseBtn.textContent = '调整排版后重新制作';
-    downloadActive.hidden = qual !== 'publishable'; downloadActive.textContent = '创建已通过图片的下载包';
+    reviseBtn.hidden = false; reviseBtn.textContent = '调整制作方案';
+    const ready = isActive && qual === 'publishable' && report?.validity === 'current';
+    downloadActive.hidden = !ready;
+    downloadActive.textContent = '打包下载已通过图片';
+    nextStep.hidden = false;
+    if (ready) nextStep.textContent = '这张图已通过检查，可以随其他通过的图片一起下载。';
+    else if (!isActive) nextStep.textContent = '正在查看历史版本。可与当前版本对比后再决定是否选用。';
+    else if (report?.validity !== 'current') nextStep.textContent = '请在质量检查区确认当前版本的检查状态。';
+    else nextStep.textContent = '请查看质量检查中的具体问题，再选择修改或补充素材。';
     // 模块06：任务终态且有版本时提供「修改此张」入口
     editOpenBtn.hidden = versionsOfThis.length === 0;
   }
@@ -651,10 +658,14 @@ function renderRevisionPlan(report) {
     && rev.execution?.available === true && plan.executed !== true;
   const unavailableNote = plan.decision === 'propose_action' && rev.execution?.available !== true
     ? `<small>该动作没有安全执行入口：${escapeHtml(rev.execution?.reason ?? '请按建议人工处理')}</small>` : '';
+  const executeLabel = rev.executing ? '提交中' : plan.action === 'recompose_text'
+    ? '确认修复文字（免费）' : '确认执行（会创建新任务并扣额度）';
   const executeBtn = canExecute
-    ? `<button class="text-button" data-revision-execute ${rev.executing ? 'disabled' : ''}>${rev.executing ? '提交中…' : '确认执行这一步（会创建新任务并扣额度）'}</button>`
+    ? `<button class="text-button" data-revision-execute ${rev.executing ? 'disabled' : ''}>${escapeHtml(executeLabel)}</button>`
     : '';
-  const executedNote = plan.executed === true
+  const executedNote = plan.version_id
+    ? `<small>已生成文字修复版本，请查看版本复核结果。</small>`
+    : plan.executed === true
     ? `<small>已提交执行，子任务 ${escapeHtml(rev.childRunId ?? plan.child_run_id ?? '')}；请等新任务完成后核对，确认通过项没有退步。</small>`
     : '';
   return `<div class="wb-qa-summary">
@@ -702,7 +713,7 @@ async function executeRevisionPlan() {
   const run = state.activeRun;
   const rev = state.revision;
   if (!run || !rev.planId || rev.executing) return;
-  if (!window.confirm('确认执行这一步修订？会创建新任务并扣减额度，执行后仍需人工核对通过项没有退步。')) return;
+  if (!window.confirm(rev.plan?.action === 'recompose_text' ? '按已确认的商品事实重新排版文字？此操作免费。' : '确认执行这一步修订？会创建新任务并扣减额度，执行后仍需人工核对通过项没有退步。')) return;
   rev.executing = true;
   rev.error = null;
   renderQA();
@@ -711,6 +722,17 @@ async function executeRevisionPlan() {
     const result = await api.executeRevisionPlan(run.id, rev.planId, key);
     rev.plan = result.plan;
     rev.childRunId = result.child_run_id ?? null;
+    if (result.version_id) {
+      const response = await api.getRun(run.id);
+      state.activeRun = response.run;
+      state.runs = state.runs.map(item => item.id === run.id ? response.run : item);
+      await loadRunExtras(run.id);
+      renderDeliverables();
+      renderCenter();
+      renderExport();
+      state.toast(result.activated ? '文字修复已通过复核并选用' : '文字修复版本已保存，请查看复核结果');
+      return;
+    }
     state.toast(result.replayed ? '该建议已执行过，未重复提交' : '已提交修订执行，新任务会重新评审');
   } catch (error) {
     rev.error = error instanceof ApiFailure ? error.message : String(error);

@@ -365,6 +365,16 @@ test('M06 Seedream Adapter：缺密钥构造即失败，绝不回落到模拟', 
   assert.equal(resolved.acceptance, 'simulated_only');
   assert.throws(() => createProviderFromEnv({ QTB_PROVIDER: 'seedream' }), /缺少 PARATERA_API_KEY/u);
   assert.throws(() => createProviderFromEnv({ QTB_PROVIDER: 'unknown' }), /配置无效/u);
+  const referenceProvider = createProviderFromEnv({
+    QTB_PROVIDER: 'seedream',
+    PILOTDECK_SEEDREAM_API_KEY: 'test-key',
+    QTB_SEEDREAM_REFERENCE_PROTECTION: '1',
+  }).provider;
+  assert.equal(referenceProvider.capabilities().supports_reference_protection, true);
+  assert.equal(referenceProvider.capabilities().supports_post_composite, false);
+  assert.equal(createProviderFromEnv({
+    QTB_PROVIDER: 'seedream', PILOTDECK_SEEDREAM_API_KEY: 'test-key',
+  }).provider.capabilities().supports_reference_protection, false);
 });
 
 test('M06 Seedream Adapter：能力如实声明，主体保护校验拒绝无掩码请求', () => {

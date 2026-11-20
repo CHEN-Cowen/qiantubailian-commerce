@@ -947,7 +947,7 @@ function purposeReason(item) {
 /** 推荐规则是确定性的用途规则：优先上架包；不做视觉理解，也不假装已分析图片。 */
 function recommendTemplate(templates) {
   if (!templates.length) return '';
-  return (templates.find(item => item.purpose === 'listing') ?? templates[0]).id;
+  return (templates.find(item => item.id === 'tpl_single_white') ?? templates.find(item => item.purpose === 'listing') ?? templates[0]).id;
 }
 
 function visibleTemplates() {
@@ -1274,8 +1274,9 @@ function renderQuoteSummary() {
   holder.hidden = false;
   holder.innerHTML = `<div class="wiz-quote-bar">
     <b>生成 ${imageCount} 张图片 · 最多使用 ${quote.max_credits} 点</b>
-    <span>估算 ${quote.estimated_credits} 点 · 价格版本 ${escapeHtml(quote.price_version ?? '')}</span>
+    <span>预计使用 ${quote.estimated_credits} 点</span>
     <p>${escapeHtml(note)}</p>
+    <ul>${(quote.lines ?? []).map(line => `<li>${escapeHtml(line.label ?? line.deliverable_id)} × ${Number(line.count) || 1}</li>`).join('')}</ul>
     <p class="real-note">报价有效期至 ${formatTime(quote.expires_at)}；过期或配置变化后需重新取价。开始时按上限预留，未发生部分在任务结束后释放。</p>
   </div>`;
 }

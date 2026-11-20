@@ -129,10 +129,9 @@ export function createSeedreamProvider({
     };
   }
 
-  function normalizeImages(referenceImages = []) {
+  function normalizeReferences(referenceImages = []) {
     return referenceImages
-      .filter(item => item && typeof item.data_uri === 'string' && item.data_uri.startsWith('data:image/'))
-      .map(item => item.data_uri);
+      .filter(item => item && typeof item.data_uri === 'string' && item.data_uri.startsWith('data:image/'));
   }
 
   async function download(url, signal) {
@@ -160,10 +159,23 @@ export function createSeedreamProvider({
       controller,
     };
     const size = `${Number(request.target_width)}x${Number(request.target_height)}`;
-    const images = normalizeImages(request.reference_images);
+    const validReferences = normalizeReferences(request.reference_images);
+    const images = validReferences.map(item => item.data_uri);
+    const roles = {
+      product_subject: '保留商品主体的外形、颜色、结构和品牌标识。',
+      product_packaging: '以此图为准保留当前包装与标签规格。',
+      style_reference: '仅参考构图、光线和配色，禁止复制图中的商品、标识和文字。',
+    };
+    const guidance = validReferences.flatMap((item, index) =>
+      Object.hasOwn(roles, item.role) ? ['参考图 ' + (index + 1) + '：' + roles[item.role]] : []);
     const payload = {
       model,
-      prompt: request.prompt ?? request.instructions ?? '生成一张电商商品图，商品主体必须与参考图一致',
+      prompt: [
+        request.prompt ?? request.execution?.instruction?.prompt ?? request.instructions
+          ?? '生成一张电商商品图，保持商品主体与参考图一致。',
+        ...guidance,
+        request.revision?.instruction?.text,
+      ].filter(Boolean).join('\n\n'),
       size,
       response_format: 'b64_json',
       watermark: false,
@@ -180,7 +192,7 @@ export function createSeedreamProvider({
 
     state.settled = (async () => {
       // 进程重启后内存里的 data URI 会丢失；缺少主体参考图时绝不能"照样"调用真实模型
-      if (Number(request.references ?? 0) > 0 && images.length === 0) {
+      if (images.length < Number(request.references ?? 0)) {
         state.status = 'failed';
         state.error = failure(
           'REFERENCE_PAYLOAD_UNAVAILABLE',

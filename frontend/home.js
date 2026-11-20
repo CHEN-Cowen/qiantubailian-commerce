@@ -278,6 +278,7 @@ async function boot() {
 
 /* ---------- 交互接线 ---------- */
 function bind() {
+  $$('[data-hp-entry]').forEach(button => button.addEventListener('click', () => startEntry(button.dataset.hpEntry)));
   $('#hp-steps')?.addEventListener('click', event => {
     const button = event.target.closest('[data-demo-step]');
     if (button) renderDemo(Number(button.dataset.demoStep));

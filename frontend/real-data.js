@@ -122,7 +122,7 @@ function renderHomeRealProjects() {
           <button class="text-button" data-action="truth">商品事实</button>
           <button class="text-button" data-action="spec">生产配置</button>
           <button class="text-button" data-action="workbench">打开工作台 →</button>
-          <button class="text-button" data-action="remake">再做一套</button>
+          <button class="text-button" data-action="remake">再做一套</button><button class="text-button" data-action="update-images">更新包装或规格</button>
         </div>
       </div>
     </article>`;
@@ -145,6 +145,7 @@ function renderHomeRealProjects() {
         window.dispatchEvent(new CustomEvent('qb:open-wizard', { detail: { mode: 'reuse', projectId: card.dataset.projectId } }));
       }
       if (action === 'truth') void openTruthDialog(card.dataset.projectId);
+      if (action === 'update-images') void openTruthDialog(card.dataset.projectId, { section: 'change-section' });
     });
   });
 }
@@ -171,7 +172,7 @@ function renderProjects() {
         <button class="text-button" data-action="upload">上传素材</button>
         <button class="text-button" data-action="spec">生产配置</button>
         <button class="text-button" data-action="run">开始生产</button>
-        <button class="text-button" data-action="remake">再做一套</button>
+        <button class="text-button" data-action="remake">再做一套</button><button class="text-button" data-action="update-images">更新包装或规格</button>
       </div>
     </article>`;
   }).join('');
@@ -247,6 +248,7 @@ function onRealListClick(event) {
   if (!projectId) return;
   const action = trigger.dataset.action;
   if (action === 'truth') void openTruthDialog(projectId);
+  if (action === 'update-images') void openTruthDialog(projectId, { section: 'change-section' });
   if (action === 'upload') openUploadDialog(projectId);
   if (action === 'spec') {
     // openSpec 来自 m04.js（在 index.html 中已作为模块引入，window 上暂不挂），
@@ -907,6 +909,12 @@ function renderChangeItem(item, detail) {
     }
     parts.push(renderItemActionPicker(item));
   }
+  if (item.material_asset_id && item.version_id && item.result_version_id) {
+    const root = '/api/runs/' + encodeURIComponent(item.run_id) + '/versions/';
+    const before = root + encodeURIComponent(item.version_id) + '/content';
+    const after = root + encodeURIComponent(item.result_version_id) + '/content';
+    parts.push(`<p class="chg-meta"><a href="${escapeHtml(before)}" target="_blank" rel="noopener">查看原图</a> · <a href="${escapeHtml(after)}" target="_blank" rel="noopener">查看换图结果</a></p>`);
+  }
   if (item.status === 'done') {
     if (item.charged_credits > 0) parts.push(`<p class="chg-meta">已按张结算 ${item.charged_credits} 点。</p>`);
     if (item.pending_adoption) parts.push('<p class="wb-chip warn">新版本未自动选用：核对通过后将一并选用</p>');
@@ -933,7 +941,7 @@ function renderItemActionPicker(item) {
   const options = [];
   const allowText = item.action === 'text_recompose' || item.action === 'needs_review' || Boolean(item.material_asset_id);
   const allowRegen = item.action !== 'needs_new_photo' || Boolean(item.material_asset_id);
-  if (allowText) options.push(['text_recompose', '文字重合成（免费）']);
+  if (allowText) options.push(['text_recompose', item.material_asset_id ? '使用新版实拍并重排文字（免费）' : '文字重合成（免费）']);
   if (allowRegen) options.push(['regenerate', '重生成（按张计费）']);
   options.push(['skip', '跳过（知情放弃，不阻塞整单完成）']);
   const selected = options.some(([value]) => value === item.action) ? item.action : 'skip';

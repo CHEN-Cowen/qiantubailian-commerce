@@ -7,7 +7,7 @@
  *    source.verified 一律为 false —— 因此任何 spec 都不能声称"已通过平台审核"，只能说明覆盖情况。
  *    真实平台规则需要按版本导入并标注来源，届时把 verified 置真并补齐 url。
  */
-export const CATALOG_VERSION = 'catalog-demo.1';
+export const CATALOG_VERSION = 'catalog-demo.2';
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -112,6 +112,30 @@ const TEMPLATES = [
         id: 'inner', type: 'social_inner', label: '内页图', required: false, count: 2,
         ratio: '1:1', width: 1080, height: 1080, formats: ['jpg'],
         text_blocks: [], note: '可选，最多 2 张',
+      },
+    ],
+  },
+  {
+    id: 'tpl_single_white',
+    name: '白底主图 · 单张试做',
+    purpose: 'listing',
+    version: 1,
+    content_goal: 'listing',
+    summary: '用一张纯白主图核对商品外观和包装。',
+    allowed_variations: ['lighting', 'shadow'],
+    forbidden_changes: ['商品主体形态', '包装文字与 Logo', '型号与规格参数'],
+    input_requirements: [
+      { code: 'subject_asset', label: '主体素材至少 1 张', required: true },
+      { code: 'critical_fact', label: '至少 1 项已确认的关键商品事实', required: true },
+    ],
+    creative_direction: { background: 'plain_white', lighting: 'soft studio light' },
+    qa_profile: { id: 'qa_listing_basic', version: 1, checks: ['file', 'dimensions', 'subject_identity', 'text_logo', 'brand', 'risk'] },
+    recommended_budget: { max_credits: 8, max_attempts: 3, price_version: 'p1-draft' },
+    deliverables: [
+      {
+        id: 'main', type: 'main_image', label: '白底主图', required: true, count: 1,
+        ratio: '1:1', width: 1200, height: 1200, formats: ['jpg', 'png'],
+        text_blocks: [], note: '纯白背景，商品完整居中',
       },
     ],
   },
