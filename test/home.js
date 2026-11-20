@@ -23,11 +23,11 @@ test('首页分流：未登录新用户首页与已登录工作首页同时存�
 test('首页提供正式工作台入口和独立的静态香薰样片', async () => {
   const html = await read('frontend/index.html');
   assert.match(html, /data-hp-workspace>进入工作台/);
-  assert.match(html, /商品图，可以一直更新/);
+  assert.match(html, /用商品实拍，做一套上架图/);
   assert.match(html, /示例项目 · 柑橘藤条香薰/);
   const server = await read('src/server.mjs');
   const photos = [...new Set([...html.matchAll(/src="(assets\/demo\/diffuser-[a-z]+\.jpg)"/g)].map(match => match[1]))];
-  assert.equal(photos.length, 5);
+  assert.equal(photos.length, 4);
   for (const photo of photos) {
     assert.ok(server.includes(`'${photo}'`));
     const bytes = await readFile(path.join(ROOT, 'frontend', photo));

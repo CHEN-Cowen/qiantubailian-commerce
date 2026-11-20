@@ -162,12 +162,13 @@ async function loadCatalog() {
   state.catalogLoaded = true;
 }
 
-async function openSpec(projectId) {
+async function openSpec(projectId, { templateId, brandKitId } = {}) {
   try {
     const [detail, specs] = await Promise.all([api.getProject(projectId), api.listSpecs(projectId)]);
     state.project = detail.project;
     state.specs = specs.specs;
-    const layout = state.specs.find(s => s.version === state.project.spec_head_version)?.deliverables?.find(d => d.text_layout)?.text_layout;
+    const current = state.specs.find(spec => spec.version === state.project.spec_head_version);
+    const layout = current?.deliverables?.find(item => item.text_layout)?.text_layout;
     $('#spec-custom-layout').checked = Boolean(layout);
     for (const [field, value] of Object.entries({ x: layout?.x ?? 0.08, y: layout?.y ?? 0.75, width: layout?.width ?? 0.84, size: layout?.size_ratio ?? 0.04 })) {
       document.getElementById(`spec-text-${field}`).value = Math.round(value * 100);
@@ -176,6 +177,11 @@ async function openSpec(projectId) {
     state.resolutions = {};
     if (state.templates.length === 0 || state.brandKits === null) await loadCatalog();
     renderControls();
+    const selectedTemplate = templateId || current?.template?.id;
+    const selectedKit = brandKitId || current?.brand_kit?.id;
+    $('#spec-template').value = state.templates.find(item => item.id === selectedTemplate)?.id ?? state.templates[0]?.id ?? '';
+    $('#spec-brand').value = state.brandKits.find(item => item.id === selectedKit)?.id ?? '';
+    $('#spec-platform').value = current?.channel?.platform ?? state.project.platform ?? '';
     const dialog = $('#spec-dialog');
     if (!dialog.open) dialog.showModal();
     await refreshPreview();

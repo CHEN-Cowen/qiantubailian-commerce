@@ -349,7 +349,7 @@ export function createApi({
       if (rest.length === 2) { requireMethod(method, ['GET', 'HEAD']); return jobs.getRun(ctx, rest[1]).then(result => send(200, result)); }
       if (rest.length === 5 && rest[2] === 'versions' && rest[4] === 'activate') {
         requireMethod(method, ['POST']);
-        return activateVersionRoute(ctx, rest[1], rest[3], send);
+        return activateVersionRoute(ctx, req, rest[1], rest[3], send);
       }
       // M13：文字排版修改（免费）与文字层只读预览
       if (rest.length === 5 && rest[2] === 'deliverables' && rest[4] === 'text-layers') {
@@ -4636,8 +4636,11 @@ export function createApi({
   }
 
   // M08：版本回退与正式导出。导出资格（完整性、可发布、stale）全部由 jobs 在锁内重算。
-  function activateVersionRoute(ctx, runId, versionId, send) {
-    return jobs.activateVersion(ctx, runId, versionId).then(result => send(200, result));
+  async function activateVersionRoute(ctx, req, runId, versionId, send) {
+    const hasBody = Number(req.headers['content-length']) > 0 || Boolean(req.headers['transfer-encoding']);
+    const body = hasBody ? await readJson(req) : null;
+    const result = await jobs.activateVersion(ctx, runId, versionId, { requireCurrent: body?.require_current === true });
+    send(200, result);
   }
 
   // M13：免费文字排版修改。权限走 run:create（owner/editor），复核者与只读角色不能改内容。
@@ -4656,7 +4659,7 @@ export function createApi({
   async function createExportRoute(ctx, req, runId, send) {
     const body = await readJson(req);
     const scope = String(body?.scope ?? 'complete').trim();
-    const result = await jobs.createExport(ctx, runId, { scope });
+    const result = await jobs.createExport(ctx, runId, { scope, changeId: body?.change_id });
     send(201, result);
   }
 
@@ -5522,7 +5525,11 @@ export function createApi({
       blockers.push({ code: blocker.code, message: blocker.message });
     }
     const spec = latestSpec(data, project.id);
-    if (!spec) blockers.push({ code: 'SPEC_REQUIRED', message: '尚未冻结生产配置，需先完成模板与平台设置' });
+    if (!spec) blockers.push({ code: 'SPEC_REQUIRED', message: '请先保存该商品的出图设置' });
+    if (spec && ((item.template_id && spec.template?.id !== item.template_id)
+      || (item.brand_kit_id && spec.brand_kit?.id !== item.brand_kit_id))) {
+      blockers.push({ code: 'BATCH_PRESET_NOT_APPLIED', message: '请应用并保存此批次的共用方案' });
+    }
     let quote = null;
     if (spec) {
       try {
@@ -5581,6 +5588,10 @@ export function createApi({
     await requireAction(ctx, 'batch:create');
     const body = await readJson(req);
     const rows = normalizeImportRows({ rows: body.rows, columns: body.columns });
+    const projectIds = Array.isArray(body.project_ids) ? [...new Set(body.project_ids.map(String))] : [];
+    if (projectIds.length && projectIds.length + rows.length > 200) {
+      throw new ApiError(422, 'IMPORT_ROW_LIMIT', '一个批次最多包含 200 个商品');
+    }
     const created = await store.mutate(data => {
       const existingSkus = Object.values(data.projects ?? {})
         .filter(item => item.tenant_id === ctx.tenantId)
@@ -5588,6 +5599,16 @@ export function createApi({
       const brandKitIds = Object.values(data.brand_kits ?? {})
         .filter(item => item.tenant_id === ctx.tenantId)
         .map(item => item.id);
+      const templateId = String(body.template_id ?? '');
+      const brandKitId = String(body.brand_kit_id ?? '');
+      if ((templateId && !listTemplates().some(item => item.id === templateId)) || (brandKitId && !brandKitIds.includes(brandKitId))) {
+        throw new ApiError(422, 'BATCH_PRESET_INVALID', '所选的共用图种方案或品牌风格已不可用');
+      }
+      const selectedProjects = projectIds.map(id => {
+        const project = data.projects?.[id];
+        if (!project || project.tenant_id !== ctx.tenantId) throw new ApiError(404, 'NOT_FOUND', '所选商品已不可用');
+        return project;
+      });
       let preview;
       try {
         preview = previewImportRows({
@@ -5597,7 +5618,7 @@ export function createApi({
       } catch (error) {
         throw new ApiError(422, 'IMPORT_INVALID', error?.message ?? '导入数据无效');
       }
-      if (!preview.ok && preview.rows.length === 0) {
+      if (!preview.ok && preview.rows.length === 0 && (!selectedProjects.length || rows.length)) {
         throw new ApiError(422, 'IMPORT_MAPPING_INVALID', preview.issues[0]?.message ?? '导入字段映射无效', {
           issues: preview.issues,
         });
@@ -5605,7 +5626,10 @@ export function createApi({
       const timestamp = now();
       const batchId = newId('bat');
       const items = [];
-      for (const row of preview.rows) {
+      const selectedRows = selectedProjects.map((project, index) => ({
+        ...project, index: preview.rows.length + index, valid: true, facts: [], warnings: [], existingId: project.id,
+      }));
+      for (const row of [...preview.rows, ...selectedRows]) {
         const item = {
           id: newId('bit'),
           tenant_id: ctx.tenantId,
@@ -5615,8 +5639,8 @@ export function createApi({
           name: row.name,
           category: row.category,
           platform: row.platform,
-          template_id: row.template_id,
-          brand_kit_id: row.brand_kit_id,
+          template_id: templateId || row.template_id || null,
+          brand_kit_id: brandKitId || row.brand_kit_id || null,
           facts: row.facts,
           status: row.valid ? 'imported' : 'invalid',
           project_id: null,
@@ -5630,7 +5654,9 @@ export function createApi({
           last_error: null,
           created_at: timestamp,
         };
-        if (row.valid) {
+        if (row.existingId) {
+          item.project_id = row.existingId;
+        } else if (row.valid) {
           const duplicate = Object.values(data.projects ?? {}).find(existing =>
             existing.tenant_id === ctx.tenantId && existing.sku.toLowerCase() === row.sku.toLowerCase());
           if (duplicate) {
@@ -5781,6 +5807,11 @@ export function createApi({
         throw new ApiError(409, 'BATCH_NOT_STARTABLE', plan.reasons[0]?.message ?? '批量暂不可开始', {
           reasons: plan.reasons,
         });
+      }
+      const readyIds = items.filter(item => item.status === 'ready').map(item => item.id).sort();
+      if (body.expected_max_credits !== undefined && (body.expected_max_credits !== plan.max_credits
+        || JSON.stringify(readyIds) !== JSON.stringify(Array.isArray(body.expected_item_ids) ? [...body.expected_item_ids].sort() : null))) {
+        throw new ApiError(409, 'BATCH_PREVIEW_CHANGED', '可制作商品或费用已变化，请重新检查并确认');
       }
       batch.budget = {
         confirmed: true,

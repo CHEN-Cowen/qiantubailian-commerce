@@ -121,6 +121,12 @@ export const api = {
   putSkus: (id, body) => call(`/api/projects/${encodeURIComponent(id)}/skus`, { method: 'PUT', json: body }),
   listSkuVersions: id => call(`/api/projects/${encodeURIComponent(id)}/skus/versions`),
   // M04：目录、品牌套件与生产配置
+  listBatches: () => call('/api/batches'),
+  createBatch: json => call('/api/batches', { method: 'POST', json }),
+  getBatch: id => call(`/api/batches/${encodeURIComponent(id)}`),
+  previewBatch: id => call(`/api/batches/${encodeURIComponent(id)}/preview`, { method: 'POST' }),
+  startBatch: (id, preview) => call(`/api/batches/${encodeURIComponent(id)}/start`, { method: 'POST', json: { confirm_budget: true, expected_max_credits: preview.max_credits, expected_item_ids: preview.items.filter(item => item.status === 'ready').map(item => item.item_id) } }),
+  exportBatch: id => call(`/api/batches/${encodeURIComponent(id)}/exports`, { method: 'POST', json: { scope: 'partial' } }),
   listTemplates: () => call('/api/catalog/templates'),
   getTemplate: id => call(`/api/catalog/templates/${encodeURIComponent(id)}`),
   listChannelRules: () => call('/api/catalog/channel-rules'),
@@ -172,7 +178,7 @@ export const api = {
   listRunVersions: runId => call(`/api/runs/${encodeURIComponent(runId)}/versions`),
   activateVersion: (runId, versionId) => call(
     `/api/runs/${encodeURIComponent(runId)}/versions/${encodeURIComponent(versionId)}/activate`,
-    { method: 'POST' }),
+    { method: 'POST', json: { require_current: true } }),
   listQualityReports: runId => {
     const query = new URLSearchParams();
     if (runId) query.set('run_id', String(runId));
@@ -191,9 +197,9 @@ export const api = {
     return call(`/api/exports${suffix}`);
   },
   getExport: exportId => call(`/api/exports/${encodeURIComponent(exportId)}`),
-  createExport: (runId, { scope = 'complete' } = {}) => call(
+  createExport: (runId, { scope = 'complete', changeId } = {}) => call(
     `/api/runs/${encodeURIComponent(runId)}/exports`,
-    { method: 'POST', json: { scope } }),
+    { method: 'POST', json: { scope, change_id: changeId } }),
   // R07：价格与计费
   listPlans: () => call('/api/plans'),
   createBillingOrder: body => call('/api/billing/orders', { method: 'POST', json: body }),

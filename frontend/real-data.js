@@ -1,4 +1,5 @@
 import { ApiFailure, api } from './api.js';
+import { openSpec } from './m04.js';
 
 /**
  * M03 真实数据界面：项目创建、素材上传与商品事实确认。
@@ -48,6 +49,22 @@ export function initRealData({ toast } = {}) {
   $('#upload-form')?.addEventListener('submit', event => { event.preventDefault(); void submitUpload(false); });
   $('#upload-replace')?.addEventListener('click', () => void submitUpload(true));
   $('#real-list')?.addEventListener('click', onRealListClick);
+  $('#batch-open')?.addEventListener('click', () => {
+    $('#batch-dialog').showModal();
+    void runBatchAction(async () => {
+      await loadBatchList();
+      const [projects, templates, kits] = await Promise.all([api.listProjects(), api.listTemplates(), api.listBrandKits()]);
+      $('#batch-existing').replaceChildren(...projects.projects.map(item => new Option(item.sku + ' · ' + item.name, item.id)));
+      for (const [selector, items] of [['#batch-template', templates.templates], ['#batch-brand', kits.brand_kits]]) {
+        $(selector).replaceChildren(new Option('按各商品设置', ''), ...items.map(item => new Option(item.name, item.id)));
+      }
+    });
+  });
+  $('#batch-form')?.addEventListener('submit', event => {
+    event.preventDefault();
+    void runBatchAction(importBatch);
+  });
+  $('#batch-body')?.addEventListener('click', onBatchAction);
   $('#truth-body')?.addEventListener('click', onTruthClick);
   // E07：首页待办刷新（聚合未知/失败/待复核/已采用）
   $('#todo-refresh')?.addEventListener('click', () => void loadTodos());
@@ -62,6 +79,126 @@ export function initRealData({ toast } = {}) {
   });
   document.addEventListener('qb:view-change', event => { if (['home', 'projects', 'assets'].includes(event.detail?.view)) void refresh(); });
   void refresh();
+}
+
+let batchBusy = false;
+let batchPreview = null;
+const batchLabels = {
+  imported: '待准备', blocked: '需补资料或设置', invalid: '导入未通过',
+  ready: '可制作', running: '制作中', completed: '制作完成',
+  failed: '制作失败', cancelled: '已取消', partial: '部分完成',
+};
+
+async function runBatchAction(action) {
+  if (batchBusy) return;
+  batchBusy = true;
+  const feedback = $('#batch-feedback');
+  feedback.textContent = '正在处理…';
+  try {
+    feedback.textContent = await action() ?? '';
+  } catch (error) {
+    feedback.textContent = errorText(error);
+  } finally {
+    batchBusy = false;
+  }
+}
+
+async function loadBatchList() {
+  $('#batch-body').replaceChildren();
+  const { batches } = await api.listBatches();
+  $('#batch-body').innerHTML = batches.length ? `<ul>${batches.map(batch => `<li>
+      <button type="button" class="secondary" data-batch-action="view" data-batch-id="${escapeHtml(batch.id)}">
+        ${escapeHtml(batch.name)} · ${batch.items.length} 个 SKU · ${escapeHtml(batchLabels[batch.status] ?? '待处理')}
+      </button></li>`).join('')}</ul>` : '<p>还没有批次。展开「创建批次」即可开始。</p>';
+}
+
+async function importBatch() {
+  const input = $('#batch-rows');
+  const columns = ['sku', 'name', 'category'];
+  const rows = input.value.trim().split(/\r?\n/).filter(line => line.trim()).map(line => line.split('\t').map(cell => cell.trim()));
+  const projectIds = Array.from($('#batch-existing').selectedOptions, option => option.value);
+  if ((!rows.length && !projectIds.length) || rows.some(row => row.length !== columns.length || row.some(cell => !cell))) {
+    return '请检查商品清单，每行需要完整填写 SKU、商品名称和类目。';
+  }
+  const result = await api.createBatch({
+    name: $('#batch-name').value.trim(),
+    project_ids: projectIds,
+    template_id: $('#batch-template').value,
+    brand_kit_id: $('#batch-brand').value,
+    columns,
+    mapping: { sku: 'sku', name: 'name', category: 'category' },
+    rows,
+  });
+  $('#batch-form').reset();
+  renderBatch(result.batch);
+  void refresh();
+  return '批次已保存。请逐个核对商品资料和出图设置。';
+}
+
+function renderBatch(batch, preview) {
+  batchPreview = preview ? { ...preview, batchId: batch.id } : null;
+  const hasResults = batch.items.some(item => item.run_id && item.status !== 'running');
+  const buttons = (action, label) => `<button type="button" class="secondary" data-batch-action="${action}" data-batch-id="${escapeHtml(batch.id)}">${label}</button>`;
+  $('#batch-body').innerHTML = `
+    <h3>${escapeHtml(batch.name)}</h3>
+    <ul>${batch.items.map(item => `<li>
+      <strong>${escapeHtml(item.sku)} · ${escapeHtml(item.name)}</strong>
+      <span class="wb-chip">${escapeHtml(batchLabels[item.status] ?? '待处理')}</span>
+      ${item.project_id ? `<button type="button" class="secondary" data-batch-project="${escapeHtml(item.project_id)}">打开商品</button>` : ''}
+      ${item.project_id && !item.run_id && (item.template_id || item.brand_kit_id) ? `<button type="button" class="secondary" data-batch-spec="${escapeHtml(item.project_id)}" data-template="${escapeHtml(item.template_id)}" data-brand="${escapeHtml(item.brand_kit_id)}">使用共用方案设置出图</button>` : ''}
+      ${[...(item.blockers ?? []), ...(item.last_error ? [item.last_error] : [])].map(issue => `<p>${escapeHtml(issue.message)}</p>`).join('')}
+    </li>`).join('')}</ul>
+    ${preview ? `<p>预计 ${preview.estimated_credits} 点，最多 ${preview.max_credits} 点。</p>
+      ${(preview.reasons ?? []).map(issue => `<p>${escapeHtml(issue.message)}</p>`).join('')}
+      ${preview.can_start ? buttons('start', '确认预算并制作已就绪商品') : ''}` : ''}
+    ${(batch.export_ids ?? []).length ? `<h4>历史交付</h4><ul>${[...batch.export_ids].reverse().map((id, index) => `<li><a href="${escapeHtml(api.downloadExportUrl(id))}">下载${index === 0 ? '最近一次' : '之前的'}交付包</a></li>`).join('')}</ul>` : ''}
+    <div class="wb-export-row">
+      ${buttons('list', '返回批次列表')}
+      ${buttons('view', '刷新进度')}
+      ${batch.status !== 'running' ? buttons('preview', '检查准备情况与费用') : ''}
+      ${hasResults ? buttons('download', '下载本批已通过的图片') : ''}
+    </div>`;
+}
+
+function onBatchAction(event) {
+  const setup = event.target.closest('[data-batch-spec]');
+  if (setup) {
+    $('#batch-dialog').close();
+    void openSpec(setup.dataset.batchSpec, { templateId: setup.dataset.template, brandKitId: setup.dataset.brand });
+    return;
+  }
+  const project = event.target.closest('[data-batch-project]');
+  if (project) {
+    $('#batch-dialog').close();
+    window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: project.dataset.batchProject } }));
+    return;
+  }
+  const button = event.target.closest('[data-batch-action]');
+  if (!button) return;
+  const { batchAction, batchId } = button.dataset;
+  void runBatchAction(async () => {
+    if (batchAction === 'list') return loadBatchList();
+    if (batchAction === 'view') renderBatch((await api.getBatch(batchId)).batch);
+    if (batchAction === 'preview') {
+      const { batch, preview } = await api.previewBatch(batchId);
+      renderBatch(batch, preview);
+    }
+    if (batchAction === 'start') {
+      if (batchPreview?.batchId !== batchId) return '请先重新检查准备情况与费用。';
+      const result = await api.startBatch(batchId, batchPreview);
+      renderBatch(result.batch);
+      return `已提交 ${result.started} 个 SKU。${result.failures.length ? '其余商品的失败原因见下方。' : '可刷新查看进度。'}`;
+    }
+    if (batchAction === 'download') {
+      const result = await api.exportBatch(batchId);
+      const link = document.createElement('a');
+      link.href = api.downloadExportUrl(result.export.id);
+      link.download = result.export.package_filename;
+      link.click();
+      renderBatch((await api.getBatch(batchId)).batch);
+      return '下载包已生成。';
+    }
+  });
 }
 
 async function refresh() {
@@ -664,13 +801,15 @@ async function loadChanges(projectId) {
   area.error = '';
   rerenderChangeSection();
   try {
-    const [changesRes, todosRes] = await Promise.all([
+    const [changesRes, todosRes, exportsRes] = await Promise.all([
       api.listChanges(projectId),
       api.listReplacementTodos({ projectId }),
+      api.listExports({ projectId }).catch(() => null),
     ]);
     if (state.change !== area) return; // 已切换到其它项目，丢弃过期结果
     area.changes = changesRes.changes ?? [];
     area.todos = todosRes.replacement_todos ?? [];
+    if (exportsRes) area.updateExports = exportsRes.exports.filter(item => item.change_id);
     area.loading = false;
     if (area.detailId) {
       try {
@@ -804,18 +943,23 @@ function renderChangePreview(preview) {
   if (diff.brand_kit_changed) factLines.push('<li>品牌套件已更新</li>');
   const items = preview.impact_items ?? [];
   const quote = preview.quote ?? {};
+  const groups = [
+    ['需要更新', items.filter(item => !['needs_review', 'skip'].includes(item.action))],
+    ['需要核对', items.filter(item => item.action === 'needs_review')],
+    ['建议保留', items.filter(item => item.action === 'skip')],
+  ].filter(([, group]) => group.length);
   return `<div class="chg-preview">
-    <h4>差异与影响预览（未落库）</h4>
+    <h4>确认前，先看哪些图片会受影响</h4>
     <ul class="chg-diff">${factLines.join('')}</ul>
     ${items.length === 0
       ? '<p class="truth-hint">当前没有匹配到受影响的图片版本。</p>'
-      : `<ul class="chg-impact">${items.map(item => `<li>
+      : groups.map(([title, group]) => `<h5>${title} · ${group.length} 张</h5><ul class="chg-impact">${group.map(item => `<li>
           <b>${escapeHtml(item.deliverable_label ?? item.deliverable_id)}</b>
           <span class="wb-status ${item.action === 'needs_new_photo' ? 'amber' : item.action === 'needs_review' ? 'amber' : 'blue'}">${escapeHtml(CHANGE_ACTION_LABEL[item.action] ?? item.action)}</span>
           ${item.visual_check === 'required' ? '<span class="wb-status amber">完成后需人工视觉核对</span>' : ''}
           <span class="chg-meta">当前版本 ${escapeHtml(String(item.version_id).slice(0, 12))}… · 命中 ${escapeHtml((item.matched ?? []).join('、') || '依赖记录不足')}</span>
           ${item.reason ? `<span class="chg-reason">${escapeHtml(item.reason)}</span>` : ''}
-        </li>`).join('')}</ul>`}
+        </li>`).join('')}</ul>`).join('')}
     <p class="chg-quote">预算：预计消耗 ${quote.estimated_credits ?? 0} 点（重生成 ${quote.regenerate_count ?? 0} 项计费 · 文字重合成 ${quote.recompose_count ?? 0} 项免费 · 需新实拍 ${quote.new_photo_count ?? 0} 项 · 需人工核对 ${quote.review_count ?? 0} 项）</p>
     ${(quote.notes ?? []).map(line => `<p class="truth-hint">${escapeHtml(line)}</p>`).join('')}
   </div>`;
@@ -955,22 +1099,24 @@ function renderItemActionPicker(item) {
   </div>`;
 }
 
-/** 完成后导出入口：按受影响的源任务导出更新后的套图。 */
+/** 完成后导出入口：按受影响的源任务下载本次已更新的图。 */
 function renderChangeExports(detail, area) {
   const runIds = [...new Set((detail.impact_items ?? [])
-    .filter(item => item.result_version_id)
+    .filter(item => item.result_version_id && item.status === 'done' && !item.pending_adoption && item.visual_check !== 'required')
     .map(item => item.run_id))];
-  if (runIds.length === 0) return '';
+  const history = (area.updateExports ?? []).filter(item => item.change_id === detail.id);
+  if (runIds.length === 0 && history.length === 0) return '';
   return `<div class="chg-exports">
     <h4>导出更新后的套图</h4>
-    <p class="truth-hint">导出后如有旧导出包含被替换的旧版本，会在下方「旧导出替换待办」登记；替换动作由商家在各渠道手动完成。</p>
+    <p class="truth-hint">下载包只包含本次更新后已采用且通过检查的图片，并附替换清单。请在店铺手动替换。</p>
     ${runIds.map(runId => {
       const exportedId = area.exportedByRun?.[runId];
       return `<div class="chg-row">
-        <button type="button" class="secondary" data-action="chg-export" data-run-id="${escapeHtml(runId)}">导出任务 ${escapeHtml(String(runId).slice(0, 14))}… 的更新套图</button>
-        ${exportedId ? `<a class="text-button" href="${escapeHtml(api.downloadExportUrl(exportedId))}">下载导出包</a>` : ''}
+        <button type="button" class="secondary" data-action="chg-export" data-run-id="${escapeHtml(runId)}">生成更新包</button>
+        ${exportedId && !history.some(item => item.id === exportedId) ? `<a class="text-button" href="${escapeHtml(api.downloadExportUrl(exportedId))}">下载导出包</a>` : ''}
       </div>`;
     }).join('')}
+    ${history.length ? `<h5>历史更新包</h5><ul>${history.map(item => `<li><a href="${escapeHtml(api.downloadExportUrl(item.id))}">${escapeHtml(formatTime(item.created_at))} · 下载更新包</a></li>`).join('')}</ul>` : ''}
   </div>`;
 }
 
@@ -1024,7 +1170,9 @@ async function submitChangePreview() {
   draft.preview = null;
   changeError('');
   try {
-    draft.preview = await api.previewChange(area.projectId, changeDraftPayload(draft));
+    const input = changeDraftPayload(draft);
+    draft.preview = await api.previewChange(area.projectId, input);
+    draft.previewInput = JSON.stringify(input);
     if (draft.preview.empty) changeError('');
   } catch (error) {
     changeError(errorText(error));
@@ -1037,6 +1185,10 @@ async function confirmChangeOrder() {
   const draft = area?.draft;
   if (!draft?.preview || draft.preview.empty) return;
   collectChangeDraft(draft);
+  if (JSON.stringify(changeDraftPayload(draft)) !== draft.previewInput) {
+    changeError('商品资料又有修改，请重新查看受影响的图片后再确认。');
+    return;
+  }
   changeError('');
   try {
     const payload = await api.confirmChange(area.projectId, {
@@ -1216,7 +1368,7 @@ async function exportChangeRun(runId, trigger) {
   trigger.disabled = true;
   area.error = '';
   try {
-    const payload = await api.createExport(runId);
+    const payload = await api.createExport(runId, { scope: 'partial', changeId: area.detail.id });
     area.exportedByRun = { ...(area.exportedByRun ?? {}), [runId]: payload.export.id };
     state.toast('导出包已生成');
     await loadChanges(area.projectId);

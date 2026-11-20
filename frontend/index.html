@@ -57,10 +57,10 @@
         <div class="home-landing diffuser-home" id="guest-home" hidden>
           <section class="diffuser-hero" aria-labelledby="diffuser-title">
             <div class="diffuser-intro">
-              <h1 id="diffuser-title">商品图，可以一直更新</h1>
-              <p>上新做一套，换季或换包装时，只改需要的图。</p>
+              <h1 id="diffuser-title">用商品实拍，做一套上架图</h1>
+              <p>一次选好主图、场景图和规格图。换包装或改规格，只更新受影响的图。</p>
               <div class="diffuser-actions">
-                <button type="button" class="diffuser-primary" data-hp-entry="create">制作商品图</button>
+                <button type="button" class="diffuser-primary" data-hp-entry="create">制作一套商品图</button>
                 <button type="button" data-hp-entry="update">更新已有商品图</button>
                 <button type="button" data-hp-scroll="scenes">看样片 <span aria-hidden="true">↓</span></button>
               </div>
@@ -77,13 +77,14 @@
             </div>
           </section>
           <section class="diffuser-section diffuser-update" id="evidence" aria-labelledby="diffuser-update-title">
-            <p class="diffuser-kicker">同一个商品 · 换季示例</p>
-            <h2 id="diffuser-update-title">只更新需要改的那张</h2>
-            <p>换季时给香薰补一张秋季场景，原来的主图和细节图继续用。</p>
-            <div class="diffuser-samples diffuser-pair">
-              <figure><img loading="lazy" src="assets/demo/diffuser-hero.jpg" width="1552" height="515" alt="更新前的柑橘主题场景"><figcaption>更新前 · 柑橘场景</figcaption></figure>
-              <figure><img loading="lazy" src="assets/demo/diffuser-autumn.jpg" width="429" height="256" alt="更新后的秋叶主题场景"><figcaption>更新后 · 秋季场景</figcaption></figure>
-            </div>
+            <p class="diffuser-kicker">同一个商品 · 更新示例</p>
+            <h2 id="diffuser-update-title">包装或规格变了，只更新受影响的图</h2>
+            <p>容量从 100 ml 改到 120 ml 时，先找引用旧规格和旧包装的图，再决定怎么改。</p>
+            <ul class="diffuser-impact-list">
+              <li><strong>容量说明图</strong><span>文字可编辑时，将 100 ml 改为 120 ml。</span></li>
+              <li><strong>白底主图</strong><span>露出旧包装时，补传新版包装正面照。</span></li>
+              <li><strong>场景图</strong><span>未露出旧包装和旧容量时，可以继续用。</span></li>
+            </ul>
           </section>
           <section class="diffuser-section diffuser-start" id="start" aria-labelledby="diffuser-start-title">
             <h2 id="diffuser-start-title">用你的商品，做第一套图</h2>
@@ -127,23 +128,23 @@
               <h1>今天，先把这些图片处理好。</h1>
               <p class="work-head-note">最近的商品变化与未完成事项，都在这里。</p>
             </div>
-            <button class="work-new" id="work-new-project" type="button">＋ 制作新商品图</button>
+            <button class="work-new" id="work-new-project" type="button">＋ 制作一套商品图</button>
           </div>
           <nav class="work-nav" aria-label="工作首页导航">
-            <button type="button" data-work-scroll="work-summary">工作概览</button>
             <button type="button" data-work-scroll="work-todos">待办事项</button>
+            <button type="button" data-work-scroll="work-summary">工作概览</button>
             <button type="button" data-work-scroll="work-delivery">最近交付</button>
           </nav>
-          <section id="work-summary" aria-label="工作概览">
-            <div class="metric-strip" id="home-metrics"><p>正在读取工作概览…</p></div>
-            <p class="work-metric-note" id="work-metrics-note">指标来自不同记录，可能重叠，不做合计。</p>
-          </section>
           <section class="work-section" id="work-todos" aria-label="待办事项">
             <div class="work-section-head">
-              <div><h2>继续处理</h2><p>按下一步行动排列；未知、失败、待复核与已采用分开显示。</p></div>
+              <h2>继续处理</h2>
               <button class="text-button" id="todo-refresh" type="button">刷新</button>
             </div>
             <div id="home-todos" class="home-todos" aria-live="polite"><p class="real-empty">正在读取待办…</p></div>
+          </section>
+          <section id="work-summary" aria-label="工作概览">
+            <div class="metric-strip" id="home-metrics"><p>正在读取工作概览…</p></div>
+            <p class="work-metric-note" id="work-metrics-note">指标来自不同记录，可能重叠，不做合计。</p>
           </section>
           <section class="work-section" aria-label="最近商品">
             <div class="work-section-head">
@@ -164,7 +165,7 @@
       </section>
 
       <section class="view" id="projects-view" data-view-panel="projects">
-        <div class="page-heading compact"><div><p class="eyebrow">我的商品</p><h1>我的商品</h1><p class="heading-note">每个商品都保留事实、素材与原图；可继续制作、再做一套，或从已有风格制作新品。</p></div><button class="primary" id="projects-new"><span>＋</span> 新建商品</button></div>
+        <div class="page-heading compact"><div><p class="eyebrow">我的商品</p><h1>我的商品</h1><p class="heading-note">每个商品都保留事实、素材与原图；可继续制作、再做一套，或从已有风格制作新品。</p></div><button type="button" class="secondary" id="batch-open">多 SKU 批量制作</button><button class="primary" id="projects-new"><span>＋</span> 新建商品</button></div>
         <section class="real-projects" id="real-projects" aria-live="polite">
           <div class="real-head">
             <div><h2>我的项目</h2></div>
@@ -415,9 +416,9 @@
           <div class="wb-actions">
             <span class="wb-status" id="wb-status-pill" hidden></span>
             <button class="secondary" id="wb-btn-upload">上传素材</button>
-            <button class="secondary" id="wb-btn-truth">商品事实</button>
-            <button class="secondary" id="wb-btn-spec">生产配置</button>
-            <button class="primary" id="wb-btn-start">生成/继续制作</button>
+            <button class="secondary" id="wb-btn-truth">商品资料</button>
+            <button class="secondary" id="wb-btn-spec">出图设置</button>
+            <button class="primary" id="wb-btn-start">确认并生成</button>
           </div>
         </div>
 
@@ -426,7 +427,7 @@
         <div class="wb-layout">
           <aside class="wb-left">
             <div class="wb-section">
-              <div class="wb-section-title">交付项 <span id="wb-delivery-progress"></span></div>
+              <div class="wb-section-title">本次要做的图 <span id="wb-delivery-progress"></span></div>
               <div class="wb-deliverables" id="wb-deliverables"></div>
             </div>
             <div class="wb-section wb-qa-summary">
@@ -443,10 +444,10 @@
                 <button class="icon-button" id="wb-version-prev" aria-label="上一版本">‹</button>
                 <span id="wb-version-label">—</span>
                 <button class="icon-button" id="wb-version-next" aria-label="下一版本">›</button>
-                <button class="text-button" id="wb-version-activate" hidden>选为当前版本</button>
+                <button class="text-button" id="wb-version-activate" hidden>采用这版</button>
               </div>
               <div class="wb-toolbar-right">
-                <button class="text-button" id="wb-edit-open" hidden>✎ 修改此张</button>
+                <button class="secondary" id="wb-edit-open" hidden>✎ 修改此张</button>
                 <button class="text-button" id="wb-compare-toggle">↔ 原图对比</button>
               </div>
             </div>
@@ -534,6 +535,7 @@
                 <button class="secondary" id="wb-export-complete" hidden>完整包（ZIP）</button>
                 <button class="secondary" id="wb-export-partial" hidden>部分包（ZIP）</button>
               </div>
+              <p id="wb-export-error" class="form-error" role="alert" hidden></p>
               <div class="wb-export-history" id="wb-export-history"></div>
             </div>
           </aside>
@@ -596,7 +598,30 @@
 
   <aside class="drawer" id="professional-drawer" aria-hidden="true"><div class="drawer-backdrop" data-close-drawer></div><div class="drawer-panel"><div class="drawer-header"><div><p class="eyebrow">专业模式</p><h2>生成记录与费用</h2></div><button class="icon-button" data-close-drawer aria-label="关闭专业模式">×</button></div><div class="drawer-tabs"><button class="selected">生成记录</button><button>Prompt</button><button>模型参数</button></div><div class="drawer-content"><div class="drawer-notice"><span>i</span><p>专业参数仅供查看。手动修改后会创建新版本，并重新执行完整质量检查。</p></div><div class="record"><div class="record-top"><b>第 1 轮生成</b><span>已完成</span></div><div class="record-grid"><span>模型</span><b>Seedream · 演示适配器</b><span>消耗</span><b>8 额度</b><span>耗时</span><b>42 秒</b><span>质量状态</span><b class="review-text">待复核</b></div></div><div class="record"><div class="record-top"><b>Prompt 快照</b><button class="tiny-link">复制</button></div><p class="prompt-preview">象牙白护肤霜罐置于晨间窗边，保留包装文字与主体形态，柔和自然光，浅色石材台面，绿叶点缀，留出右侧文案空间。</p></div><div class="cost-summary"><span>本次任务累计</span><strong>8 <small>额度</small></strong><p>演示数据 · 未产生真实费用</p></div></div></div></aside>
   <div class="toast" id="toast" role="status"></div>
-  <dialog id="upload-dialog" class="real-dialog" aria-labelledby="upload-dialog-title"><button class="dialog-close" data-close-dialog="upload-dialog" aria-label="关闭">×</button><p class="eyebrow">上传素材</p><h2 id="upload-dialog-title">上传真实商品素材</h2><p class="real-note">服务端校验真实文件类型、体积、哈希与项目归属；每个项目最多 6 张生效素材。</p><form id="upload-form" class="real-form"><label>归属项目<select id="upload-project" aria-label="归属项目"></select></label><label>参考职责<select id="upload-role" aria-label="参考职责"><option value="subject">主体（可作为事实来源）</option><option value="packaging">包装（可作为事实来源）</option><option value="detail">细节（可作为事实来源）</option><option value="style">风格（不作为事实来源）</option></select></label><label>图片文件<input type="file" id="upload-file" accept="image/jpeg,image/png,image/webp" required></label><p class="real-note">主体与包装为单槽职责：已有素材时会要求显式选择保留哪一张，不会静默覆盖。最短边低于 1024px 可保存但会提示补图。</p><p class="form-error" id="upload-error" role="alert"></p><div id="upload-result" hidden></div><div class="real-actions"><button type="button" class="secondary" id="upload-replace" hidden>替换现有素材并上传</button><button type="button" class="secondary" data-close-dialog="upload-dialog">关闭</button><button type="submit" class="primary" id="upload-submit">上传</button></div></form></dialog>
+  <dialog id="batch-dialog" class="real-dialog real-dialog-wide" aria-labelledby="batch-title">
+      <button type="button" class="dialog-close" data-close-dialog="batch-dialog" aria-label="关闭">×</button>
+      <h2 id="batch-title">多 SKU 批量制作</h2>
+      <details>
+        <summary>创建批次</summary>
+        <form id="batch-form">
+          <label for="batch-name">批次名称（选填）</label>
+          <input id="batch-name" maxlength="80">
+          <label for="batch-rows">商品清单，每行填写 SKU、商品名称、类目，用 Tab 分隔</label>
+          <textarea id="batch-rows" rows="4" placeholder="可从表格复制这三列，不含表头"></textarea>
+          <p>导入后，逐个上传实拍、核对商品资料并保存出图设置。</p>
+          <label for="batch-existing">或选择已有商品</label>
+          <select id="batch-existing" multiple size="4"></select>
+          <label for="batch-template">共用图种方案</label>
+          <select id="batch-template"><option value="">按各商品设置</option></select>
+          <label for="batch-brand">共用品牌风格</label>
+          <select id="batch-brand"><option value="">按各商品设置</option></select>
+          <button type="submit" class="primary">创建批次</button>
+        </form>
+      </details>
+      <p id="batch-feedback" role="status" aria-live="polite"></p>
+      <div id="batch-body"></div>
+    </dialog>
+    <dialog id="upload-dialog" class="real-dialog" aria-labelledby="upload-dialog-title"><button class="dialog-close" data-close-dialog="upload-dialog" aria-label="关闭">×</button><p class="eyebrow">上传素材</p><h2 id="upload-dialog-title">上传真实商品素材</h2><p class="real-note">服务端校验真实文件类型、体积、哈希与项目归属；每个项目最多 6 张生效素材。</p><form id="upload-form" class="real-form"><label>归属项目<select id="upload-project" aria-label="归属项目"></select></label><label>参考职责<select id="upload-role" aria-label="参考职责"><option value="subject">主体（可作为事实来源）</option><option value="packaging">包装（可作为事实来源）</option><option value="detail">细节（可作为事实来源）</option><option value="style">风格（不作为事实来源）</option></select></label><label>图片文件<input type="file" id="upload-file" accept="image/jpeg,image/png,image/webp" required></label><p class="real-note">主体与包装为单槽职责：已有素材时会要求显式选择保留哪一张，不会静默覆盖。最短边低于 1024px 可保存但会提示补图。</p><p class="form-error" id="upload-error" role="alert"></p><div id="upload-result" hidden></div><div class="real-actions"><button type="button" class="secondary" id="upload-replace" hidden>替换现有素材并上传</button><button type="button" class="secondary" data-close-dialog="upload-dialog">关闭</button><button type="submit" class="primary" id="upload-submit">上传</button></div></form></dialog>
   <dialog id="truth-dialog" class="real-dialog real-dialog-wide" aria-labelledby="truth-title"><button class="dialog-close" data-close-dialog="truth-dialog" aria-label="关闭">×</button><p class="eyebrow">商品事实</p><h2 id="truth-title">商品事实</h2><div id="truth-body"></div></dialog>
   <dialog id="help-dialog"><button class="dialog-close" id="close-help">×</button><p class="eyebrow">关于数据</p><h2>你的数据与示例是分开的</h2><p>登录后的商品、素材、任务、费用与导出记录都会保存在你的账号下。首页未登录时的「示例演示」只用于说明流程：不调用生成模型、不扣额度、不上传文件，也不会写入真实商品。带「示例」标记的图片为演示素材，不能作为交付结果。</p><button class="primary" id="help-ok">知道了</button></dialog>
   <dialog id="flow-dialog" aria-labelledby="flow-title"><button class="dialog-close" id="close-flow" aria-label="关闭演示">×</button><p class="eyebrow">演示流程 · 刷新重置</p><h2 id="flow-title">新品上架包</h2><div id="flow-content"></div><p id="flow-error" role="alert"></p><div class="flow-actions"><button class="secondary" id="flow-back">上一步</button><button class="primary" id="flow-next">下一步</button></div></dialog>

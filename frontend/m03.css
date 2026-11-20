@@ -99,3 +99,34 @@
   .sku-edit-row,.sku-edit-content{grid-template-columns:1fr 1fr;gap:6px}
   .sku-edit-row .icon-button{justify-self:end}
 }
+
+#batch-form {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+#batch-form input,
+#batch-form textarea,
+#batch-form select {
+  width: 100%;
+  min-height: 40px;
+}
+#batch-form button {
+  justify-self: start;
+}
+#batch-body ul {
+  list-style: none;
+  padding: 0;
+}
+#batch-body li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+#batch-body li p {
+  flex-basis: 100%;
+  margin: 0;
+}

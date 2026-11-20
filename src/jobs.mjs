@@ -2583,8 +2583,8 @@ export function createJobs({
    * 回退：只切换 active 标记，不删除旧版本、不改写旧报告。
    * 回退后质量结论按被选中版本的报告重算；旧报告若已失效则任务质量立即降级。
    */
-  async function activateVersion(ctx, runId, versionId) {
-    const outcome = await store.mutate(data => {
+  async function activateVersion(ctx, runId, versionId, { requireCurrent = false } = {}) {
+    const outcome = await store.mutate(async data => {
       const run = findRun(data, ctx, runId);
       const version = (run.versions ?? []).find(item => item.id === versionId);
       if (!version) throw new ApiError(404, 'NOT_FOUND', '版本不存在');
@@ -2594,6 +2594,9 @@ export function createJobs({
       const report = version.report_id ? data.quality_reports?.[version.report_id] ?? null : null;
       if (!report) {
         throw new ApiError(409, 'VERSION_REPORT_MISSING', '该版本没有关联的质量报告，不能选用；请先重新检查');
+      }
+      if (requireCurrent && (report.decision !== 'publishable' || (await reportValidityIn(data, report)).validity !== 'current')) {
+        throw new ApiError(409, 'VERSION_NOT_CURRENT', '这版尚未通过当前商品资料的检查，请先核对或重新制作');
       }
       const previousId = target.active_version_id;
       if (previousId === version.id) {
@@ -2882,7 +2885,7 @@ export function createJobs({
     return result;
   }
 
-  async function createExport(ctx, runId, { scope = 'complete' } = {}) {
+  async function createExport(ctx, runId, { scope = 'complete', changeId } = {}) {
     if (scope !== 'complete' && scope !== 'partial') {
       throw new ApiError(422, 'INVALID_SCOPE', '导出范围只能是 complete 或 partial');
     }
@@ -2902,8 +2905,24 @@ export function createJobs({
         validities[version.report_id] = await reportValidityIn(data, report);
       }
       const spec = specOfRun(data, run);
+      let exportRun = run;
+      if (changeId !== undefined) {
+        const change = data.change_orders?.[String(changeId)];
+        if (!change || change.tenant_id !== ctx.tenantId || change.project_id !== run.project_id) {
+          throw new ApiError(404, 'NOT_FOUND', '找不到该商品更新记录');
+        }
+        const updated = new Set((change.impact_items ?? [])
+          .filter(item => item.run_id === run.id && item.status === 'done'
+            && !item.pending_adoption && item.visual_check !== 'required')
+          .map(item => item.result_version_id).filter(Boolean));
+        const deliverables = run.deliverables.filter(item => updated.has(item.active_version_id));
+        if (!deliverables.length) {
+          throw new ApiError(409, 'CHANGE_EXPORT_EMPTY', '这次更新还没有已采用的图片可下载');
+        }
+        exportRun = { ...run, deliverables };
+      }
       const plan = planExport({
-        run,
+        run: exportRun,
         versions: run.versions ?? [],
         reports: Object.fromEntries(Object.entries(reports).map(([id, report]) => [report.id, report])),
         validities,
@@ -2916,7 +2935,7 @@ export function createJobs({
       }
 
       const at = clock();
-      const manifest = buildManifest({ run, spec, plan, provider: provider.capabilities(), now: at });
+      const manifest = buildManifest({ run: exportRun, spec, plan, provider: provider.capabilities(), now: at });
       if (run.billing_mode === 'finished_image' && plan.included.some(({ deliverable }) =>
         run.deliverables.find(d => d.deliverable_id === deliverable.deliverable_id)?.entitlement_settled !== 'capture')) {
         throw new ApiError(409, 'ENTITLEMENT_NOT_SETTLED', '此版本的成品额度尚未结算，请重新生成');
@@ -2963,6 +2982,14 @@ export function createJobs({
           if (manifestEntry) manifestEntry.overlay_file = `overlays/${deliverable.deliverable_id}.svg`;
         }
       }
+      if (changeId !== undefined) {
+        manifest.change_id = changeId;
+        const replacements = plan.included.map(({ deliverable, version }) =>
+          `${deliverable.label ?? deliverable.deliverable_id}：替换为 images/${deliverable.deliverable_id}.${version.format ?? 'png'}`);
+        entries.push({ name: 'replacement-list.txt', bytes: Buffer.from(
+          ['本次更新图片替换清单', ...replacements, '请在店铺手动替换上述图片。'].join('\n'),
+        ) });
+      }
       entries.push({ name: 'manifest.json', bytes: Buffer.from(JSON.stringify(manifest, null, 2)) });
       entries.push({ name: 'qa-summary.json', bytes: Buffer.from(JSON.stringify(summary, null, 2)) });
       const zip = buildZip(entries, { now: at });
@@ -2976,6 +3003,7 @@ export function createJobs({
         project_id: run.project_id,
         run_id: run.id,
         scope,
+        ...(changeId !== undefined ? { change_id: changeId } : {}),
         complete: plan.complete === true,
         status: plan.code,
         message: plan.message,
@@ -3022,6 +3050,7 @@ export function createJobs({
         .map(item => ({
           id: item.id,
           kind: item.kind ?? 'images',
+          change_id: item.change_id ?? null,
           run_id: item.run_id,
           scope: item.scope,
           sku_id: item.sku_id ?? null,

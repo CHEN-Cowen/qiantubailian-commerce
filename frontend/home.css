@@ -962,3 +962,21 @@ body.is-guest main { max-width: 1800px; padding: 0; }
   .diffuser-cover { aspect-ratio: 1.35; object-fit: cover; object-position: 67% center; }
   .diffuser-pair { grid-template-columns: 1fr; }
 }
+
+.diffuser-impact-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 14px;
+  max-width: 960px;
+  margin: 24px auto 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+.diffuser-impact-list li {
+  display: grid;
+  gap: 6px;
+  padding: 16px;
+  border: 1px solid currentColor;
+  border-radius: 12px;
+}

@@ -12,7 +12,7 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   const [html, app, style, viewport] = await Promise.all([
     read('index.html'), read('app.js'), read('style.css'), read('viewport.css'),
   ]);
-  for (const text of ['商品图，可以一直更新', '我的商品', '我的作品', '商品事实已确认', '质量检查', '专业模式', '演示项目 · 刷新重置']) {
+  for (const text of ['用商品实拍，做一套上架图', '我的商品', '我的作品', '商品事实已确认', '质量检查', '专业模式', '演示项目 · 刷新重置']) {
     assert.match(html, new RegExp(text));
   }
   assert.match(html, /图片为设计示例，不代表实际生成结果/);

@@ -278,7 +278,18 @@ function findActiveRun(runs) {
 }
 
 // ---------- 步骤条 ----------
+function renderStartAction() {
+  const button = $('#wb-btn-start');
+  if (state.activeRun && !runTerminal.has(state.activeRun.status)) {
+    button.textContent = '查看制作进度';
+    return;
+  }
+  const spec = state.specs?.some(item => (item.validity?.validity ?? 'current') === 'current');
+  button.textContent = spec ? (state.activeRun ? '制作新一套图' : '确认并生成') : '设置出图方案';
+}
+
 function renderHeader() {
+  renderStartAction();
   if (!state.project) return;
   $('#wb-project-title').textContent = `${state.project.name}（${state.project.sku}）`;
   const pill = $('#wb-status-pill');
@@ -344,7 +355,7 @@ function renderDeliverables(empty = false) {
   const holder = $('#wb-deliverables');
   const progress = $('#wb-delivery-progress');
   if (empty || !state.activeRun) {
-    holder.innerHTML = '<p class="real-hint">还没有生产任务。点击右上「生成/继续制作」开始。</p>';
+    holder.innerHTML = '<p class="real-hint">还没有制作任务。先完成出图设置，再开始制作。</p>';
     progress.textContent = '';
     return;
   }
@@ -363,7 +374,7 @@ function renderDeliverables(empty = false) {
     const qualLabel = qual === 'publishable' ? '已通过'
       : qual === 'succeeded' ? '待检查'
       : qual === 'needs_review' ? '待复核'
-      : qual === 'blocked' || qual === 'failed' ? '阻断'
+      : qual === 'blocked' || qual === 'failed' ? '待处理'
       : qual === 'running' || qual === 'queued' ? '生成中'
       : '待开始';
     const statusClass = qual === 'publishable' ? 'done'
@@ -374,7 +385,7 @@ function renderDeliverables(empty = false) {
       : 'wait';
     const active = state.selectedDeliverableId === item.deliverable_id ? ' active' : '';
     const count = (item.count || 1) > 1 ? ` ×${item.count}` : '';
-    return `<button class="wb-deliverable${active}" data-deliverable-id="${escapeHtml(item.deliverable_id)}">
+    return `<button class="wb-deliverable${active}" aria-pressed="${Boolean(active)}" data-deliverable-id="${escapeHtml(item.deliverable_id)}">
       <span class="wb-deliverable-status ${statusClass}">${statusClass === 'done' ? '✓' : statusClass === 'fail' ? '×' : statusClass === 'review' ? '!' : statusClass === 'running' ? '…' : '○'}</span>
       <span class="wb-deliverable-info">
         <b>${escapeHtml(item.label ?? item.deliverable_id)}${escapeHtml(count)}</b>
@@ -553,20 +564,8 @@ function shiftVersion(delta) {
 }
 
 async function activateSelectedVersion() {
-  if (!state.activeRun || !state.selectedVersionId) return;
-  try {
-    const result = await api.activateVersion(state.activeRun.id, state.selectedVersionId);
-    state.activeRun = result.run;
-    // 更新 versions：前端也反映 isActive
-    state.versions = state.versions.map(v => ({
-      ...v, active: v.id === state.selectedVersionId,
-    }));
-    state.toast('已切换选用版本');
-    renderDeliverables();
-    renderCenter();
-  } catch (error) {
-    state.toast(error instanceof ApiFailure ? error.message : String(error));
-  }
+  if (!state.selectedVersionId) return;
+  await activateEditVersion(state.selectedVersionId);
 }
 
 // ---------- QA ----------
@@ -1031,6 +1030,7 @@ function renderExport(empty = false) {
   const partialBtn = $('#wb-export-partial');
   const history = $('#wb-export-history');
   if (empty || !state.activeRun) {
+    $('#wb-export-error').hidden = true;
     chip.textContent = '还没有任务';
     chip.className = 'wb-chip';
     completeBtn.hidden = true;
@@ -1056,7 +1056,9 @@ function renderExport(empty = false) {
   // 完整包按钮：必须 complete=true 且 terminal
   completeBtn.hidden = !(terminal && dc.complete && passed === run.deliverables.length);
   // 部分包按钮：terminal 就可以
-  partialBtn.hidden = !terminal || passed === 0;
+  partialBtn.hidden = !terminal || passed === 0 || !completeBtn.hidden;
+  completeBtn.textContent = '下载整套图片';
+  partialBtn.textContent = '下载已通过的图片';
   history.innerHTML = state.exports.length === 0
     ? '<p class="real-hint">暂无导出记录</p>'
     : `<ul>${state.exports.map(exp => `
@@ -1068,14 +1070,29 @@ function renderExport(empty = false) {
 }
 
 async function requestExport(scope) {
-  if (!state.activeRun) return;
+  const runId = state.activeRun?.id;
+  const button = $(scope === 'complete' ? '#wb-export-complete' : '#wb-export-partial');
+  if (!runId || button.disabled) return;
+  const feedback = $('#wb-export-error');
+  feedback.hidden = true;
+  button.disabled = true;
   try {
-    const result = await api.createExport(state.activeRun.id, { scope });
-    state.toast(`已创建导出：${result.export.package_filename}`);
-    await loadRunExtras(state.activeRun.id);
-    renderExport();
+    const result = await api.createExport(runId, { scope });
+    const link = document.createElement('a');
+    link.href = api.downloadExportUrl(result.export.id);
+    link.download = result.export.package_filename;
+    link.click();
+    if (state.activeRun?.id === runId) {
+      await loadRunExtras(runId);
+      renderExport();
+    }
   } catch (error) {
-    state.toast(error instanceof ApiFailure ? error.message : String(error));
+    if (state.activeRun?.id !== runId) return;
+    const reason = error instanceof ApiFailure ? error.message : '暂时无法完成打包。';
+    feedback.textContent = `下载包生成失败。${reason} 已确认的图片仍在。请重试下载。`;
+    feedback.hidden = false;
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -1448,6 +1465,15 @@ function renderEditVersions() {
 async function activateEditVersion(versionId) {
   const run = state.activeRun;
   if (!run || !versionId) return;
+  const version = state.versions.find(item => item.id === versionId);
+  const deliverable = run.deliverables.find(item => item.deliverable_id === version?.deliverable_id);
+  if (!deliverable) return;
+  const report = state.reports.find(item => item.id === version.report_id);
+  if (report?.validity !== 'current' || report?.decision !== 'publishable') {
+    state.toast('这版尚未通过当前商品资料的检查，请先核对或重新制作。');
+    return;
+  }
+  if (!window.confirm(`采用这版后将替换「${deliverable.label ?? deliverable.deliverable_id}」的当前图片。旧图仍可在历史版本查看。`)) return;
   try {
     const result = await api.activateVersion(run.id, versionId);
     state.activeRun = result.run;
@@ -1546,7 +1572,7 @@ async function pollRegen() {
     } else if (child.status === 'cancelled') {
       status.innerHTML = '<div class="state-note warn">重生成已取消：预留额度已释放，未产生扣费。</div>';
     } else {
-      status.innerHTML = `<div class="state-note danger">重生成未成功（${escapeHtml(runStatusLabel[child.status] ?? child.status)}）：按张预留已释放/未结算，可继续修改文字或再次重做。</div>`;
+      status.innerHTML = `<div class="state-note danger">这张图没有重做成功。当前图片已保留。可以继续修改文字，或只重试这张图。</div>`;
     }
     state.edit.regen = null;
     updateApplyState();
@@ -1559,7 +1585,8 @@ async function pollRegen() {
 async function handleStartOrContinue() {
   // 如果已有非终态 run，直接恢复 SSE 即可
   if (state.activeRun && !runTerminal.has(state.activeRun.status)) {
-    state.toast('正在恢复任务…');
+    $('#wb-deliverables')?.scrollIntoView({ block: 'nearest' });
+    state.toast('正在刷新制作进度…');
     await loadRunExtras(state.activeRun.id);
     startEventLoop(state.activeRun.id);
     return;
@@ -1567,8 +1594,8 @@ async function handleStartOrContinue() {
   // 否则尝试创建新 run
   if (!state.project) { state.toast('没有项目'); return; }
   closeEditMode();
-  const spec = (state.specs || []).find(s => (s.validity?.validity ?? 'current') === 'current') ?? state.specs?.[0];
-  if (!spec) { state.toast('请先在"生产配置"里冻结一个快照'); return; }
+  const spec = state.specs?.find(item => (item.validity?.validity ?? 'current') === 'current');
+  if (!spec) { $('#wb-btn-spec')?.click(); return; }
   const btn = $('#wb-btn-start');
   btn.disabled = true;
   btn.textContent = '正在生成报价…';
@@ -1598,8 +1625,8 @@ async function handleStartOrContinue() {
     startEventLoop(state.activeRun.id);
   } catch (error) {
     state.toast(error instanceof ApiFailure ? error.message : String(error));
-    btn.textContent = '生成/继续制作';
   } finally {
+    renderStartAction();
     btn.disabled = false;
   }
 }
