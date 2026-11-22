@@ -23,8 +23,9 @@ test('首页分流：未登录新用户首页与已登录工作首页同时存�
 test('首页提供正式工作台入口和独立的静态香薰样片', async () => {
   const html = await read('frontend/index.html');
   assert.match(html, /data-hp-workspace>进入工作台/);
-  assert.match(html, /用商品实拍，做一套上架图/);
-  assert.match(html, /示例项目 · 柑橘藤条香薰/);
+  // V0.2 主标题分两行渲染（用商品实拍，<br>做一套上架图），完整主张仍须在页面上
+  assert.match(html, /用商品实拍，[\s\S]{0,120}做一套上架图/);
+  assert.match(html, /柑橘藤条香薰 · 全套上架图/);
   const server = await read('src/server.mjs');
   const photos = [...new Set([...html.matchAll(/src="(assets\/demo\/diffuser-[a-z]+\.jpg)"/g)].map(match => match[1]))];
   assert.equal(photos.length, 4);
@@ -125,4 +126,54 @@ test('静态资源白名单包含首页文件，且不包含原型文件', async
 test('首页测试已加入 npm test 列表', async () => {
   const pkg = JSON.parse(await read('package.json'));
   assert.match(pkg.scripts.test, /test\/home\.js/);
+});
+
+test('V0.2 首页：区块结构、常驻演示与可降级动效', async () => {
+  const html = await read('frontend/index.html');
+  // 六区块骨架与导航锚点
+  for (const selector of ['class="v2-hero"', 'class="v2-samples"', 'class="v2-update"', 'class="v2-demo"', 'class="v2-band"', 'class="v2-footer"']) {
+    assert.ok(html.includes(selector), `缺少 V0.2 区块 ${selector}`);
+  }
+  for (const anchor of ['id="scenes"', 'id="evidence"', 'id="start"']) assert.ok(html.includes(anchor));
+  // 四步演示常驻展示（不再折叠在 <details> 里），诚实边界文案保留
+  assert.ok(!html.includes('查看商品规格变更演示'), 'V0.2 演示必须常驻，不得折叠');
+  // 商业化话术：不出现「示例」导航与免责小字；演示区直接写明四步名称
+  assert.doesNotMatch(html, /样片示例|更新示例|示例项目/);
+  assert.doesNotMatch(html, /不调用模型、不扣额度、不写真实商品/);
+  assert.match(html, /确认变化 → 查看影响 → 按需处理 → 复核交付/);
+  // 演示数据：底部推进按钮不带序号与箭头
+  const home2 = await read('frontend/home.js');
+  assert.doesNotMatch(home2, /next: '[①②③④]/);
+  assert.doesNotMatch(home2, /next: '[^']*→'/);
+  // 四步按钮严格等高等宽：四等列网格 + 固定高 + 统一边框/字重，选中态只换颜色
+  const css2 = await read('frontend/home.css');
+  assert.match(css2, /\.hp-steps \{[\s\S]{0,160}grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(css2, /\.hp-step \{[\s\S]{0,220}height: 36px;/);
+  assert.match(css2, /\.v2-demo \.hp-step \{[\s\S]{0,160}font-weight: 600;[\s\S]{0,160}border-color: rgba\(255, 255, 255, \.16\)/);
+  // 步骤标签不再带「1./2./3./4.」数字前缀，四个按钮内容等长
+  assert.doesNotMatch(home2, /\$\{i \+ 1\}\. /);
+  // 动效钩子：轮播、缩略、更新叙事影响卡
+  assert.match(html, /id="hp-carousel"/);
+  assert.match(html, /id="hp-carousel-badge"/);
+  assert.match(html, /data-hp-scene="impact"/);
+
+  const home = await read('frontend/home.js');
+  // 轮播 crossfade + 徽标切换
+  assert.match(home, /CAROUSEL_LABELS/);
+  assert.match(home, /setInterval\(\(\) => show\(index \+ 1\), 3000\)/);
+  // 四步自动播放 3s/步、循环推进
+  assert.match(home, /renderDemo\(\(demo\.step \+ 1\) % DEMO_DATA\.length\), 3200\)/);
+  // fade-up + 全部动效在 reduced-motion 下停用
+  assert.match(home, /prefersReducedMotion/);
+  assert.match(home, /IntersectionObserver/);
+  assert.match(home, /classList\.add\('v2-anim'\)/);
+
+  const css = await read('frontend/home.css');
+  // V0.2 深紫渐变 Hero 与点缀黄同源令牌
+  assert.match(css, /\.v2-hero \{[\s\S]{0,120}#1A0842 0%, #150736 54%, #2A0E66 100%/);
+  assert.match(css, /\.v2-kicker \{[\s\S]{0,200}var\(--accent-yellow\)/);
+  // reduced-motion 降级：入场动画停用、样片淡切停用
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{[\s\S]{0,200}\.v2-anim \[data-reveal\]/);
+  // fade-up 必须由 JS 开启，脚本失败时内容默认可见
+  assert.doesNotMatch(css, /^\[data-reveal\] \{ opacity: 0/m);
 });

@@ -23,15 +23,15 @@ const DEMO_DATA = [
     change: '这次商品变化：单支装 → 双支装，净含量 50g × 2 支。',
     rows: [['商品主图', '当前选用'], ['规格说明图', '引用：50g × 1'], ['品牌氛围图', '未引用规格']],
     note: '先看清变化，再决定怎么改',
-    next: '① 模拟确认新规格 →',
+    next: '模拟确认新规格',
   },
   {
-    spec: '<s>50g × 1</s>50g × 2 支',
+    spec: '<s>50g × 1</s><b>50g × 2 支</b>',
     version: '商品资料已更新 · 图片待处理',
     change: '发现 3 张关联图片待处理，1 张品牌氛围图不受影响。',
     rows: [['规格说明图', '免费改字'], ['包装清单图', '免费重排'], ['商品主图', '需补双支实拍'], ['品牌氛围图', '保留当前版本']],
     note: '免费排版 0 点 · 当前不调用生图',
-    next: '② 查看处理方式 →',
+    next: '查看处理方式',
   },
   {
     spec: '50g × 2 支',
@@ -39,7 +39,7 @@ const DEMO_DATA = [
     change: '说明图已按新规格排版。主图仍待补实拍，不会只换字放行。',
     rows: [['规格说明图 v2', '已重排 · 待复核'], ['包装清单图 v2', '已重排 · 待复核'], ['商品主图', '待补实拍 · 未完成'], ['品牌氛围图', '原版本保留']],
     note: '真实照片不能由文字修改代替',
-    next: '③ 模拟补拍并复核 →',
+    next: '模拟补拍并复核',
   },
   {
     spec: '50g × 2 支',
@@ -47,7 +47,7 @@ const DEMO_DATA = [
     change: '本步假设商家已补双支实拍并复核。可整理 3 张更新图片与替换清单。',
     rows: [['规格说明图 v2', '演示已复核'], ['包装清单图 v2', '演示已复核'], ['双支装商品主图', '演示已复核'], ['店铺图片', '需你手动替换']],
     note: '图形仅为示意，不代表 AI 生图效果',
-    next: '查看演示更新包 ↗',
+    next: '查看演示更新包',
   },
 ];
 
@@ -69,7 +69,7 @@ function renderDemo(index) {
   demo.step = index;
   const data = DEMO_DATA[index];
   steps.innerHTML = DEMO_STEP_LABELS.map((label, i) => `
-    <button type="button" class="hp-step${i === index ? ' active' : ''}" data-demo-step="${i}" aria-pressed="${i === index}">${i + 1}. ${label}</button>`).join('');
+    <button type="button" class="hp-step${i === index ? ' active' : ''}" data-demo-step="${i}" aria-pressed="${i === index}">${label}</button>`).join('');
   const pack = $('#hp-pack');
   if (pack) pack.innerHTML = bottle() + (index === 3 ? bottle() : '');
   const spec = $('#hp-spec');
@@ -363,8 +363,106 @@ function bind() {
   });
 }
 
+/* ---------- V0.2 首页动效：样片轮播 / 四步自动播放 / 入场 ----------
+   规范要求：轮播 3s crossfade、演示 3s/步、fade-up stagger 80ms；
+   全部在 prefers-reduced-motion 下降级为静态，且脚本失败时内容默认可见。 */
+const CAROUSEL_LABELS = ['场景图 · 可发布', '白底主图 · 已通过', '场景图 · 可发布'];
+
+function prefersReducedMotion() {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function setupHeroCarousel() {
+  const root = $('#hp-carousel');
+  if (!root) return;
+  const slides = $$('.v2-slide', root);
+  const dots = $$('[data-slide]', root);
+  const badge = $('#hp-carousel-badge');
+  if (slides.length < 2) return;
+  let index = 0;
+  let timer = null;
+  const show = next => {
+    index = (next + slides.length) % slides.length;
+    slides.forEach((slide, i) => slide.classList.toggle('is-active', i === index));
+    dots.forEach((dot, i) => {
+      dot.classList.toggle('is-current', i === index);
+      dot.setAttribute('aria-current', i === index ? 'true' : 'false');
+    });
+    if (badge) badge.textContent = CAROUSEL_LABELS[index] ?? '';
+  };
+  const stop = () => {
+    if (timer) { clearInterval(timer); timer = null; }
+  };
+  const play = () => {
+    stop();
+    if (!prefersReducedMotion()) timer = setInterval(() => show(index + 1), 3000);
+  };
+  root.addEventListener('click', event => {
+    const dot = event.target.closest('[data-slide]');
+    if (!dot) return;
+    show(Number(dot.dataset.slide));
+    play();
+  });
+  root.addEventListener('mouseenter', stop);
+  root.addEventListener('mouseleave', play);
+  root.addEventListener('focusin', stop);
+  root.addEventListener('focusout', play);
+  show(0);
+  play();
+}
+
+function setupDemoAutoplay() {
+  const node = $('#hp-demo');
+  if (!node) return;
+  let timer = null;
+  let visible = true;
+  const stop = () => {
+    if (timer) { clearInterval(timer); timer = null; }
+  };
+  const play = () => {
+    stop();
+    if (!visible || prefersReducedMotion()) return;
+    timer = setInterval(() => renderDemo((demo.step + 1) % DEMO_DATA.length), 3200);
+  };
+  node.addEventListener('mouseenter', stop);
+  node.addEventListener('mouseleave', play);
+  node.addEventListener('focusin', stop);
+  // 点击任意步骤跳转后重新计时，避免刚看过的一步立刻被自动跳过
+  node.addEventListener('click', play);
+  if ('IntersectionObserver' in window) {
+    new IntersectionObserver(entries => {
+      for (const entry of entries) visible = entry.isIntersecting;
+      if (visible) play();
+      else stop();
+    }, { threshold: .3 }).observe(node);
+  } else {
+    play();
+  }
+}
+
+function setupReveal() {
+  const nodes = $$('[data-reveal]');
+  if (!nodes.length) return;
+  if (prefersReducedMotion() || !('IntersectionObserver' in window)) return;
+  document.body.classList.add('v2-anim');
+  nodes.forEach((node, i) => { node.style.transitionDelay = `${(i % 3) * 80}ms`; });
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      entry.target.classList.add('is-in');
+      observer.unobserve(entry.target);
+    });
+  }, { threshold: .16, rootMargin: '0px 0px -60px 0px' });
+  nodes.forEach(node => observer.observe(node));
+}
+
 if (typeof document !== 'undefined') {
   bind();
   renderDemo(0);
+  setupHeroCarousel();
+  setupDemoAutoplay();
+  setupReveal();
   void boot();
 }

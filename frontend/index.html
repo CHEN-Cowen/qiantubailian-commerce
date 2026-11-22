@@ -35,9 +35,8 @@
         <button class="avatar" aria-label="账户菜单">我</button>
       </div>
       <nav class="hp-nav" aria-label="首页导航">
-        <button type="button" data-hp-scroll="scenes">样片示例</button>
-        <button type="button" data-hp-scroll="evidence">持续更新</button>
-        <button type="button" data-hp-scroll="start">开始使用</button>
+        <button type="button" data-hp-scroll="scenes">样片</button>
+        <button type="button" data-hp-scroll="evidence">更新流程</button>
       </nav>
       <div class="hp-guest-actions">
         <button type="button" class="hp-menu-toggle" id="hp-menu-toggle" aria-expanded="false" aria-controls="hp-mobile-menu">导航</button>
@@ -45,62 +44,123 @@
       </div>
     </header>
     <div class="hp-mobile-menu" id="hp-mobile-menu" hidden>
-      <button type="button" data-hp-scroll="scenes">样片示例</button>
-      <button type="button" data-hp-scroll="evidence">持续更新</button>
-      <button type="button" data-hp-scroll="start">开始使用</button>
+      <button type="button" data-hp-scroll="scenes">样片</button>
+      <button type="button" data-hp-scroll="evidence">更新流程</button>
     </div>
 
     <main>
       <section class="view active" id="home-view" data-view-panel="home">
         <div class="home-loading" id="home-loading">正在确认登录状态…</div>
 
-        <div class="home-landing diffuser-home" id="guest-home" hidden>
-          <section class="diffuser-hero" aria-labelledby="diffuser-title">
-            <div class="diffuser-intro">
-              <h1 id="diffuser-title">用商品实拍，做一套上架图</h1>
-              <p>一次选好主图、场景图和规格图。换包装或改规格，只更新受影响的图。</p>
-              <div class="diffuser-actions">
-                <button type="button" class="diffuser-primary" data-hp-entry="create">制作一套商品图</button>
-                <button type="button" data-hp-entry="update">更新已有商品图</button>
-                <button type="button" data-hp-scroll="scenes">看样片 <span aria-hidden="true">↓</span></button>
+        <div class="v2-home" id="guest-home" hidden>
+          <!-- 1. 暗色 Hero：深紫渐变 + 样片轮播 -->
+          <section class="v2-hero" aria-labelledby="v2-hero-title">
+            <div class="v2-hero-glow" aria-hidden="true"></div>
+            <div class="v2-hero-inner">
+              <div class="v2-hero-copy">
+                <span class="v2-kicker">商品实拍进 · 可上架图出</span>
+                <h1 id="v2-hero-title">用商品实拍，<br><span class="v2-grad">做一套上架图</span></h1>
+                <p class="v2-lead">主图、场景图、规格图一次做齐。换包装或改规格，只更新受影响的图，其余原样保留。</p>
+                <div class="v2-hero-actions">
+                  <button type="button" class="v2-cta" data-hp-entry="create">制作一套商品图</button>
+                  <button type="button" class="v2-cta-ghost" data-hp-entry="update">更新已有商品图</button>
+                </div>
+                <ul class="v2-trust">
+                  <li><span aria-hidden="true">✓</span>商品主体与包装文字走本地保护</li>
+                  <li><span aria-hidden="true">✓</span>缺资料就标未知，不替你编</li>
+                  <li><span aria-hidden="true">✓</span>通过校验才给「可发布」</li>
+                </ul>
+              </div>
+              <div class="v2-hero-media">
+                <div class="v2-stage" id="hp-carousel" aria-roledescription="carousel" aria-label="柑橘藤条香薰样片">
+                  <figure class="v2-slide is-active">
+                    <img class="diffuser-cover" src="assets/demo/diffuser-hero.jpg" width="1552" height="515" alt="柑橘与浅色石台上的琥珀色藤条香薰">
+                  </figure>
+                  <figure class="v2-slide">
+                    <img src="assets/demo/diffuser-white.jpg" alt="香薰瓶白底主图">
+                  </figure>
+                  <figure class="v2-slide">
+                    <img src="assets/demo/diffuser-scene.jpg" alt="香薰瓶的柑橘主题场景">
+                  </figure>
+                  <span class="v2-badge" id="hp-carousel-badge">场景图 · 可发布</span>
+                  <div class="v2-dots" id="hp-carousel-dots">
+                    <button type="button" class="is-current" data-slide="0" aria-label="第 1 张：场景图"><span></span></button>
+                    <button type="button" data-slide="1" aria-label="第 2 张：白底主图"><span></span></button>
+                    <button type="button" data-slide="2" aria-label="第 3 张：场景图"><span></span></button>
+                  </div>
+                </div>
+                <div class="v2-thumbs">
+                  <figure><img src="assets/demo/diffuser-detail.jpg" alt="香薰瓶瓶口、藤条和标签的细节"><figcaption>包装细节</figcaption></figure>
+                  <figure><img src="assets/demo/diffuser-white.jpg" alt="香薰瓶正面白底图"><figcaption>白底主图</figcaption></figure>
+                </div>
               </div>
             </div>
-            <div class="landing-showcase" aria-label="柑橘藤条香薰样片">
-              <figure class="landing-main"><img class="diffuser-cover" src="assets/demo/diffuser-hero.jpg" width="1552" height="515" alt="柑橘与浅色石台上的琥珀色藤条香薰"><figcaption>柑橘藤条香薰 · 场景示例</figcaption></figure>
-              <div class="landing-thumbs">
-                <figure><img src="assets/demo/diffuser-white.jpg" alt="香薰白底主图"><figcaption>白底主图</figcaption></figure>
-                <figure><img src="assets/demo/diffuser-detail.jpg" alt="香薰包装细节"><figcaption>包装细节</figcaption></figure>
-              </div>
+          </section>
+
+          <!-- 2. 白色样片区 -->
+          <section class="v2-samples" id="scenes" aria-labelledby="v2-samples-title">
+            <header class="v2-sec-head" data-reveal>
+              <p class="v2-kicker-dark">柑橘藤条香薰 · 全套上架图</p>
+              <h2 id="v2-samples-title">首次上新，一次做齐全套</h2>
+              <p>同一个商品、同一套商品事实，主图、场景图、细节图各自到位。</p>
+            </header>
+            <div class="v2-sample-grid">
+              <figure class="v2-sample" data-reveal>
+                <div class="v2-sample-img"><img loading="lazy" src="assets/demo/diffuser-white.jpg" width="1024" height="952" alt="香薰瓶正面白底图"></div>
+                <figcaption><b>白底主图</b><span class="v2-pill is-ok">已通过</span></figcaption>
+              </figure>
+              <figure class="v2-sample" data-reveal>
+                <div class="v2-sample-img"><img loading="lazy" src="assets/demo/diffuser-scene.jpg" width="1536" height="952" alt="香薰瓶的柑橘主题场景"></div>
+                <figcaption><b>场景图</b><span class="v2-pill is-ok">已通过</span></figcaption>
+              </figure>
+              <figure class="v2-sample" data-reveal>
+                <div class="v2-sample-img"><img loading="lazy" src="assets/demo/diffuser-detail.jpg" width="1024" height="952" alt="香薰瓶瓶口、藤条和标签的特写"></div>
+                <figcaption><b>细节图</b><span class="v2-pill is-review">待复核</span></figcaption>
+              </figure>
             </div>
           </section>
-          <section class="diffuser-section" id="scenes" aria-labelledby="diffuser-samples-title">
-            <p class="diffuser-kicker">示例项目 · 柑橘藤条香薰</p>
-            <h2 id="diffuser-samples-title">首次上新，生成一整套图</h2>
-            <div class="diffuser-samples">
-              <figure><img loading="lazy" src="assets/demo/diffuser-white.jpg" width="290" height="259" alt="香薰瓶正面白底图"><figcaption>白底主图</figcaption></figure>
-              <figure><img loading="lazy" src="assets/demo/diffuser-scene.jpg" width="290" height="259" alt="香薰瓶的柑橘主题场景"><figcaption>场景图</figcaption></figure>
-              <figure><img loading="lazy" src="assets/demo/diffuser-detail.jpg" width="288" height="259" alt="香薰瓶瓶口、藤条和标签的特写"><figcaption>细节图</figcaption></figure>
+
+          <!-- 3. 浅紫更新叙事 -->
+          <section class="v2-update" id="evidence" aria-labelledby="v2-update-title">
+            <div class="v2-update-inner">
+              <header class="v2-sec-head v2-sec-head-left" data-reveal>
+                <p class="v2-kicker-dark">上新之后 · 商品图怎么跟着改</p>
+                <h2 id="v2-update-title">包装或规格变了，只改受影响的图</h2>
+                <p>容量从 100 ml 改到 120 ml，先找出引用旧规格、旧包装的图，再逐张决定怎么处理。</p>
+              </header>
+              <ul class="v2-impact">
+                <li class="is-review" data-reveal>
+                  <span class="v2-pill is-review">需要更新</span>
+                  <b>容量说明图</b>
+                  <p>文字可编辑时，把 100 ml 改为 120 ml。</p>
+                  <button type="button" class="v2-card-btn" data-hp-scene="impact">看处理方式</button>
+                </li>
+                <li class="is-block" data-reveal>
+                  <span class="v2-pill is-block">补一张图</span>
+                  <b>白底主图</b>
+                  <p>露出旧包装时，补传新版包装正面照。</p>
+                  <button type="button" class="v2-card-btn" data-hp-scene="compare">看前后对比</button>
+                </li>
+                <li class="is-ok" data-reveal>
+                  <span class="v2-pill is-ok">可继续用</span>
+                  <b>场景图</b>
+                  <p>未露出旧包装和旧容量，保持当前版本。</p>
+                  <button type="button" class="v2-card-btn" data-hp-scene="question">看留用原因</button>
+                </li>
+              </ul>
             </div>
           </section>
-          <section class="diffuser-section diffuser-update" id="evidence" aria-labelledby="diffuser-update-title">
-            <p class="diffuser-kicker">同一个商品 · 更新示例</p>
-            <h2 id="diffuser-update-title">包装或规格变了，只更新受影响的图</h2>
-            <p>容量从 100 ml 改到 120 ml 时，先找引用旧规格和旧包装的图，再决定怎么改。</p>
-            <ul class="diffuser-impact-list">
-              <li><strong>容量说明图</strong><span>文字可编辑时，将 100 ml 改为 120 ml。</span></li>
-              <li><strong>白底主图</strong><span>露出旧包装时，补传新版包装正面照。</span></li>
-              <li><strong>场景图</strong><span>未露出旧包装和旧容量时，可以继续用。</span></li>
-            </ul>
-          </section>
-          <section class="diffuser-section diffuser-start" id="start" aria-labelledby="diffuser-start-title">
-            <h2 id="diffuser-start-title">用你的商品，做第一套图</h2>
-            <div class="diffuser-actions diffuser-secondary">
-              <button id="hp-create" type="button">首次制作商品图</button>
-              <button id="hp-update" type="button">更新商品图</button>
-            </div>
-            <details class="diffuser-process"><summary>查看商品规格变更演示</summary>
-              <div class="hp-demo" id="hp-demo" aria-label="商品变化四步演示">
-                <div class="hp-demo-head"><strong>一次更新，四步完成</strong><span class="hp-tag">示例演示</span></div>
+
+          <!-- 4. 深色四步演示 -->
+          <section class="v2-demo" id="start" aria-labelledby="v2-demo-title">
+            <div class="v2-demo-inner">
+              <header class="v2-sec-head v2-sec-head-dark" data-reveal>
+                <p class="v2-kicker">一次更新 · 四步完成</p>
+                <h2 id="v2-demo-title">从确认变化到复核交付，全程可见</h2>
+                <p>四步是：确认变化 → 查看影响 → 按需处理 → 复核交付，每一步都可以点开细看。</p>
+              </header>
+              <div class="hp-demo" id="hp-demo" data-reveal aria-label="商品变化四步演示">
+                <div class="hp-demo-head"><strong>青禾 · 植萃护手霜 · 规格变更</strong><span class="hp-tag">模拟数据</span></div>
                 <div class="hp-demo-body">
                   <div class="hp-steps" id="hp-steps"></div>
                   <div class="hp-product-area">
@@ -120,10 +180,35 @@
                   </div>
                 </div>
               </div>
-              <p>主体区域检查与本地合成只覆盖可验证的部分，实际效果需验收。平台规则未核验项如实说明，不承诺图片一定能上架。</p>
-            </details>
+              <p class="v2-demo-note">主体区域检查与本地合成只覆盖可验证的部分，实际效果需验收；平台规则未核验项如实说明，不承诺图片一定能上架。</p>
+            </div>
           </section>
-          <footer class="diffuser-footer"><strong>千图百炼</strong><span>图片为设计示例，不代表实际生成结果。</span></footer>
+
+          <!-- 5. 紫渐变 CTA 带 -->
+          <section class="v2-band" aria-labelledby="v2-cta-title">
+            <div class="v2-cta-inner" data-reveal>
+              <h2 id="v2-cta-title">用你的商品，做第一套图</h2>
+              <p>先做一套看真实效果，再决定要不要规模化。</p>
+              <div class="v2-cta-actions">
+                <button id="hp-create" type="button">首次制作商品图</button>
+                <button id="hp-update" type="button">更新商品图</button>
+              </div>
+            </div>
+          </section>
+
+          <!-- 6. 深色页脚 -->
+          <footer class="v2-footer">
+            <div class="v2-footer-brand">
+              <strong>千图百炼</strong>
+              <p>电商商品视觉生产与校验工作台：从真实素材到可上架图片。</p>
+            </div>
+            <div class="v2-footer-links">
+              <button type="button" data-hp-scroll="scenes">样片</button>
+              <button type="button" data-hp-scroll="evidence">持续更新</button>
+              <button type="button" id="hp-footer-login" data-hp-workspace>进入工作台</button>
+            </div>
+            <p class="v2-footer-note">图片为设计示例，不代表实际生成结果；平台规则未核验项会如实标注。</p>
+          </footer>
         </div>
 
         <!-- 已登录：工作首页，数字与待办来自当前账户的真实数据 -->
