@@ -42,8 +42,8 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
 
 // 模块02：首次制作一页三步向导（create 视图）契约
 test('M02-wizard create 视图存在、脚本接线、三步步骤条与诚实边界文案', async () => {
-  const [html, app, style, wizard, server] = await Promise.all([
-    read('index.html'), read('app.js'), read('style.css'), read('wizard.js'),
+  const [html, app, style, wizard, api, server] = await Promise.all([
+    read('index.html'), read('app.js'), read('style.css'), read('wizard.js'), read('api.js'),
     readFile(`${root}src/server.mjs`, 'utf8'),
   ]);
   // create 视图作为独立 view 面板接入 setView 机制
@@ -75,6 +75,14 @@ test('M02-wizard create 视图存在、脚本接线、三步步骤条与诚实�
   assert.match(wizard, /api\.createQuote\(/);
   assert.match(wizard, /api\.createRun\(/);
   assert.match(wizard, /randomUUID|Idempotency/i, '生成必须携带 Idempotency-Key');
+  // 进入 create 视图必须真正触发 resetForEntry（幂等键在这里生成）：
+  // 派发方与监听方必须使用同一个事件目标，否则 key 一直为空、创建任务被 400 拦截
+  assert.match(app, /document\.dispatchEvent\(new CustomEvent\('qb:view-change'/, 'view-change 必须在 document 上派发');
+  assert.doesNotMatch(app, /window\.dispatchEvent\(new CustomEvent\('qb:view-change'/);
+  assert.match(wizard, /document\.addEventListener\('qb:view-change'/, '向导必须监听 document 上的 view-change');
+  assert.match(wizard, /state\.idempotencyKey = newIdempotencyKey\(\)/, '进入向导必须生成幂等键');
+  assert.match(wizard, /if \(!state\.idempotencyKey\) state\.idempotencyKey = newIdempotencyKey\(\)/, '创建任务前必须兜底补齐幂等键');
+  assert.match(api, /headers: \{ 'Idempotency-Key': idempotencyKey \}/, 'createRun 必须携带幂等键请求头');
   assert.match(wizard, /qb:open-workbench/, '生成成功后必须跳转工作台');
   // OCR 诚实边界：未配置要明说，候选一律待确认
   assert.match(wizard, /未配置文字识别，可手动填写/);

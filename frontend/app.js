@@ -23,8 +23,10 @@ function setView(view) {
   $('#project-view').classList.remove('active');
   if (location.hash !== '#' + view) location.hash = view;
   window.scrollTo({ top: 0, behavior: 'smooth' });
-  // R06：派发 view-change 事件，让模块（m04/workbench 等）收到视图切换通知
-  window.dispatchEvent(new CustomEvent('qb:view-change', { detail: { view } }));
+  // R06：派发 view-change 事件，让模块（m04/workbench 等）收到视图切换通知。
+  // 事件必须在 document 上派发并冒泡：各监听方统一用 document.addEventListener，
+  // 在 window 上 dispatch 不会下传到 document，向导的入口重置（含幂等键）会因此失效。
+  document.dispatchEvent(new CustomEvent('qb:view-change', { detail: { view }, bubbles: true }));
 }
 
 function openProject(project = 'skin') {

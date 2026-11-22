@@ -1424,6 +1424,8 @@ async function onGenerate() {
       // 两段式第二段：带 Idempotency-Key 创建任务，重复点击不会重复扣费
       state.phase = 'creating';
       button.textContent = '正在创建任务…';
+      // 入口重置时已生成幂等键；这里只兜底异常入口状态，键生成后在整个确认动作内保持不变
+      if (!state.idempotencyKey) state.idempotencyKey = newIdempotencyKey();
       const result = await api.createRun({
         project_id: state.project.id,
         quote_id: state.quote.quote_id,

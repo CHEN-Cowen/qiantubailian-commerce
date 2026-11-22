@@ -929,6 +929,14 @@ body.is-guest .hp-nav button { color: var(--primary-dark); }
 body.is-guest .hp-login, .diffuser-primary { background: var(--primary); color: white; border: 0; border-radius: 999px; font-weight: 500; }
 body.is-guest .hp-login:hover, .diffuser-primary:hover { background: var(--primary-dark); color: white; }
 body.is-guest main { max-width: 1800px; padding: 0; }
+/* 满宽只服务首页落地页；向导 / 项目 / 作品 / 工作台等视图恢复容器内边距，
+   与登录态一致，避免内容贴屏幕边缘、h1 被裁切 */
+body.is-guest main > .view:not(#home-view),
+body.is-guest main > .project-view { max-width: 1440px; margin: 0 auto; padding: 42px 42px 60px; }
+@media (max-width: 760px) {
+  body.is-guest main > .view:not(#home-view),
+  body.is-guest main > .project-view { padding: 22px 16px 48px; }
+}
 .home-landing.diffuser-home { background: #fff; color: #232427; }
 .diffuser-home button:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
 .diffuser-hero { padding: 0 clamp(16px, 3.5vw, 64px); text-align: center; }

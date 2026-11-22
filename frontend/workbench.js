@@ -449,12 +449,14 @@ function renderCenter(empty = false) {
   const reviseBtn = $('#wb-revise-btn');
   const downloadActive = $('#wb-download-active');
   const editOpenBtn = $('#wb-edit-open');
+  const nextStep = $('#wb-next-step');
 
   reviseBtn.hidden = true;
   downloadActive.hidden = true;
   editOpenBtn.hidden = true;
   versionSwitch.hidden = true;
   dual.hidden = true;
+  nextStep.hidden = true;
 
   if (empty || !state.activeRun || !state.selectedDeliverableId) {
     emptyHint.hidden = false;

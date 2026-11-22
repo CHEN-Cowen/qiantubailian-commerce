@@ -89,6 +89,32 @@ test('账户切换先清空旧数据，避免残留上一账户的指标', async
   assert.match(js, /resetWorkHome\(\);[\s\S]{0,200}api\.listProjects/);
 });
 
+test('演示身份与深链不被弹回首页，生产未登录保留原 hash 再登录', async () => {
+  const home = await read('frontend/home.js');
+  const applyAuth = home.slice(home.indexOf('function applyAuth'), home.indexOf('async function boot'));
+  // 演示身份（NODE_ENV≠production 默认开启）可直接进入 #projects / #create 等深链
+  assert.match(applyAuth, /demoMode/, 'applyAuth 必须识别演示身份');
+  assert.match(applyAuth, /if \(authenticated \|\| demoMode\) return;/);
+  // 不得再无条件下改写 hash 弹回首页
+  assert.doesNotMatch(applyAuth, /navigateHome\(\)/, 'applyAuth 不得强制弹回首页');
+  assert.doesNotMatch(home, /function navigateHome\(\)/);
+  // 生产未登录访问受保护深链：保留 hash，仅打开登录闸口，reload 后回到原页面
+  assert.match(applyAuth, /location\.hash\.replace\(\/\^#\/, ''\)/);
+  assert.match(applyAuth, /openAuthGate\(/);
+});
+
+test('访客态非首页视图保留容器内边距，首页样例仍可满宽', async () => {
+  const css = await read('frontend/home.css');
+  // 向导 / 项目 / 作品 / 工作台恢复与登录态一致的容器内边距，避免内容贴边、h1 被裁切
+  assert.match(
+    css,
+    /body\.is-guest main > \.view:not\(#home-view\)[\s\S]{0,220}max-width: 1440px; margin: 0 auto; padding: 42px 42px 60px;/,
+    '非首页视图必须有容器内边距',
+  );
+  assert.match(css, /body\.is-guest main > \.project-view[\s\S]{0,120}padding: 42px 42px 60px;/, '项目详情视图必须有容器内边距');
+  assert.match(css, /@media \(max-width: 760px\) \{\s*body\.is-guest main > \.view:not\(#home-view\)[\s\S]{0,180}padding: 22px 16px 48px;/, '窄屏必须保留水平内边距');
+});
+
 test('静态资源白名单包含首页文件，且不包含原型文件', async () => {
   const server = await read('src/server.mjs');
   assert.match(server, /'home\.js'/);

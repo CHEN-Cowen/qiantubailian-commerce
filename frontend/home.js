@@ -248,13 +248,9 @@ function startEntry(kind) {
 }
 
 /* ---------- 登录状态 ---------- */
-function navigateHome() {
-  if (location.hash && location.hash !== '#home') history.replaceState(null, '', '#home');
-  navigate('home');
-}
-
 function applyAuth(auth) {
   const authenticated = Boolean(auth?.authenticated);
+  const demoMode = Boolean(auth?.demoMode);
   document.body.classList.remove('auth-pending');
   document.body.classList.toggle('is-guest', !authenticated);
   const loading = $('#home-loading');
@@ -263,7 +259,12 @@ function applyAuth(auth) {
   if (guest) guest.hidden = authenticated;
   const work = $('#work-home');
   if (work) work.hidden = !authenticated;
-  if (!authenticated) navigateHome();
+  if (authenticated || demoMode) return;
+  // 生产环境未登录：保留原 hash 打开登录闸口，登录 reload 后会回到同一页面；
+  // 不再无条件 replaceState 到 #home，避免深链被弹回首页。
+  const target = location.hash.replace(/^#/, '');
+  if (!target || target === 'home') return;
+  openAuthGate({ demoHint: '登录后会回到你刚才打开的页面。' });
 }
 
 async function boot() {
