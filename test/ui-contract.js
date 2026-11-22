@@ -23,9 +23,9 @@ test('M02 商业化 UI 保留明确演示边界与核心页面', async () => {
   assert.match(app, /function openDrawer\(\)/);
   assert.match(app, /project !== 'skin'/);
   assert.match(app, /addEventListener\('keydown', activateProject\)/);
-  // 体验优化模块 01：主色切换为低饱和绿（F1 建议色 #365F49 / #6E8F79）
-  assert.match(style, /--primary:#365F49/);
-  assert.match(style, /--accent:#6E8F79/);
+  // V0.2 电紫主题：主行动 #5A00D6 / 强调 #7C3AED（原低饱和绿已退役）
+  assert.match(style, /--primary:#5A00D6/);
+  assert.match(style, /--accent:#7C3AED/);
   assert.match(viewport, /@media\(max-width:760px\)/);
   assert.match(style, /\.view,\.project-view\{display:none\}/);
   assert.match(html, /刷新后重置/);

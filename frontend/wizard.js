@@ -914,22 +914,22 @@ function templateArt(item) {
   const hasCopy = (item.deliverables ?? []).some(deliverable => (deliverable.text_blocks ?? []).length > 0);
   const fill = {
     plain_white: '#ffffff',
-    scene: '#e7eee7',
+    scene: '#EEEBF6',
     gradient_studio: '#e8e9f3',
     lifestyle: '#f3ece1',
-  }[background] ?? '#eef1ee';
-  const stroke = background === 'plain_white' ? '#c9d2c9' : 'transparent';
+  }[background] ?? '#F1EFF7';
+  const stroke = background === 'plain_white' ? '#D4D2E0' : 'transparent';
   return `<svg class="wiz-art" viewBox="0 0 96 96" aria-hidden="true" focusable="false">
     <defs><linearGradient id="g-${escapeHtml(item.id)}" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="${fill}"/><stop offset="1" stop-color="#ffffff"/>
     </linearGradient></defs>
     <rect x="4" y="4" width="88" height="88" rx="8" fill="url(#g-${escapeHtml(item.id)})" stroke="${stroke}"/>
-    ${background === 'scene' ? '<path d="M4 70h88" stroke="#cdd9cd" stroke-width="2"/><circle cx="72" cy="30" r="9" fill="#dbe7db"/>' : ''}
+    ${background === 'scene' ? '<path d="M4 70h88" stroke="#D8D4E6" stroke-width="2"/><circle cx="72" cy="30" r="9" fill="#E4E1F0"/>' : ''}
     ${background === 'lifestyle' ? '<rect x="62" y="14" width="18" height="26" rx="3" fill="#e6d8c3"/>' : ''}
     ${background === 'gradient_studio' ? '<circle cx="24" cy="28" r="14" fill="#ffffff88"/>' : ''}
-    <rect x="${tall ? 34 : 28}" y="${tall ? 20 : 30}" width="${tall ? 28 : 40}" height="${tall ? 46 : 36}" rx="5" fill="#ffffff" stroke="#93a893"/>
-    <rect x="${tall ? 40 : 35}" y="${tall ? 30 : 38}" width="${tall ? 16 : 26}" height="6" rx="2" fill="#b9cdb9"/>
-    ${hasCopy ? `<rect x="14" y="${tall ? 74 : 72}" width="42" height="4" rx="2" fill="#5d7a5d"/><rect x="14" y="${tall ? 82 : 80}" width="28" height="4" rx="2" fill="#9bb09b"/>` : ''}
+    <rect x="${tall ? 34 : 28}" y="${tall ? 20 : 30}" width="${tall ? 28 : 40}" height="${tall ? 46 : 36}" rx="5" fill="#ffffff" stroke="#A79BC0"/>
+    <rect x="${tall ? 40 : 35}" y="${tall ? 30 : 38}" width="${tall ? 16 : 26}" height="6" rx="2" fill="#C4BDD9"/>
+    ${hasCopy ? `<rect x="14" y="${tall ? 74 : 72}" width="42" height="4" rx="2" fill="#6D5FA8"/><rect x="14" y="${tall ? 82 : 80}" width="28" height="4" rx="2" fill="#9D93C0"/>` : ''}
   </svg>`;
 }
 
