@@ -145,7 +145,7 @@ async function renderLibraryView() {
       tplList.innerHTML = templates.map(tpl => `
         <article class="template-card" data-template-id="${escapeHtml(tpl.id)}">
           <b>${escapeHtml(tpl.name)}</b>
-          <small>${escapeHtml(tpl.description ?? tpl.id)} · ${(tpl.deliverables ?? []).length} 个交付物</small>
+          <small>${escapeHtml(tpl.summary ?? tpl.purpose ?? tpl.id)} · ${tpl.deliverable_count ?? (tpl.deliverables ?? []).length} 个交付物</small>
           <div class="bk-actions"><button class="text-button" data-action="style-use">用此风格制作新品</button></div>
         </article>`).join('');
     }

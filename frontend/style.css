@@ -394,3 +394,5 @@ dialog::backdrop{background:rgba(21,7,54,.45)}
 }
 /* V0.2 定稿：激活标签页黄下划线；显式压过旧版 .nav-item.active:after 的 display:none 与电紫底 */
 .nav-item.active::after{display:block;background:var(--accent-yellow);transform:scaleX(1)}
+/* 批次4 降噪：运行时状态行默认无静态文案，为空时不占位 */
+#wiz-run-note:empty{display:none}

@@ -252,7 +252,7 @@ function renderHomeRealProjects() {
           <h3>${escapeHtml(project.name)}</h3>
           <span class="${statusClass}">${escapeHtml(statusText)}</span>
         </div>
-        <p>${escapeHtml(project.category)}${project.platform ? ` · ${escapeHtml(project.platform)}` : ''} · 生效素材 ${project.active_asset_count ?? 0} · 事实 v${project.truth_head_version ?? 0}</p>
+        <p>${escapeHtml(project.category)}${project.platform ? ` · ${escapeHtml(project.platform)}` : ''} · 生效素材 ${project.active_asset_count ?? 0} · 信息 v${project.truth_head_version ?? 0}</p>
         <div class="project-foot">
           <button class="secondary" data-action="workbench">打开商品工作台</button>
           <button class="text-button" data-action="update-images">更新包装或规格</button>
@@ -288,7 +288,7 @@ function renderProjects() {
   const list = $('#real-list');
   if (!list) return;
   if (state.projects.length === 0) {
-    list.innerHTML = '<p class="real-empty">尚未创建项目。点击「导入商品资料」或「新建项目」开始。</p>';
+    list.innerHTML = '<p class="real-empty">还没有商品项目。点击右上角「新建商品」开始。</p>';
     return;
   }
   list.innerHTML = state.projects.map(project => {
@@ -304,7 +304,7 @@ function renderProjects() {
     return `<article class="real-card" data-project-id="${escapeHtml(project.id)}">
       <div class="real-card-main">
         <div class="real-card-title"><b>${escapeHtml(project.name)}</b><code>${escapeHtml(project.sku)}</code></div>
-        <p>${escapeHtml(project.category)}${project.platform ? ` · ${escapeHtml(project.platform)}` : ''} · 生效素材 ${project.active_asset_count} 张 · 事实 v${project.truth_head_version}</p>
+        <p>${escapeHtml(project.category)}${project.platform ? ` · ${escapeHtml(project.platform)}` : ''} · 生效素材 ${project.active_asset_count} 张 · 信息 v${project.truth_head_version}</p>
       </div>
       <div class="real-card-side">${pill}
         <button class="text-button" data-action="truth">商品信息</button>
@@ -865,7 +865,7 @@ function renderChangeList(area) {
     const [label, tone] = CHANGE_STATUS_META[change.status] ?? [change.status, 'neutral'];
     return `<li class="chg-row">
       <span class="wb-status ${tone}">${escapeHtml(label)}</span>
-      <span class="chg-meta">事实 v${change.base_truth_version} → v${change.new_truth_version} · ${change.impact_items?.length ?? 0} 项 · ${escapeHtml(formatTime(change.created_at))}</span>
+      <span class="chg-meta">信息 v${change.base_truth_version} → v${change.new_truth_version} · ${change.impact_items?.length ?? 0} 项 · ${escapeHtml(formatTime(change.created_at))}</span>
       <button type="button" class="text-button" data-action="chg-open" data-change-id="${escapeHtml(change.id)}">${area.detailId === change.id ? '收起' : '查看 / 处理'}</button>
     </li>`;
   }).join('')}</ul>`;
@@ -976,7 +976,7 @@ function renderChangeDetail(area) {
   const parts = [`<div class="chg-detail" data-change-id="${escapeHtml(detail.id)}">
     <div class="chg-detail-head">
       <span class="wb-status ${statusTone}">${escapeHtml(statusLabel)}</span>
-      <span class="chg-meta">变更单 ${escapeHtml(detail.id)} · 事实 v${detail.base_truth_version} → v${detail.new_truth_version}</span>
+      <span class="chg-meta">变更单 ${escapeHtml(detail.id)} · 信息 v${detail.base_truth_version} → v${detail.new_truth_version}</span>
       <button type="button" class="text-button" data-action="chg-refresh">刷新状态</button>
     </div>
     <div class="chg-counts">${CHANGE_COUNT_LABELS
@@ -1197,7 +1197,7 @@ async function confirmChangeOrder() {
       ...changeDraftPayload(draft),
       base_truth_version: draft.preview.base_truth_version,
     }, draft.idempotencyKey);
-    state.toast(payload.replayed ? '该变更已提交过，已为你打开原变更单' : `变更单已创建（事实 v${payload.change.new_truth_version}）`);
+    state.toast(payload.replayed ? '该变更已提交过，已为你打开原变更单' : `变更单已创建（信息 v${payload.change.new_truth_version}）`);
     area.draft = null;
     area.detailId = payload.change.id;
     area.detail = payload.change;
@@ -1577,7 +1577,7 @@ function renderCheckIssues(area) {
     const detail = `<details class="skc-detail"><summary>图片与证据</summary>
       <img class="skc-preview" src="${workVersionImageUrl(issue.run_id, issue.version_id)}" alt="问题版本图（服务端按结算状态加水印）" loading="lazy">
       ${evidence ? `<p class="skc-evidence">${evidence}</p>` : ''}
-      <p class="chg-meta">事实 v${issue.truth_version ?? '—'} · 档案 v${issue.sku_profile_version ?? '—'}</p>
+      <p class="chg-meta">信息 v${issue.truth_version ?? '—'} · 档案 v${issue.sku_profile_version ?? '—'}</p>
     </details>`;
     let body;
     if (open) {
@@ -2222,7 +2222,7 @@ function renderExplainerPreview(area) {
     parts.push('</div>');
     return parts.join('');
   }
-  parts.push(`<p class="chg-meta">基于 SKU 档案 v${escapeHtml(String(plan.sources?.sku_profile_version ?? '—'))} · 事实 v${escapeHtml(String(plan.sources?.truth_version ?? '—'))} · 排版免费（0 额度）</p>`);
+  parts.push(`<p class="chg-meta">基于 SKU 档案 v${escapeHtml(String(plan.sources?.sku_profile_version ?? '—'))} · 信息 v${escapeHtml(String(plan.sources?.truth_version ?? '—'))} · 排版免费（0 额度）</p>`);
   parts.push(`<table class="ex-rows"><thead><tr><th>条目</th><th colspan="2">内容（逐行取自档案/事实）</th></tr></thead><tbody>`);
   for (const row of plan.rows ?? []) {
     if (plan.kind === 'sku_compare') {

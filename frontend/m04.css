@@ -63,3 +63,8 @@
 .bk-actions{display:flex;gap:8px;margin-top:auto;padding-top:6px}
 .template-card b{font-size:14px;color:var(--ink)}
 .template-card small{color:var(--muted);font-size:12px;line-height:1.5}
+
+/* ===== 批次4 细节反馈：library-head 无样式导致 badge 掉行；空态卡只占一格宽 ===== */
+.library-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:12px}
+.library-head h2{margin:0;font-size:16px;color:var(--ink)}
+.brand-kit-list .real-empty,#library-template-list .real-empty{grid-column:1/-1}

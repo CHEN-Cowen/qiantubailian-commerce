@@ -319,7 +319,7 @@
 .real-work-run { display: flex; flex-direction: column; gap: 8px; }
 .real-work-run-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 12px; color: #64748B; }
 .real-work-run-head b { color: #1E293B; }
-.real-work-shots { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.real-work-shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .real-shot { border: 1px solid #E2DDEB; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
 .real-shot img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: #EFF0F2; }
 .real-shot-info { padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #64748B; }
