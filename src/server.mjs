@@ -2,7 +2,7 @@ import http from 'node:http';
 import { open, lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LOOPBACK_HOSTS } from './config.mjs';
+import { LOOPBACK_HOSTS, PUBLIC_HOSTS } from './config.mjs';
 import { createStore } from './store.mjs';
 import { createApi } from './api.mjs';
 import { createPaymentProviderFromEnv } from './providers/payment.mjs';
@@ -82,7 +82,9 @@ export function createApp({
   secureCookies = process.env.NODE_ENV === 'production',
   emailRecoveryConfigured = false,
 } = {}) {
-  if (!LOOPBACK_HOSTS.includes(host)) throw new Error('HOST 必须为 loopback 地址');
+  if (!LOOPBACK_HOSTS.includes(host) && !PUBLIC_HOSTS.includes(host)) {
+    throw new Error('HOST 必须为 loopback 地址或显式 0.0.0.0');
+  }
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('PORT 配置无效');
   if (process.env.NODE_ENV === 'production' && demoMode === true) throw new Error('生产环境不允许开启演示身份');
   const root = path.resolve(staticRoot);

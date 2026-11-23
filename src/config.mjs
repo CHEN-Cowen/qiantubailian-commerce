@@ -1,4 +1,6 @@
 export const LOOPBACK_HOSTS = Object.freeze(['127.0.0.1', '::1', 'localhost']);
+// 显式 HOST=0.0.0.0 允许容器/托管环境绑定全部网卡；默认仍为 loopback，防意外暴露
+export const PUBLIC_HOSTS = Object.freeze(['0.0.0.0']);
 
 export function loadConfig(env = process.env) {
   const nodeEnv = env.NODE_ENV ?? 'development';
@@ -7,7 +9,9 @@ export function loadConfig(env = process.env) {
   if (!['development', 'test', 'production'].includes(nodeEnv)) {
     throw new Error('NODE_ENV 配置无效');
   }
-  if (!LOOPBACK_HOSTS.includes(host)) throw new Error('HOST 必须为 loopback 地址');
+  if (!LOOPBACK_HOSTS.includes(host) && !PUBLIC_HOSTS.includes(host)) {
+    throw new Error('HOST 必须为 loopback 地址或显式 0.0.0.0');
+  }
   if (!/^\d+$/.test(String(rawPort))) throw new Error('PORT 配置无效');
   const port = Number(rawPort);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT 配置无效');
