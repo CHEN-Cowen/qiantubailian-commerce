@@ -254,7 +254,7 @@ function renderConflictBlock(conflicts) {
       <li class="spec-conflict hard">
         <div class="spec-conflict-head"><b>${escapeHtml(item.code)}</b><span>${item.options.length === 0 ? '无法满足' : '需要选择处理方式'}</span></div>
         <p>${escapeHtml(item.message)}</p>
-        ${item.options.length === 0 ? '<p class="spec-noway">平台硬约束不提供忽略选项，请先修改商品事实或更换模板。</p>' : ''}
+        ${item.options.length === 0 ? '<p class="spec-noway">平台硬约束不提供忽略选项，请先修改商品信息或更换模板。</p>' : ''}
       </li>`).join('')}</ul></section>`;
 }
 
@@ -284,7 +284,7 @@ function renderPreview(result) {
         </div>
         <p>${escapeHtml(item.message)}</p>
         ${item.options.length === 0
-          ? '<p class="spec-noway">没有可接受的处理方式，请先修改商品事实或更换模板。</p>'
+          ? '<p class="spec-noway">没有可接受的处理方式，请先修改商品信息或更换模板。</p>'
           : `<label class="spec-resolution">处理方式
               <select data-conflict-key="${escapeHtml(item.key)}">
                 <option value="">请选择（不选不能冻结）</option>
@@ -312,7 +312,7 @@ function renderPreview(result) {
 
     <section class="spec-section">
       <h3>生产前置</h3>
-      <p class="spec-meta">${readiness.can_start_production ? '商品事实与素材已满足生产条件' : `仍有 ${readiness.blocker_count} 项阻断，无法冻结`}</p>
+      <p class="spec-meta">${readiness.can_start_production ? '商品信息与素材已满足生产条件' : `仍有 ${readiness.blocker_count} 项阻断，无法锁定`}</p>
       ${readiness.can_start_production ? '' : `<ul class="truth-blockers">${readiness.blockers.map(item => `<li><b>${escapeHtml(item.code)}</b>${escapeHtml(item.message)}</li>`).join('')}</ul>`}
     </section>
 
@@ -329,7 +329,7 @@ function renderPreview(result) {
 
     <section class="spec-section">
       <h3>规则冲突</h3>
-      <p class="truth-hint">优先级：平台硬约束 &gt; 商品事实 &gt; 品牌约束 &gt; 模板 &gt; 用户创意。冲突不会被静默覆盖。</p>
+      <p class="truth-hint">优先级：平台硬约束 &gt; 商品信息 &gt; 品牌约束 &gt; 模板 &gt; 用户创意。冲突不会被静默覆盖。</p>
       ${conflictHtml}
     </section>
 
@@ -359,11 +359,11 @@ function renderPreview(result) {
     const blocked = !readiness.can_start_production || payload.conflicts.pending.length > 0
       || payload.conflicts.unresolvable.length > 0;
     freezeButton.disabled = blocked;
-    freezeButton.textContent = blocked ? '存在未处理冲突，暂不能冻结' : '冻结生产配置';
+    freezeButton.textContent = blocked ? '存在未处理冲突，暂不能锁定' : '锁定生产配置';
   }
 }
 
-const priorityLabel = conflict => ({ platform: '平台规则', product_truth: '商品事实', brand: '品牌套件' }[conflict.priority_winner] ?? conflict.priority_winner);
+const priorityLabel = conflict => ({ platform: '平台规则', product_truth: '商品信息', brand: '品牌套件' }[conflict.priority_winner] ?? conflict.priority_winner);
 
 async function freezeSpec() {
   if (!state.project) return;
@@ -371,6 +371,7 @@ async function freezeSpec() {
   const button = $('#spec-freeze');
   errorNode.textContent = '';
   button.disabled = true;
+  button.classList.add('is-loading');
   try {
     const payload = await api.createSpec(state.project.id, {
       ...specPayload(),
@@ -379,7 +380,7 @@ async function freezeSpec() {
     state.frozen += 1;
     state.specs = (await api.listSpecs(state.project.id)).specs;
     state.project.spec_head_version = payload.spec.version;
-    state.toast(`已冻结生产配置 v${payload.spec.version}（${payload.spec.deliverables.length} 项交付）`);
+    state.toast(`已锁定生产配置 v${payload.spec.version}（${payload.spec.deliverables.length} 项交付）`);
     await refreshPreview();
     renderHistoryOnly();
   } catch (error) {
@@ -389,12 +390,12 @@ async function freezeSpec() {
       return;
     }
     if (error instanceof ApiFailure && error.code === 'SPEC_CONFLICT_UNRESOLVABLE') {
-      errorNode.textContent = '存在无法满足的平台硬约束，请先修改商品事实或更换模板。';
+      errorNode.textContent = '存在无法满足的平台硬约束，请先修改商品信息或更换模板。';
       await refreshPreview();
       return;
     }
     if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') {
-      state.toast('配置已被更新，已刷新为最新版本，请重新选择后再冻结');
+      state.toast('配置已被更新，已刷新为最新版本，请重新选择后再锁定');
       await openSpec(state.project.id);
       return;
     }
@@ -405,7 +406,7 @@ async function freezeSpec() {
     }
     errorNode.textContent = errorText(error);
   } finally {
-    if (button) button.disabled = false;
+    if (button) { button.classList.remove('is-loading'); button.disabled = false; }
   }
 }
 

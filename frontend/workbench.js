@@ -300,6 +300,10 @@ function renderHeader() {
       : 'blue';
     pill.className = `wb-status ${cls}`;
     pill.textContent = runStatusLabel[s] ?? s;
+    // L4 状态签成因：悬停/聚焦显示真实来源，不虚构检查结论
+    pill.dataset.reason = runTerminal.has(s)
+      ? (s === 'completed' ? '任务已完成；每张图能否交付以各自的质量检查结果为准' : `任务未正常完成：${runStatusLabel[s] ?? s}。展开「高级信息 · 任务动态」可查看结束前的完整事件`)
+      : '任务进行中；状态来自服务端事件，不做本地推算';
     pill.hidden = false;
   } else {
     pill.hidden = true;
@@ -317,7 +321,7 @@ function renderSteps() {
 
   const steps = [
     { id: 'upload', label: '上传素材', done: assetsDone },
-    { id: 'truth', label: '核对商品事实', done: truthDone && readiness.can_start_production !== false },
+    { id: 'truth', label: '核对商品信息', done: truthDone && readiness.can_start_production !== false },
     { id: 'spec', label: '选效果/生产配置', done: specDone },
     { id: 'generate', label: '确认报价 → 生成', done: Boolean(state.activeRun) },
     { id: 'qa', label: '检查与修订', done: runDone },
@@ -385,7 +389,14 @@ function renderDeliverables(empty = false) {
       : 'wait';
     const active = state.selectedDeliverableId === item.deliverable_id ? ' active' : '';
     const count = (item.count || 1) > 1 ? ` ×${item.count}` : '';
-    return `<button class="wb-deliverable${active}" aria-pressed="${Boolean(active)}" data-deliverable-id="${escapeHtml(item.deliverable_id)}">
+    // L4 成因提示：左侧清单在 overflow 容器内，用原生 title 承载与状态签同一来源的成因
+    const reason = qual === 'publishable' ? '各项检查通过，可导出交付'
+      : qual === 'succeeded' ? '已生成，等待质量检查结论'
+      : qual === 'needs_review' ? '有需要人工确认的检查项；选中后在右侧复核'
+      : qual === 'blocked' || qual === 'failed' ? '有未通过的检查项，处理后才能交付'
+      : qual === 'running' || qual === 'queued' ? '正在生成；进度来自服务端事件，不推算百分比'
+      : '尚未开始生成';
+    return `<button class="wb-deliverable${active}" aria-pressed="${Boolean(active)}" title="${escapeHtml(reason)}" data-deliverable-id="${escapeHtml(item.deliverable_id)}">
       <span class="wb-deliverable-status ${statusClass}">${statusClass === 'done' ? '✓' : statusClass === 'fail' ? '×' : statusClass === 'review' ? '!' : statusClass === 'running' ? '…' : '○'}</span>
       <span class="wb-deliverable-info">
         <b>${escapeHtml(item.label ?? item.deliverable_id)}${escapeHtml(count)}</b>
@@ -748,7 +759,13 @@ function renderCheckRow(check) {
   const icon = check.status === 'pass' ? '✓' : check.status === 'fail' ? '×' : '?';
   const cls = check.status === 'pass' ? 'pass' : check.status === 'fail' ? 'fail' : (check.status === 'unknown' ? 'unknown' : 'review');
   const hardGate = check.hard_gate === true ? ' hard-gate' : '';
-  return `<div class="wb-qa-row ${cls}${hardGate}">
+  // L4 成因提示：检查行悬停显示结论来源（结论 + 原因/建议），缺数据时给通用说明
+  const rowReason = check.suggested_action
+    ? `${check.status_label ?? checkStatusLabel[check.status] ?? check.status}：${check.suggested_action}`
+    : Array.isArray(check.reasons) && check.reasons.length > 0
+      ? `${check.status_label ?? checkStatusLabel[check.status] ?? check.status}：${check.reasons.join('；')}`
+      : `${check.status_label ?? checkStatusLabel[check.status] ?? check.status}；结论来自服务端质量报告`;
+  return `<div class="wb-qa-row ${cls}${hardGate}" data-reason="${escapeHtml(rowReason)}">
     <span class="wb-check-icon">${icon}</span>
     <div class="wb-check-body">
       <b>${escapeHtml(check.label ?? check.code ?? '未命名检查')}</b>

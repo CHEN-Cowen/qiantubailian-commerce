@@ -1,5 +1,5 @@
 /* M05 · 生产任务（额度账本 / 报价 / 任务执行 / 事件流）。沿用 M03–M04 的语义色，不新增主色。 */
-#run-dialog{width:min(900px,96vw);max-width:900px;max-height:92vh;overflow:auto}
+#run-dialog{width:min(720px,96vw);max-width:720px;max-height:92vh;overflow:auto}
 #run-body,#run-quote,#run-events{display:grid;gap:14px;margin-top:12px}
 .run-section{border-top:1px solid var(--line);padding-top:12px}
 .run-section:first-child{border-top:0;padding-top:0}

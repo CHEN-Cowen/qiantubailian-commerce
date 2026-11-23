@@ -162,7 +162,7 @@ test('M04 商品信息卡与卖点候选：问题/示例、核对状态与依据
   assert.match(html, /id="wiz-critical-text"/, '包装关键文字必须可填写');
   assert.match(wizard, /CATEGORY_PROFILES/, '问题清单必须按品类定义');
   assert.match(wizard, /例如：\$\{escapeHtml\(card\.example\)\}/, '每个问题必须给示例');
-  assert.match(wizard, /已核对 · 会作为商品事实进入成图/, '核对后必须说明结果去向');
+  assert.match(wizard, /已核对 · 会作为商品信息进入成图/, '核对后必须说明结果去向');
   assert.match(wizard, /card\.confirmed = false/, '修改内容必须自动取消核对状态');
   assert.match(wizard, /critical_text: collectCriticalText\(\)/, '关键文字必须真实提交到事实版本');
   assert.match(wizard, /category: state\.category/, '商品类型必须随事实版本提交');
@@ -269,9 +269,9 @@ test('M03-复用 qb:open-wizard 事件、复用入口、向导复用模式与不
   assert.match(wizard, /mode === 'reuse'/);
   assert.match(wizard, /mode === 'style'/);
   assert.match(wizard, /mode === 'brand'/);
-  // E1：沿用已上传素材 + 沿用摘要「沿用：商品事实 vN · 品牌 X · 模板 Y，可修改」
+  // E1：沿用已上传素材 + 沿用摘要「沿用：商品信息 vN · 品牌 X · 模板 Y，可修改」
   assert.match(wizard, /沿用已上传素材/);
-  assert.match(wizard, /沿用：商品事实 v/);
+  assert.match(wizard, /沿用：商品信息 v/);
   assert.match(wizard, /· 品牌 \$\{state\.reuseSpec\.brandName\}/);
   assert.match(wizard, /· 模板 \$\{state\.reuseSpec\.templateName\}/);
   assert.match(wizard, /，可修改/);
@@ -704,4 +704,51 @@ test('E07 待办与依赖：首页待办四分组、检查导航、依赖面板�
   }
   assert.match(workbenchCss, /@media \(max-width: 720px\) \{[\s\S]*\.todo-groups \{ grid-template-columns: 1fr; \}/);
   assert.match(workbenchCss, /@media \(max-width: 720px\) \{[\s\S]*\.dep-form-row \{ flex-direction: column; \}/);
+});
+
+// ===== 批次3：L4 交互状态细化 + L3 文案收尾契约 =====
+test('批次3 L4：下划线滑动标签页、状态签成因 tooltip、loading 态、44px 触达与 reduced-motion', async () => {
+  const [style, workbench, wizard, m04] = await Promise.all([
+    read('style.css'), read('workbench.js'), read('wizard.js'), read('m04.js'),
+  ]);
+  // 标签页下划线滑动（顶栏导航 + 抽屉标签）
+  assert.match(style, /\.nav-item::after\{[^}]*transform:scaleX\(0\)/);
+  assert.match(style, /\.nav-item\.active::after\{transform:scaleX\(1\)\}/);
+  assert.match(style, /\.drawer-tabs button::after\{[^}]*transform:scaleX\(0\)/);
+  assert.match(style, /\.drawer-tabs button\.selected::after\{transform:scaleX\(1\)\}/);
+  // 状态签悬停显成因（data-reason 自绘 tooltip；交付项在 overflow 容器内用 title）
+  assert.match(style, /\[data-reason\]:hover::after/);
+  assert.match(style, /\[data-reason\]:focus-visible::after/);
+  assert.match(workbench, /pill\.dataset\.reason/, '工作台状态签必须写入成因');
+  assert.match(workbench, /data-reason="\$\{escapeHtml\(rowReason\)\}"/, '检查行必须带成因 tooltip');
+  assert.match(workbench, /title="\$\{escapeHtml\(reason\)\}"/, '交付项必须带成因 title');
+  // loading 七态：生成/锁定按钮 is-loading（spinner + finally 清理）
+  assert.match(style, /\.is-loading::after\{[^}]*l4-spin/);
+  assert.match(wizard, /classList\.add\('is-loading'\)/);
+  assert.match(wizard, /classList\.remove\('is-loading'\)/);
+  assert.match(m04, /classList\.add\('is-loading'\)/);
+  assert.match(m04, /classList\.remove\('is-loading'\)/);
+  // 触达面积：主按钮 44px、次按钮 40px
+  assert.match(style, /\.primary\{min-height:44px\}/);
+  assert.match(style, /\.secondary\{min-height:40px\}/);
+  // 弹窗入场动画与分级宽度
+  assert.match(style, /dialog\[open\]\{animation:l4-dialog-in/);
+  assert.match(style, /\.real-dialog-wide\{width:min\(720px,94vw\)/);
+  // reduced-motion 全局降级
+  assert.match(style, /@media\(prefers-reduced-motion:reduce\)\{[\s\S]*transition-duration:/);
+});
+
+test('批次3 L3：概念内部化收尾（工作台/制作页/弹窗不再外露技术名词与重复说明）', async () => {
+  const [html, wizard, workbench] = await Promise.all([
+    read('index.html'), read('wizard.js'), read('workbench.js'),
+  ]);
+  for (const banned of ['事件流（SSE', '供应商成本', '额度账本', 'unknown，不能声称', 'unknown 项']) {
+    assert.ok(!html.includes(banned), `index.html 不得再外露「${banned}」`);
+  }
+  assert.ok(html.includes('任务动态'), '「事件流」应内部化为「任务动态」');
+  assert.ok(html.includes('锁定生产配置'), '「冻结生产配置」应内部化为「锁定生产配置」');
+  assert.ok(html.includes('覆盖不足时结论只能标为未知'), '诚实边界保留，只是不再使用技术词 unknown');
+  assert.doesNotMatch(wizard, /正在冻结配置|已冻结配置/);
+  assert.doesNotMatch(wizard, /费用以服务端报价为准，本页不做估算/, '与报价条重复的费用说明应删除');
+  assert.doesNotMatch(workbench, /核对商品事实/);
 });

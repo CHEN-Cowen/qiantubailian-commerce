@@ -263,7 +263,7 @@ async function enterReuse(projectId) {
 
 function refreshReuseBanner() {
   if (state.entryKind !== 'reuse' || !state.project) return;
-  let summary = `沿用：商品事实 v${state.project.truth_head_version}`;
+  let summary = `沿用：商品信息 v${state.project.truth_head_version}`;
   if (state.reuseSpec?.brandName) summary += ` · 品牌 ${state.reuseSpec.brandName}`;
   if (state.reuseSpec?.templateName) summary += ` · 模板 ${state.reuseSpec.templateName}`;
   renderEntryBanner(`${summary}，可修改`,
@@ -511,7 +511,7 @@ function renderOcrNote(result) {
   const shaky = candidates.filter(item => item.needs_evidence).length;
   node.className = 'state-note warn';
   node.textContent = `已获得 ${candidates.length} 条候选文字（来源：OCR，待确认）— 已逐条列出，请对照原图核对后勾选「已确认」。`
-    + (shaky ? `其中 ${shaky} 条置信度不足或缺失，请重点核对。` : '候选不会自动生效为商品事实。');
+    + (shaky ? `其中 ${shaky} 条置信度不足或缺失，请重点核对。` : '候选不会自动生效为商品信息。');
 }
 
 async function enterStep2() {
@@ -541,7 +541,7 @@ async function enterStep2() {
       // E1 复用：事实行已从 truth_head 原样带入（key/value/critical/confirmed）。
       // 不重复跑 OCR，避免候选行与沿用行重复；修改任一行内容会自动取消该行「已确认」。
       $('#wiz-ocr-note').className = 'state-note';
-      $('#wiz-ocr-note').textContent = '已沿用现有商品事实（未重新运行文字识别）；请对照商品资料逐项核对，改动后需要重新点「已核对」。';
+      $('#wiz-ocr-note').textContent = '已沿用现有商品信息（未重新运行文字识别）；请对照商品资料逐项核对，改动后需要重新点「已核对」。';
     } else {
       $('#wiz-ocr-note').textContent = '正在读取文字识别结果…';
       const result = await api.extractAssetFacts(state.project.id, state.asset.id);
@@ -576,7 +576,7 @@ function pickCategory(value) {
 function cardStatusText(card) {
   if (!card.value) return card.skipped ? '暂不提供' : '待填写';
   if (!card.confirmed) return '待核对';
-  return '已核对 · 会作为商品事实进入成图';
+  return '已核对 · 会作为商品信息进入成图';
 }
 
 function renderFactCards(facts = []) {
@@ -780,7 +780,7 @@ function renderSellingResults() {
   const ready = state.sellingResults.filter(item => item.level === 'ready').length;
   const blocked = state.sellingResults.length - ready;
   note.className = blocked ? 'state-note warn' : 'state-note';
-  note.textContent = `共 ${state.sellingResults.length} 句：${ready} 句可直接使用，${blocked} 句需要补信息或改写法。只有你点「作为卖点事实加入」的句子才会写入商品事实。`;
+  note.textContent = `共 ${state.sellingResults.length} 句：${ready} 句可直接使用，${blocked} 句需要补信息或改写法。只有你点「作为卖点事实加入」的句子才会写入商品信息。`;
 }
 
 function analyzeSelling() {
@@ -812,7 +812,7 @@ function addSellingFact(text) {
     row.querySelector('[data-wiz-fact="confirmed"]').checked = true;
   }
   $('#wiz-fact-more').open = true;
-  showToast('已加入商品事实「核心卖点」，生成时只会逐字引用这句话');
+  showToast('已加入商品信息「核心卖点」，生成时只会逐字引用这句话');
 }
 
 function renderReadiness(readiness) {
@@ -820,7 +820,7 @@ function renderReadiness(readiness) {
   node.hidden = false;
   if (readiness.can_start_production) {
     $('#wiz-continue-anyway').hidden = true;
-    node.innerHTML = '<h4>生产前置检查</h4><p class="truth-ok">商品事实与素材已满足生产条件，可以继续选择风格与交付。</p>';
+    node.innerHTML = '<h4>生产前置检查</h4><p class="truth-ok">商品信息与素材已满足生产条件，可以继续选择风格与交付。</p>';
     return false;
   }
   const blockers = readiness.blockers ?? [];
@@ -843,7 +843,7 @@ async function confirmTruth() {
     return;
   }
   if (facts.length === 0) {
-    errorNode.textContent = '至少需要 1 条商品事实才能确认版本。';
+    errorNode.textContent = '至少需要 1 条商品信息才能确认版本。';
     return;
   }
   const unconfirmedCritical = facts.filter(fact => fact.critical && !fact.confirmed).map(fact => fact.key);
@@ -863,7 +863,7 @@ async function confirmTruth() {
       critical_text: collectCriticalText(),
     });
     state.project.truth_head_version = payload.truth_version.version;
-    showToast(`已确认商品事实 v${payload.truth_version.version}`);
+    showToast(`已确认商品信息 v${payload.truth_version.version}`);
     const readiness = await api.readiness(state.project.id);
     const blocked = renderReadiness(readiness);
     saveDraft({ projectId: state.project.id, assetId: state.asset?.id, step: 2 });
@@ -1135,7 +1135,7 @@ function renderPreview(result) {
         <div class="spec-conflict-head"><b>${escapeHtml(item.code)}</b></div>
         <p>${escapeHtml(item.message)}</p>
         ${item.options.length === 0
-          ? '<p class="spec-noway">平台硬约束没有可接受的处理方式，请先修改商品事实或更换模板。</p>'
+          ? '<p class="spec-noway">平台硬约束没有可接受的处理方式，请先修改商品信息或更换模板。</p>'
           : `<label class="spec-resolution">处理方式
               <select data-wiz-conflict="${escapeHtml(item.key)}">
                 <option value="">请选择（不选不能生成）</option>
@@ -1245,7 +1245,7 @@ function renderPaySummary() {
         <li><b>平台</b><span>${escapeHtml(platform)}</span></li>
       </ul>
     </div>
-    <p class="real-note">可选交付与数量会改变费用：上下方清单勾选/数量调整后会重新取价。费用以服务端报价为准，本页不做估算。</p>
+    <p class="real-note">可选交付与数量会改变费用：调整后会自动重新取价。</p>
   </section>`;
 }
 
@@ -1403,9 +1403,10 @@ async function onGenerate() {
   button.disabled = true;
   try {
     if (!state.quote) {
-      // 两段式第一段：冻结配置 → 服务端真实报价
+      // 两段式第一段：锁定配置 → 服务端真实报价
       state.phase = 'freezing';
-      button.textContent = '正在冻结配置…';
+      button.classList.add('is-loading');
+      button.textContent = '正在锁定配置…';
       const specResult = await api.createSpec(state.project.id, {
         ...specPayload(),
         base_version: state.project.spec_head_version,
@@ -1419,7 +1420,7 @@ async function onGenerate() {
       state.phase = 'idle';
       renderQuoteSummary();
       updateGenerateButton();
-      showToast('已冻结配置并取得报价，请确认费用后生成');
+      showToast('已锁定配置并取得报价，请确认费用后生成');
     } else {
       // 两段式第二段：带 Idempotency-Key 创建任务，重复点击不会重复扣费
       state.phase = 'creating';
@@ -1460,6 +1461,7 @@ async function onGenerate() {
     }
     errorNode.textContent = errorText(error);
   } finally {
+    button.classList.remove('is-loading');
     if (state.phase !== 'done') button.disabled = state.quote ? false : generateBlocked();
   }
 }
@@ -1754,7 +1756,7 @@ export function initWizard() {
   });
   $('#wiz-subject-link')?.addEventListener('click', () => {
     if (!state.project) return;
-    showToast('主体框修正请在该项目工作台的「商品事实」里完成；此入口不重复实现');
+    showToast('主体框修正请在该项目工作台的「商品资料」里完成；此入口不重复实现');
     window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: state.project.id } }));
   });
   $('#wiz-resume-continue')?.addEventListener('click', () => void continueDraft());

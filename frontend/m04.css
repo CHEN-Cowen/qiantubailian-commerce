@@ -1,5 +1,5 @@
 /* M04 · 生产配置（模板/品牌/平台规则/快照）。沿用 M03 的语义色，不新增主色。 */
-#spec-dialog{width:min(960px,96vw);max-width:960px;max-height:90vh}
+#spec-dialog{width:min(720px,96vw);max-width:720px;max-height:90vh}
 #brand-dialog{width:min(560px,94vw);max-width:560px}
 .spec-grid{display:grid;grid-template-columns:1.2fr 1.2fr 1fr;gap:12px}
 #spec-body{display:grid;gap:16px;margin-top:10px}

@@ -310,7 +310,7 @@
             </div>
           </div>
           <div class="wiz-actions">
-            <span class="wiz-hint" id="wiz-step1-hint">选择文件后会自动创建项目草稿并上传，SKU 使用 AUTO- 内部标识，不会伪造商品事实。</span>
+            <span class="wiz-hint" id="wiz-step1-hint">选择文件后会自动创建项目草稿并上传；商品信息以上传后的核对为准。</span>
             <button class="primary" id="wiz-next-1" disabled>下一步：确认商品信息</button>
           </div>
         </section>
@@ -419,7 +419,7 @@
 
         <!-- 第 4 步 交付确认 + 真实报价 + 生成 -->
         <section class="wiz-panel" data-wiz-panel="4" hidden>
-          <h3 class="wiz-section-title">确认交付与费用 <span>费用以服务端报价为准，点击后才会冻结配置</span></h3>
+          <h3 class="wiz-section-title">确认交付与费用 <span>费用以服务端报价为准，点击后先锁定配置再取价</span></h3>
           <div id="wiz-pay-summary"></div>
           <div id="wiz-pay-blockers"></div>
           <section class="wiz-quote" id="wiz-quote" hidden></section>
@@ -569,7 +569,7 @@
             <div class="wb-section">
               <div class="wb-section-title">质量检查 / 人工确认</div>
               <div class="wb-qa-checks" id="wb-qa-checks">
-                <p class="real-hint">选中交付项后这里会显示各项检查结果，包括需要你确认的 unknown 项。</p>
+                <p class="real-hint">选中交付项后显示各项检查结果与需要你确认的未知项。</p>
               </div>
               <div class="wb-human-review" id="wb-human-review" hidden>
                 <label>复核意见<textarea id="wb-review-note" rows="2" placeholder="写明原因或处理意见"></textarea></label>
@@ -584,28 +584,28 @@
 
             <div class="wb-section wb-section-deps">
               <div class="wb-section-title">作品依赖</div>
-              <p class="real-note">系统按事实、素材与文字层编译的依赖不可删除；人工补充关联必须写明依据。删除人工关联也会留痕。</p>
+              <p class="real-note">系统编译的依赖不可删除；人工关联需写明依据，删除也会留痕。</p>
               <div id="wb-dep-body"><p class="real-hint">选中交付项后，这里显示该图版本的依赖来源与人工关联。</p></div>
             </div>
 
             <div class="wb-section wb-section-advanced">
               <details>
-                <summary>高级信息 · 生成记录、成本、Prompt、事件流</summary>
+                <summary>高级信息 · 任务概览、额度与生成记录</summary>
                 <div id="wb-advanced-body" class="wb-advanced-body">
                   <div class="wb-sub">
                     <h4>任务概览</h4>
                     <div class="wb-meta" id="wb-run-meta"></div>
                   </div>
                   <div class="wb-sub">
-                    <h4>额度账本</h4>
+                    <h4>额度消耗</h4>
                     <div class="wb-meta" id="wb-budget-meta"></div>
                   </div>
                   <div class="wb-sub">
-                    <h4>生成记录（供应商成本）</h4>
+                    <h4>生成记录</h4>
                     <div class="wb-meta" id="wb-supplier-meta"></div>
                   </div>
                   <div class="wb-sub">
-                    <h4>事件流（SSE / 轮询去重）</h4>
+                    <h4>任务动态</h4>
                     <ol class="wb-event-log" id="wb-event-log"></ol>
                   </div>
                 </div>
@@ -733,17 +733,17 @@
         <label>品牌套件<select id="spec-brand" aria-label="品牌套件"></select></label>
           <label>目标平台<input id="spec-platform" maxlength="40" placeholder="例如：天猫"></label>
       </div>
-        <details><summary>文字排版</summary><p>文字内容在商品事实中修改；颜色来自品牌套件。以下参数应用到含文字的图片，冻结后用于成品合成；下载包另含可编辑 SVG。</p>
+        <details><summary>文字排版</summary><p>文字内容在商品信息中修改；颜色来自品牌套件。以下参数应用到含文字的图片，锁定后用于成品合成；下载包另含可编辑 SVG。</p>
           <label><input id="spec-custom-layout" type="checkbox"> 使用自定义排版</label>
           <div class="spec-grid"><label>距左侧（%）<input id="spec-text-x" type="number" min="0" max="95" value="8"></label><label>首行距顶部（%）<input id="spec-text-y" type="number" min="0" max="95" value="75"></label><label>文字区宽度（%）<input id="spec-text-width" type="number" min="5" max="100" value="84"></label><label>字号占短边（%）<input id="spec-text-size" type="number" min="1" max="20" value="4"></label></div>
         </details>
-      <p class="real-note">模板与平台规则来自服务端只读目录。平台规则带来源、版本与复核日期；内置基线未经官方核验，覆盖不足时结论只能是 unknown，不能声称平台通过。</p>
+          <p class="real-note">模板与平台规则来自服务端只读目录。平台规则带来源、版本与复核日期；内置基线未经官方核验，覆盖不足时结论只能标为未知，不能声称平台通过。</p>
       <div id="spec-body"><p class="truth-hint">正在读取模板与规则…</p></div>
       <p class="form-error" id="spec-error" role="alert"></p>
       <div class="real-actions">
         <button type="button" class="secondary" id="spec-brand-new">新建品牌套件</button>
         <button type="button" class="secondary" data-close-dialog="spec-dialog">关闭</button>
-        <button type="submit" class="primary" id="spec-freeze">冻结生产配置</button>
+        <button type="submit" class="primary" id="spec-freeze">锁定生产配置</button>
       </div>
     </form>
   </dialog>
@@ -752,7 +752,7 @@
     <button class="dialog-close" data-close-dialog="brand-dialog" aria-label="关闭">×</button>
     <p class="eyebrow">品牌套件</p>
     <h2 id="brand-title">新建品牌套件</h2>
-    <p class="real-note">套件只追加版本，已冻结的配置引用固定版本，不会被新版本改写。</p>
+    <p class="real-note">套件只追加版本，已锁定的配置引用固定版本，不会被新版本改写。</p>
     <form id="brand-form" class="real-form">
       <label>套件名称<input name="name" required maxlength="60" placeholder="例如：月光品牌套件"></label>
       <label>主色（#RRGGBB）<input name="primary" required pattern="#[0-9A-Fa-f]{6}" placeholder="#365F49"></label>

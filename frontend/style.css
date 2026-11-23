@@ -331,3 +331,66 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
 .credit-chip:hover{background:rgba(255,255,255,.10)}
 
 
+
+/* ===== 批次3 · L4 交互状态层（规范：docs/交互状态规范_L4_V0.1.md） =====
+   七态：default/hover/active/focus-visible/disabled/loading/selected
+   过渡统一 160–280ms；reduced-motion 全局降级 */
+:root{
+  --dur-fast:160ms;--dur:200ms;--dur-slow:280ms;--ease:cubic-bezier(.4,0,.2,1);
+}
+/* —— 按钮七态 —— */
+.primary,.secondary,.text-button,.icon-button{transition:background var(--dur) var(--ease),border-color var(--dur) var(--ease),color var(--dur) var(--ease),box-shadow var(--dur) var(--ease),transform var(--dur-fast) var(--ease)}
+.primary{min-height:44px}.secondary{min-height:40px}
+.primary:active:not(:disabled){transform:translateY(1px);box-shadow:0 2px 6px rgba(90,0,214,.15)}
+.secondary:active:not(:disabled){transform:translateY(1px)}
+.secondary:disabled{border-color:var(--line);background:#fff;color:var(--muted)}
+.text-button{min-height:40px;display:inline-flex;align-items:center}
+.icon-button{min-width:40px;min-height:40px}
+.is-loading{position:relative!important;color:transparent!important;pointer-events:none}
+.is-loading::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.4);border-top-color:#fff;animation:l4-spin .8s linear infinite}
+.secondary.is-loading::after,.text-button.is-loading::after{border-color:rgba(90,0,214,.25);border-top-color:var(--brand)}
+@keyframes l4-spin{to{transform:rotate(360deg)}}
+/* —— 输入七态 —— */
+input:hover:not(:disabled):not(:focus),select:hover:not(:disabled):not(:focus),textarea:hover:not(:disabled):not(:focus){border-color:#C9BCEF}
+input:disabled,select:disabled,textarea:disabled{cursor:not-allowed;opacity:.75}
+/* —— 标签页：下划线滑动（V0.2 定稿：激活白字+黄下划线） —— */
+.main-nav{gap:26px}
+.nav-item{height:68px;padding:0 2px;border-radius:0;position:relative;background:none;color:#9D8ECB}
+.nav-item::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:3px;border-radius:3px 3px 0 0;
+  background:var(--accent-yellow);transform:scaleX(0);transform-origin:center;transition:transform var(--dur) var(--ease)}
+.nav-item:hover{background:none;color:#fff}
+.nav-item:active{color:#fff}
+.nav-item.active{background:none;color:#fff;font-weight:700}
+.nav-item.active::after{transform:scaleX(1)}
+@media(max-width:960px){.main-nav{gap:18px}.nav-item{height:44px}}
+.drawer-tabs button{transition:color var(--dur) var(--ease)}
+.drawer-tabs button::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--primary);
+  transform:scaleX(0);transform-origin:center;transition:transform var(--dur) var(--ease)}
+.drawer-tabs button.selected::after{transform:scaleX(1)}
+/* —— 状态签：悬停/聚焦显成因 tooltip（data-reason 由 JS 写入真实成因） —— */
+[data-reason]{position:relative}
+.wb-status,.wb-chip,.status-pill{transition:box-shadow var(--dur) var(--ease),filter var(--dur) var(--ease)}
+[data-reason]:hover{filter:brightness(.97)}
+[data-reason]:hover::after,[data-reason]:focus-visible::after{
+  content:attr(data-reason);position:absolute;left:50%;bottom:calc(100% + 8px);transform:translateX(-50%);
+  background:#1E293B;color:#fff;font-size:11px;font-weight:500;line-height:1.6;padding:7px 10px;border-radius:6px;
+  white-space:normal;width:max-content;max-width:280px;text-align:left;z-index:60;pointer-events:none;
+  box-shadow:0 8px 22px rgba(15,23,42,.28);opacity:0;animation:l4-tip-in .16s var(--ease) .04s forwards}
+@keyframes l4-tip-in{from{opacity:0;transform:translate(-50%,4px)}to{opacity:1;transform:translate(-50%,0)}}
+/* —— 卡片按压态补充 —— */
+.wiz-template-card:active,.wiz-fact-card:active,.project-card:active{transform:scale(.995)}
+/* —— 弹窗 V0.2：分级宽度 + 入场动画 + 深紫 backdrop —— */
+dialog{transition:opacity var(--dur) var(--ease),transform var(--dur) var(--ease)}
+dialog[open]{animation:l4-dialog-in var(--dur-slow) var(--ease)}
+dialog::backdrop{background:rgba(21,7,54,.45)}
+@keyframes l4-dialog-in{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+.real-dialog{width:min(520px,94vw);max-width:520px}
+.real-dialog-wide{width:min(720px,94vw);max-width:720px}
+/* —— reduced-motion 全局降级 —— */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+  .nav-item::after,.drawer-tabs button::after{transition:none}
+}
+/* V0.2 定稿：激活标签页黄下划线；显式压过旧版 .nav-item.active:after 的 display:none 与电紫底 */
+.nav-item.active::after{display:block;background:var(--accent-yellow);transform:scaleX(1)}
