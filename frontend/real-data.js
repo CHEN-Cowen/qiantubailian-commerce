@@ -13,7 +13,7 @@ const ROLE_OPTIONS = [
   ['subject', '主体', '锁定商品形态，可作为事实来源'],
   ['packaging', '包装', '包装正面与文字，可作为事实来源'],
   ['detail', '细节', '材质、接口、纹理等局部'],
-  ['style', '风格', '仅作为氛围参考，不作为商品事实'],
+  ['style', '风格', '仅作为氛围参考，不作为商品信息'],
 ];
 const ROLE_LABELS = Object.fromEntries(ROLE_OPTIONS.map(([value, label]) => [value, label]));
 
@@ -293,16 +293,21 @@ function renderProjects() {
   }
   list.innerHTML = state.projects.map(project => {
     const readiness = project.readiness ?? { can_start_production: false, blocker_count: 0 };
+    // 成因来自服务端 readiness.blockers 真实数据，不虚构结论
+    const blockers = readiness.blockers ?? [];
+    const pillReason = readiness.can_start_production
+      ? '商品信息与素材已满足生产条件'
+      : (blockers.map(item => item.message).join('；') || '尚不满足生产条件；打开工作台查看详情');
     const pill = readiness.can_start_production
-      ? '<span class="real-state ok">可开始生产</span>'
-      : `<span class="real-state block">阻断 ${readiness.blocker_count} 项</span>`;
+      ? `<span class="real-state ok" data-reason="${escapeHtml(pillReason)}">可开始生产</span>`
+      : `<span class="real-state block" data-reason="${escapeHtml(pillReason)}">阻断 ${readiness.blocker_count} 项</span>`;
     return `<article class="real-card" data-project-id="${escapeHtml(project.id)}">
       <div class="real-card-main">
         <div class="real-card-title"><b>${escapeHtml(project.name)}</b><code>${escapeHtml(project.sku)}</code></div>
         <p>${escapeHtml(project.category)}${project.platform ? ` · ${escapeHtml(project.platform)}` : ''} · 生效素材 ${project.active_asset_count} 张 · 事实 v${project.truth_head_version}</p>
       </div>
       <div class="real-card-side">${pill}
-        <button class="text-button" data-action="truth">商品事实</button>
+        <button class="text-button" data-action="truth">商品信息</button>
         <button class="text-button" data-action="upload">上传素材</button>
         <button class="text-button" data-action="spec">生产配置</button>
         <button class="text-button" data-action="run">开始生产</button>
@@ -317,7 +322,7 @@ function renderUploadOptions() {
   if (!select) return;
   const previous = select.value || state.pendingProjectId;
   select.innerHTML = state.projects.length === 0
-    ? '<option value="">请先创建真实项目</option>'
+    ? '<option value="">请先创建商品项目</option>'
     : state.projects.map(project =>
       `<option value="${escapeHtml(project.id)}">${escapeHtml(project.name)}（${escapeHtml(project.sku)}）</option>`).join('');
   if (previous && state.projects.some(project => project.id === previous)) select.value = previous;
@@ -334,7 +339,7 @@ function openUploadDialog(projectId) {
   renderUploadOptions();
   if (projectId) $('#upload-project').value = projectId;
   if (state.projects.length === 0) {
-    $('#upload-error').textContent = '当前没有真实项目，请先创建项目。';
+    $('#upload-error').textContent = '当前没有商品项目，请先创建项目。';
   }
   $('#upload-dialog').showModal();
 }
@@ -346,7 +351,7 @@ async function submitUpload(replace) {
   const submit = $('#upload-submit');
   $('#upload-error').textContent = '';
   $('#upload-replace').hidden = true;
-  if (!projectId) { $('#upload-error').textContent = '请选择真实项目。'; return; }
+  if (!projectId) { $('#upload-error').textContent = '请选择商品项目。'; return; }
   if (!file) { $('#upload-error').textContent = '请选择要上传的图片文件（JPEG / PNG / WebP）。'; return; }
   submit.disabled = true;
   try {
@@ -359,7 +364,7 @@ async function submitUpload(replace) {
       <p>${escapeHtml(asset.filename)} · ${asset.width}×${asset.height}px · ${ROLE_LABELS[asset.role] ?? asset.role}职责 · sha256 ${escapeHtml(shortHash(asset.sha256))}</p>
       ${warnings ? `<ul class="upload-warnings">${warnings}</ul>` : '<p>已通过类型、体积与尺寸校验。</p>'}
     </div>`;
-    state.toast('素材已写入真实项目');
+    state.toast('素材已保存到商品项目');
     await refresh();
   } catch (error) {
     if (error instanceof ApiFailure && error.code === 'REFERENCE_CONFLICT') {
@@ -419,7 +424,7 @@ async function openTruthDialog(projectId, { section } = {}) {
   } catch (error) {
     // 区分"接口失败"与"界面脚本异常"，避免把前端 bug 说成连不上服务
     if (error instanceof ApiFailure) state.toast(errorText(error));
-    else { console.error('[M03] 打开商品事实失败', error); state.toast(`打开商品事实失败：${error.message}`); }
+    else { console.error('[M03] 打开商品信息失败', error); state.toast(`打开商品信息失败：${error.message}`); }
   }
 }
 
@@ -445,13 +450,13 @@ function factRow(fact = {}) {
 
 function renderTruth() {
   const { project, assets, truth_head, readiness, versions } = state.detail;
-  $('#truth-title').textContent = `${project.name} · 商品事实`;
+  $('#truth-title').textContent = `${project.name} · 商品信息`;
   // 弹窗内的错误节点随 #truth-body 一起重建，这里只清空已存在的那一个
   const previousError = $('#truth-block-error');
   if (previousError) previousError.textContent = '';
 
   const assetsHtml = assets.length === 0
-    ? '<p class="truth-empty">尚未上传素材。缺少素材时无法确认商品事实。</p>'
+    ? '<p class="truth-empty">尚未上传素材。缺少素材时无法确认商品信息。</p>'
     : `<ul class="truth-asset-list">${assets.map(asset => `<li class="${asset.role_status === 'active' ? '' : 'is-superseded'}">
         <span class="real-state ${asset.role_status === 'active' ? 'ok' : 'muted'}">${asset.role_status === 'active' ? '生效' : '已替换'}</span>
         <b>${escapeHtml(asset.filename)}</b>
@@ -494,7 +499,7 @@ function renderTruth() {
       ${assetsHtml}
     </section>
     <section class="truth-section">
-      <h3>商品事实</h3>
+      <h3>商品信息</h3>
       <p class="truth-hint">关键项必须勾选「已确认」才能确认版本；风格图不能作为事实来源；不清晰的信息请留待补证据，不要凭猜写入。</p>
       <div class="fact-head"><span>标记</span><span>事实项</span><span>值</span><span>来源</span><span>确认</span><span></span></div>
       <div id="truth-facts">${facts.map(fact => factRow(fact)).join('')}</div>
@@ -839,7 +844,7 @@ function renderChangeSection() {
     return '<h3>商品变更</h3><p class="truth-hint">正在读取变更记录…</p>';
   }
   const parts = ['<h3>商品变更</h3>'];
-  parts.push('<p class="truth-hint">商品事实、素材或品牌有更新时，在这里计算差异并逐项更新已生成的图片；数量类变化与质检待复核的新版本必须人工核对后才算完成。</p>');
+  parts.push('<p class="truth-hint">商品信息、素材或品牌有更新时，在这里计算差异并逐项更新已生成的图片；数量类变化与质检待复核的新版本必须人工核对后才算完成。</p>');
   if (area.error) parts.push(`<p class="truth-error" role="alert">${escapeHtml(area.error)}</p>`);
   if (area.notice) parts.push(`<p class="truth-hint chg-notice">${escapeHtml(area.notice)}</p>`);
   if (area.loading) {
@@ -899,7 +904,7 @@ function renderChangeDraft(area) {
   const parts = ['<div class="chg-draft">'];
   parts.push('<h4>发起商品变更</h4>');
   parts.push(`<p class="truth-hint">基于当前事实版本 v${state.detail.project.truth_head_version} 编辑；确认后生成新事实版本与变更单，预览本身不落库。</p>`);
-  parts.push('<p class="truth-hint">商品事实（与当前版本逐项比对差异；关键项需勾选已确认）</p>');
+  parts.push('<p class="truth-hint">商品信息（与当前版本逐项比对差异；关键项需勾选已确认）</p>');
   parts.push(draft.facts.map((fact, index) => chgFactRow(fact, index)).join(''));
   parts.push('<button type="button" class="text-button" data-action="chg-add-fact">＋ 添加事实项</button>');
   parts.push('<p class="truth-hint">关键文字（每行一条包装文字；变化等同实物包装变化，需新实拍）</p>');
@@ -1200,7 +1205,7 @@ async function confirmChangeOrder() {
     await loadChanges(area.projectId);
   } catch (error) {
     if (error instanceof ApiFailure && error.code === 'VERSION_CONFLICT') {
-      changeError(`商品事实已有新变更（服务端当前为 v${error.details?.current_version ?? '？'}），请刷新后重新预检，本次未创建变更单`);
+      changeError(`商品信息已有新变更（服务端当前为 v${error.details?.current_version ?? '？'}），请刷新后重新预检，本次未创建变更单`);
     } else if (error instanceof ApiFailure && error.code === 'IDEMPOTENCY_KEY_CONFLICT') {
       draft.idempotencyKey = newChangeIdempotencyKey();
       changeError('提交标识冲突，已为你生成新标识，请重新点击「确认变更」');
@@ -2053,7 +2058,7 @@ async function saveTruth(confirm) {
     return;
   }
   if (confirm && facts.length === 0) {
-    errorNode.textContent = '至少需要 1 项商品事实才能确认版本。';
+    errorNode.textContent = '至少需要 1 项商品信息才能确认版本。';
     return;
   }
   const criticalText = $('#truth-text').value.split('\n').map(line => line.trim()).filter(Boolean)
@@ -2068,7 +2073,7 @@ async function saveTruth(confirm) {
       critical_text: criticalText,
     });
     state.toast(confirm
-      ? `已确认商品事实 v${payload.truth_version.version}`
+      ? `已确认商品信息 v${payload.truth_version.version}`
       : `已保存事实草稿 v${payload.truth_version.version}`);
     await refresh();
     await openTruthDialog(project.id);
@@ -2745,7 +2750,7 @@ async function renderAccountData() {
   if (assets) assets.hidden = true;
   const worksBody = $('#real-works-body');
   if (worksBody) {
-    worksBody.innerHTML = '<div class="loading-line"></div><p class="real-hint">正在读取真实作品…</p>';
+    worksBody.innerHTML = '<div class="loading-line"></div><p class="real-hint">正在读取作品…</p>';
     void renderRealWorks();
   }
   document.querySelectorAll('[data-real-workbench]').forEach(button => button.onclick = () => window.dispatchEvent(new CustomEvent('qb:open-workbench', { detail: { projectId: button.dataset.realWorkbench } })));
@@ -2862,9 +2867,18 @@ function renderRealWorkGroup({ project, runs, run, versions, reports, exports, e
     const [decisionLabel, decisionCls] = decision
       ? (WORK_DECISION_META[decision] ?? [decision, 'warn'])
       : ['未检查', 'warn'];
+    // 检查成因来自服务端报告 decision_reasons（{blocked[],review_required[]}），未检查如实说明
+    const reasons = report?.decision_reasons ?? {};
+    const reasonParts = [
+      ...(reasons.blocked ?? []).map(item => `阻断：${item.label ?? item.code}`),
+      ...(reasons.review_required ?? []).map(item => `待复核：${item.label ?? item.code}`),
+    ];
+    const decisionReason = decision
+      ? (reasonParts.join('；') || '检查完成，详见工作台')
+      : '该版本尚未运行质量检查';
     const tags = [
       active ? '<span class="wb-chip ok">选用</span>' : '<span class="wb-chip">无选用</span>',
-      `<span class="wb-chip ${decisionCls}">${escapeHtml(decisionLabel)}</span>`,
+      `<span class="wb-chip ${decisionCls}" data-reason="${escapeHtml(decisionReason)}">${escapeHtml(decisionLabel)}</span>`,
       deliveredExport ? '<span class="wb-chip ok">已交付</span>' : `<span class="wb-chip">未交付</span>`,
       `<span class="wb-chip">${versionCount} 个版本</span>`,
     ];

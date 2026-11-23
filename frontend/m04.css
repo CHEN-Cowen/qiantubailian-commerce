@@ -48,3 +48,18 @@
   .spec-grid{grid-template-columns:1fr}
   #spec-dialog{padding:20px}
 }
+
+/* ===== 批次4 · 品牌与模板页卡片样式补齐（此前无任何规则，页面裸奔）+ L4 七态 ===== */
+.brand-kit-list,#library-template-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.brand-kit-card,.template-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 17px;display:flex;flex-direction:column;gap:9px;min-height:44px;transition:border-color var(--dur,200ms) var(--ease,cubic-bezier(.4,0,.2,1)),box-shadow var(--dur,200ms) var(--ease),transform var(--dur-fast,160ms) var(--ease)}
+.brand-kit-card:hover,.template-card:hover{border-color:#5A00D6;box-shadow:0 6px 18px rgba(90,0,214,.10);transform:translateY(-1px)}
+.brand-kit-card:active,.template-card:active{transform:scale(.995)}
+.brand-kit-card:focus-within,.template-card:focus-within{border-color:#5A00D6;box-shadow:0 0 0 2px #5A00D633}
+.bk-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.bk-head b{font-size:14px;color:var(--ink)}
+.bk-note{margin:0;color:var(--muted);font-size:12px;line-height:1.5}
+.bk-tags{display:flex;gap:6px;flex-wrap:wrap}
+.bk-tags span{background:#F3E8FF;color:#4A08A8;border-radius:4px;padding:3px 8px;font-size:11px}
+.bk-actions{display:flex;gap:8px;margin-top:auto;padding-top:6px}
+.template-card b{font-size:14px;color:var(--ink)}
+.template-card small{color:var(--muted);font-size:12px;line-height:1.5}

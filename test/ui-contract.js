@@ -444,7 +444,7 @@ test('E03 商品变更：项目页变更区块、api 端点方法、逐项处理
   assert.match(realData, /randomUUID/);
   // 冲突如实提示「已有新变更，请刷新」，不假装成功
   assert.match(realData, /VERSION_CONFLICT/);
-  assert.match(realData, /商品事实已有新变更/);
+  assert.match(realData, /商品信息已有新变更/);
   assert.match(realData, /请刷新后重新预检/);
   // 执行闸口：报价确认、硬阻断、余额不足、重试限制的错误码如实处理
   assert.match(realData, /QUOTE_CONFIRMATION_REQUIRED/);
@@ -751,4 +751,37 @@ test('批次3 L3：概念内部化收尾（工作台/制作页/弹窗不再外�
   assert.doesNotMatch(wizard, /正在冻结配置|已冻结配置/);
   assert.doesNotMatch(wizard, /费用以服务端报价为准，本页不做估算/, '与报价条重复的费用说明应删除');
   assert.doesNotMatch(workbench, /核对商品事实/);
+});
+
+// ===== 批次4：剩余三页（我的商品/我的作品/品牌与模板）L3 收尾 + L4 状态细化契约 =====
+test('批次4 L3：三页概念内部化收尾（不再外露「真实项目/真实作品/商品事实」等内部词）', async () => {
+  const [html, realData] = await Promise.all([read('index.html'), read('real-data.js')]);
+  for (const banned of ['正在读取真实项目', '正在读取真实作品', '真实作品 · 按商品与任务',
+    '以下项目与商品事实自动保存', '请先创建真实项目', '请选择真实项目', '素材已写入真实项目']) {
+    assert.ok(!html.includes(banned) && !realData.includes(banned), `不得再外露「${banned}」`);
+  }
+  assert.ok(html.includes('商品项目'), '「我的项目」应内部化为「商品项目」');
+  assert.ok(html.includes('id="truth-title"'), '商品信息弹窗标题锚点保留');
+  assert.doesNotMatch(realData, /打开商品事实失败/);
+  // 演示边界横幅「商品事实已确认」按 M02 契约保留（上方 M02 测试已断言）
+});
+
+test('批次4 L4：三页卡片七态与状态签成因接线（成因来自服务端真实数据）', async () => {
+  const [m03css, m04css, realData] = await Promise.all([read('m03.css'), read('m04.css'), read('real-data.js')]);
+  // 项目卡/作品卡按压与触达
+  assert.match(m03css, /\.real-card\{min-height:44px/);
+  assert.match(m03css, /\.real-card:active\{transform:scale\(\.995\)\}/);
+  assert.match(m03css, /\.real-shot:hover img\{transform:scale\(1\.02\)\}/);
+  assert.match(m03css, /\.real-shot-actions \.text-button\{min-height:44px\}/);
+  // 品牌与模板卡片必须有样式（此前裸奔）且带 hover/按压/焦点
+  assert.match(m04css, /\.brand-kit-card:hover/);
+  assert.match(m04css, /\.brand-kit-card:active/);
+  assert.match(m04css, /\.brand-kit-card:focus-within/);
+  assert.match(m04css, /\.template-card:hover/);
+  // 状态签成因：项目卡 readiness.blockers 真实消息、作品卡 decision_reasons
+  assert.match(realData, /pillReason/, '项目卡状态签必须写成因');
+  assert.match(realData, /data-reason="\$\{escapeHtml\(pillReason\)\}"/);
+  assert.match(realData, /decisionReason/, '作品卡检查签必须写成因');
+  assert.match(realData, /data-reason="\$\{escapeHtml\(decisionReason\)\}"/);
+  assert.match(realData, /readiness\.blockers/, '成因必须来自服务端 blockers，不得虚构');
 });

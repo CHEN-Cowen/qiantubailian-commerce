@@ -130,3 +130,18 @@
   flex-basis: 100%;
   margin: 0;
 }
+
+/* ===== 批次4 · 剩余三页 L4 交互状态细化（规范：docs/交互状态规范_L4_V0.1.md） ===== */
+/* 商品项目卡（.real-card）：hover 已有，补按压/触达/焦点 */
+.real-card{min-height:44px;transition:border-color var(--dur,200ms) var(--ease,cubic-bezier(.4,0,.2,1)),box-shadow var(--dur,200ms) var(--ease),transform var(--dur-fast,160ms) var(--ease)}
+.real-card:active{transform:scale(.995)}
+.real-card:focus-within{border-color:#5A00D6;box-shadow:0 0 0 2px #5A00D633}
+/* 作品卡（.real-shot）：hover 图片微缩放 + 按压 */
+.real-shot{border-radius:10px;transition:box-shadow var(--dur,200ms) var(--ease)}
+.real-shot img{transition:transform var(--dur,200ms) var(--ease)}
+.real-shot:hover{box-shadow:0 6px 18px rgba(90,0,214,.12)}
+.real-shot:hover img{transform:scale(1.02)}
+/* 作品页文字按钮（下载/去交付）保持 44px 可点 */
+.real-shot-actions .text-button{min-height:44px}
+/* 状态签（.real-state/.wb-chip）带 data-reason 时复用全局 tooltip；补手型提示 */
+.real-state[data-reason],.wb-chip[data-reason]{cursor:help}

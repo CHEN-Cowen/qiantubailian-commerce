@@ -102,7 +102,7 @@
             <header class="v2-sec-head" data-reveal>
               <p class="v2-kicker-dark">柑橘藤条香薰 · 全套上架图</p>
               <h2 id="v2-samples-title">首次上新，一次做齐全套</h2>
-              <p>同一个商品、同一套商品事实，主图、场景图、细节图各自到位。</p>
+              <p>同一个商品、同一套商品信息，主图、场景图、细节图各自到位。</p>
             </header>
             <div class="v2-sample-grid">
               <figure class="v2-sample" data-reveal>
@@ -250,15 +250,14 @@
       </section>
 
       <section class="view" id="projects-view" data-view-panel="projects">
-        <div class="page-heading compact"><div><p class="eyebrow">我的商品</p><h1>我的商品</h1><p class="heading-note">每个商品都保留事实、素材与原图；可继续制作、再做一套，或从已有风格制作新品。</p></div><div class="project-heading-actions"><button type="button" class="secondary" id="batch-open">多 SKU 批量制作</button><button class="primary" id="projects-new"><span>＋</span> 新建商品</button></div></div>
+        <div class="page-heading compact"><div><p class="eyebrow">我的商品</p><h1>我的商品</h1><p class="heading-note">每个商品都保留信息、素材与原图；可继续制作、再做一套，或从已有风格制作新品。</p></div><div class="project-heading-actions"><button type="button" class="secondary" id="batch-open">多 SKU 批量制作</button><button class="primary" id="projects-new"><span>＋</span> 新建商品</button></div></div>
         <section class="real-projects" id="real-projects" aria-live="polite">
           <div class="real-head">
-            <div><h2>我的项目</h2></div>
+            <div><h2>商品项目</h2></div>
             <span class="real-badge">自动保存 · 刷新不丢失</span>
           </div>
-          <p class="real-note">以下项目与商品事实自动保存，刷新不会丢失。</p>
-          <div class="real-list" id="real-list"><p class="real-empty">正在读取真实项目…</p></div>
-          <p class="real-hint">每个项目都有统一工作台：上传→核对事实→选效果→确认报价→生成→修改→下载。创建后自动从工作台开始，刷新或重开浏览器会恢复已有任务。</p>
+          <div class="real-list" id="real-list"><p class="real-empty">正在读取商品项目…</p></div>
+          <p class="real-hint">每个商品都有统一工作台：上传→核对信息→选效果→确认报价→生成→修改→下载。创建后自动从工作台开始，刷新或重开浏览器会恢复已有任务。</p>
         </section>
       </section>
 
@@ -354,7 +353,7 @@
             <textarea id="wiz-selling-points" rows="3" maxlength="600" placeholder="例如：500ml 大容量，一瓶用一个月；磨砂瓶身，放在浴室台面也清爽"></textarea>
             <div class="wiz-sell-actions">
               <button type="button" class="secondary" id="wiz-sell-analyze">生成卖点候选</button>
-              <span class="wiz-hint">用句号、分号或换行分隔；候选不会自动写进商品事实。</span>
+              <span class="wiz-hint">用句号、分号或换行分隔；候选不会自动写进商品信息。</span>
             </div>
             <div id="wiz-sell-results" class="wiz-sell-results"></div>
             <p class="state-note" id="wiz-sell-note"></p>
@@ -451,10 +450,10 @@
         <!-- 模块06：真实作品区。按商品/任务展示套图，标识选用、检查、交付与历史版本；演示样例区保留在下方但默认隐藏 -->
         <section class="real-works" id="real-works" aria-live="polite">
           <div class="real-head">
-            <div><h2>真实作品 · 按商品与任务</h2></div>
+            <div><h2>作品 · 按商品与任务</h2></div>
             <span class="real-badge">选用 / 检查 / 交付 / 历史版本</span>
           </div>
-          <div id="real-works-body"><p class="real-hint">正在读取真实作品…</p></div>
+          <div id="real-works-body"><p class="real-hint">正在读取作品…</p></div>
         </section>
         <div class="asset-layout" hidden><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
       </section>
@@ -707,7 +706,7 @@
       <div id="batch-body"></div>
     </dialog>
     <dialog id="upload-dialog" class="real-dialog" aria-labelledby="upload-dialog-title"><button class="dialog-close" data-close-dialog="upload-dialog" aria-label="关闭">×</button><p class="eyebrow">上传素材</p><h2 id="upload-dialog-title">上传真实商品素材</h2><p class="real-note">服务端校验真实文件类型、体积、哈希与项目归属；每个项目最多 6 张生效素材。</p><form id="upload-form" class="real-form"><label>归属项目<select id="upload-project" aria-label="归属项目"></select></label><label>参考职责<select id="upload-role" aria-label="参考职责"><option value="subject">主体（可作为事实来源）</option><option value="packaging">包装（可作为事实来源）</option><option value="detail">细节（可作为事实来源）</option><option value="style">风格（不作为事实来源）</option></select></label><label>图片文件<input type="file" id="upload-file" accept="image/jpeg,image/png,image/webp" required></label><p class="real-note">主体与包装为单槽职责：已有素材时会要求显式选择保留哪一张，不会静默覆盖。最短边低于 1024px 可保存但会提示补图。</p><p class="form-error" id="upload-error" role="alert"></p><div id="upload-result" hidden></div><div class="real-actions"><button type="button" class="secondary" id="upload-replace" hidden>替换现有素材并上传</button><button type="button" class="secondary" data-close-dialog="upload-dialog">关闭</button><button type="submit" class="primary" id="upload-submit">上传</button></div></form></dialog>
-  <dialog id="truth-dialog" class="real-dialog real-dialog-wide" aria-labelledby="truth-title"><button class="dialog-close" data-close-dialog="truth-dialog" aria-label="关闭">×</button><p class="eyebrow">商品事实</p><h2 id="truth-title">商品事实</h2><div id="truth-body"></div></dialog>
+  <dialog id="truth-dialog" class="real-dialog real-dialog-wide" aria-labelledby="truth-title"><button class="dialog-close" data-close-dialog="truth-dialog" aria-label="关闭">×</button><p class="eyebrow">商品信息</p><h2 id="truth-title">商品信息</h2><div id="truth-body"></div></dialog>
   <dialog id="help-dialog"><button class="dialog-close" id="close-help">×</button><p class="eyebrow">关于数据</p><h2>你的数据与示例是分开的</h2><p>登录后的商品、素材、任务、费用与导出记录都会保存在你的账号下。首页未登录时的「示例演示」只用于说明流程：不调用生成模型、不扣额度、不上传文件，也不会写入真实商品。带「示例」标记的图片为演示素材，不能作为交付结果。</p><button class="primary" id="help-ok">知道了</button></dialog>
   <dialog id="flow-dialog" aria-labelledby="flow-title"><button class="dialog-close" id="close-flow" aria-label="关闭演示">×</button><p class="eyebrow">演示流程 · 刷新重置</p><h2 id="flow-title">新品上架包</h2><div id="flow-content"></div><p id="flow-error" role="alert"></p><div class="flow-actions"><button class="secondary" id="flow-back">上一步</button><button class="primary" id="flow-next">下一步</button></div></dialog>
   <!-- R07：价格与额度管理 dialog -->
