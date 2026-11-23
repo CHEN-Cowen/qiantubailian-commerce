@@ -238,7 +238,7 @@ function startEntry(kind) {
     openAuthGate({
       demoHint: kind === 'update'
         ? '登录后会继续你刚才选择的「更新商品图」。'
-        : kind === 'workspace' ? '登录后进入工作台。' : '登录后会继续你刚才选择的「首次制作商品图」。',
+        : kind === 'workspace' ? '登录后进入工作台。' : '登录后会继续你刚才选择的「制作一套商品图」。',
     });
     return;
   }

@@ -2671,7 +2671,7 @@ function renderDeliveries(exports, replacements, runs, error) {
       <h3>还没有交付记录</h3>
       <p>导出包生成后会出现在这里；导出只代表文件已打包，不代表店铺已替换。</p>
       <div class="state-actions">
-        <button type="button" data-home-create>制作新商品图</button>
+        <button type="button" data-home-create>＋ 新建商品</button>
         <button type="button" data-home-projects>查看我的商品</button>
       </div>
     </div>`;

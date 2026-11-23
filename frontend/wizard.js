@@ -1,7 +1,7 @@
 import { ApiFailure, api } from './api.js';
 
 /**
- * 模块02：首次制作一页三步向导（上传商品 → 确认必要信息 → 风格与交付）。
+ * 模块02：首次制作一页向导（上传素材 → 确认商品信息 → 选效果与场景 → 确认报价与生成）。
  *
  * 界面的五条自我约束：
  * 1. 浏览器预览与服务端保存分开表述：预览刷新不可恢复，服务端结果只报真实返回值。
@@ -338,7 +338,7 @@ function applyStep3Preselect() {
   }
 }
 
-// ---------- 第 1 步：上传商品 ----------
+// ---------- 第 1 步：上传素材 ----------
 function resetStep1() {
   state.file = null;
   stopUploadTimer();
@@ -472,7 +472,7 @@ async function startUpload(replace) {
   }
 }
 
-// ---------- 第 2 步：确认必要信息 ----------
+// ---------- 第 2 步：确认商品信息 ----------
 function factRowHtml(fact = {}) {
   const sources = state.assets.filter(asset => asset.role_status === 'active' && asset.role !== 'style');
   const options = ['<option value="">用户输入（需人工确认）</option>'].concat(sources.map(asset =>
@@ -820,7 +820,7 @@ function renderReadiness(readiness) {
   node.hidden = false;
   if (readiness.can_start_production) {
     $('#wiz-continue-anyway').hidden = true;
-    node.innerHTML = '<h4>生产前置检查</h4><p class="truth-ok">商品信息与素材已满足生产条件，可以继续选择风格与交付。</p>';
+    node.innerHTML = '<h4>生产前置检查</h4><p class="truth-ok">商品信息与素材已满足生产条件，可以继续选择效果与场景。</p>';
     return false;
   }
   const blockers = readiness.blockers ?? [];

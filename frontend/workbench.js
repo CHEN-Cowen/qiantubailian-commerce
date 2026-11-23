@@ -321,9 +321,9 @@ function renderSteps() {
 
   const steps = [
     { id: 'upload', label: '上传素材', done: assetsDone },
-    { id: 'truth', label: '核对商品信息', done: truthDone && readiness.can_start_production !== false },
-    { id: 'spec', label: '选效果/生产配置', done: specDone },
-    { id: 'generate', label: '确认报价 → 生成', done: Boolean(state.activeRun) },
+    { id: 'truth', label: '确认商品信息', done: truthDone && readiness.can_start_production !== false },
+    { id: 'spec', label: '选效果与场景', done: specDone },
+    { id: 'generate', label: '确认报价与生成', done: Boolean(state.activeRun) },
     { id: 'qa', label: '检查与修订', done: runDone },
     { id: 'export', label: '下载套图', done: state.exports.length > 0 },
   ];

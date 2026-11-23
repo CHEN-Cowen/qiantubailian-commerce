@@ -77,10 +77,10 @@
                     <img class="diffuser-cover" src="assets/demo/diffuser-hero.jpg" width="1552" height="515" alt="柑橘与浅色石台上的琥珀色藤条香薰">
                   </figure>
                   <figure class="v2-slide">
-                    <img src="assets/demo/diffuser-white.jpg" alt="香薰瓶白底主图">
+                    <img src="assets/demo/diffuser-white.jpg" width="1024" height="952" alt="香薰瓶白底主图">
                   </figure>
                   <figure class="v2-slide">
-                    <img src="assets/demo/diffuser-scene.jpg" alt="香薰瓶的柑橘主题场景">
+                    <img src="assets/demo/diffuser-scene.jpg" width="1536" height="952" alt="香薰瓶的柑橘主题场景">
                   </figure>
                   <span class="v2-badge" id="hp-carousel-badge">场景图 · 可发布</span>
                   <div class="v2-dots" id="hp-carousel-dots">
@@ -90,8 +90,8 @@
                   </div>
                 </div>
                 <div class="v2-thumbs">
-                  <figure><img src="assets/demo/diffuser-detail.jpg" alt="香薰瓶瓶口、藤条和标签的细节"><figcaption>包装细节</figcaption></figure>
-                  <figure><img src="assets/demo/diffuser-white.jpg" alt="香薰瓶正面白底图"><figcaption>白底主图</figcaption></figure>
+                  <figure><img src="assets/demo/diffuser-detail.jpg" width="1024" height="952" alt="香薰瓶瓶口、藤条和标签的细节"><figcaption>包装细节</figcaption></figure>
+                  <figure><img src="assets/demo/diffuser-white.jpg" width="1024" height="952" loading="lazy" alt="香薰瓶正面白底图"><figcaption>白底主图</figcaption></figure>
                 </div>
               </div>
             </div>
@@ -190,7 +190,7 @@
               <h2 id="v2-cta-title">用你的商品，做第一套图</h2>
               <p>先做一套看真实效果，再决定要不要规模化。</p>
               <div class="v2-cta-actions">
-                <button id="hp-create" type="button">首次制作商品图</button>
+                <button id="hp-create" type="button">制作一套商品图</button>
                 <button id="hp-update" type="button">更新商品图</button>
               </div>
             </div>
@@ -218,7 +218,7 @@
               <h1 id="work-title">商品图工作台</h1>
               <p class="work-head-note" id="work-next">从商品实拍开始，一次制作多张上架图。</p>
             </div>
-            <button class="work-new" id="work-new-project" type="button">＋ 制作一套商品图</button>
+            <button class="work-new" id="work-new-project" type="button">＋ 新建商品</button>
           </div>
           <section class="work-section" id="work-todos" aria-label="待办事项">
             <div class="work-section-head">
@@ -260,17 +260,17 @@
         </section>
       </section>
 
-      <!-- 模块02：首次制作一页三步向导（上传商品 → 确认必要信息 → 风格与交付），取代旧 project-dialog 弹窗 -->
+      <!-- 模块02：首次制作一页三步向导（上传素材 → 确认商品信息 → 选效果与场景 → 确认报价与生成），取代旧 project-dialog 弹窗 -->
       <section class="view" id="create-view" data-view-panel="create" hidden>
         <div class="page-heading compact">
           <div><h1>制作一套商品图</h1><p class="heading-note">上传实拍，选好图片和风格，确认费用后开始制作。</p></div>
           <button class="secondary" id="wiz-exit">返回</button>
         </div>
         <ol class="wiz-steps" id="wiz-steps" aria-label="制作步骤">
-          <li><button type="button" class="wiz-step is-current" data-wiz-goto="1" aria-current="step"><i>1</i><span>上传商品</span></button></li>
+          <li><button type="button" class="wiz-step is-current" data-wiz-goto="1" aria-current="step"><i>1</i><span>上传素材</span></button></li>
           <li><button type="button" class="wiz-step" data-wiz-goto="2"><i>2</i><span>确认商品信息</span></button></li>
-          <li><button type="button" class="wiz-step" data-wiz-goto="3"><i>3</i><span>选方案与背景</span></button></li>
-          <li><button type="button" class="wiz-step" data-wiz-goto="4"><i>4</i><span>确认交付与费用</span></button></li>
+          <li><button type="button" class="wiz-step" data-wiz-goto="3"><i>3</i><span>选效果与场景</span></button></li>
+          <li><button type="button" class="wiz-step" data-wiz-goto="4"><i>4</i><span>确认报价与生成</span></button></li>
         </ol>
         <div class="wiz-resume" id="wiz-resume" hidden>
           <p><b>检测到上次未完成的向导草稿。</b><span id="wiz-resume-note"></span></p>
@@ -285,7 +285,7 @@
           <p><b id="wiz-reuse-title"></b><span id="wiz-reuse-note"></span></p>
         </div>
 
-        <!-- 第 1 步 上传商品 -->
+        <!-- 第 1 步 上传素材 -->
         <section class="wiz-panel" data-wiz-panel="1">
           <div class="wiz-drop" id="wiz-drop" role="button" tabindex="0" aria-label="拖拽或点击选择商品图片（JPEG / PNG / WebP）">
             <b>拖拽商品图到这里，或点击选择文件</b>
@@ -417,7 +417,7 @@
 
         <!-- 第 4 步 交付确认 + 真实报价 + 生成 -->
         <section class="wiz-panel" data-wiz-panel="4" hidden>
-          <h3 class="wiz-section-title">确认交付与费用 <span>费用以服务端报价为准，点击后先锁定配置再取价</span></h3>
+          <h3 class="wiz-section-title">确认报价与生成 <span>费用以服务端报价为准，点击后先锁定配置再取价</span></h3>
           <div id="wiz-pay-summary"></div>
           <div id="wiz-pay-blockers"></div>
           <section class="wiz-quote" id="wiz-quote" hidden></section>
@@ -453,7 +453,7 @@
             </div>
           <div id="real-works-body"><p class="real-hint">正在读取作品…</p></div>
         </section>
-        <div class="asset-layout" hidden><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
+        <div class="asset-layout" hidden><aside class="asset-sidebar"><div class="sidebar-label">商品项目</div><button class="asset-project selected"><span class="mini-product skin"></span><span><b>月光舒缓面霜</b><small>5 个素材</small></span><i>›</i></button><button class="asset-project"><span class="mini-product lamp"></span><span><b>雾白便携台灯</b><small>3 个素材</small></span><i>›</i></button><div class="sidebar-label separated">筛选状态</div><label class="check-row"><input type="checkbox" checked> 全部 <b>8</b></label><label class="check-row"><input type="checkbox"> 可发布 <b class="green">4</b></label><label class="check-row"><input type="checkbox"> 待复核 <b class="orange">3</b></label><label class="check-row"><input type="checkbox"> 阻断 <b class="red">1</b></label></aside><div class="asset-content"><div class="asset-toolbar"><span>月光舒缓面霜 · 全部素材 <small class="sample-note">图片为真实模型生成样例</small></span><button class="text-button" id="sort-assets">最近更新⌄</button></div><div class="asset-grid"><article class="asset-card selected" data-asset="hero"><div class="asset-image skin-image"><img class="sample-photo" src="./assets/demo/sample-cream-hero.jpg" loading="lazy" width="1200" height="1200" alt="主图 · 白底样例" onerror="this.style.display='none'"><span class="asset-version">V3 · 当前</span><div class="jar"></div></div><div class="asset-card-body"><div><b>主图 · 白底</b><span class="pass-text">● 可发布</span></div><small>1200 × 1200 · 更新 12 分钟前</small></div></article><article class="asset-card" data-asset="benefit"><div class="asset-image benefit-image"><img class="sample-photo" src="./assets/demo/sample-cream-benefit.jpg" loading="lazy" width="1200" height="1500" alt="卖点图 · 成分样例" onerror="this.style.display='none'"><span class="asset-version">V2</span><div class="benefit-copy">舒缓<br><b>维稳屏障</b></div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 01 · 成分</b><span class="pass-text">● 可发布</span></div><small>1200 × 1500 · 更新 18 分钟前</small></div></article><article class="asset-card" data-asset="scene"><div class="asset-image scene-image"><img class="sample-photo" src="./assets/demo/sample-cream-scene.jpg" loading="lazy" width="1200" height="1500" alt="场景图 · 晨间样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="jar small"></div><span class="scene-leaf">◒</span></div><div class="asset-card-body"><div><b>场景图 · 晨间</b><span class="review-text">● 待复核</span></div><small>1200 × 1500 · 2 个问题</small></div></article><article class="asset-card blocked" data-asset="detail"><div class="asset-image detail-image"><img class="sample-photo" src="./assets/demo/sample-cream-detail.jpg" loading="lazy" width="1200" height="1500" alt="卖点图 · 功效包装特写样例" onerror="this.style.display='none'"><span class="asset-version">V1</span><div class="detail-placeholder">包装文字<br>需要确认</div><div class="jar small"></div></div><div class="asset-card-body"><div><b>卖点图 02 · 功效</b><span class="block-text">● 阻断</span></div><small>1200 × 1500 · 事实未确认</small></div></article></div></div></div>
       </section>
 
       <section class="view" id="library-view" data-view-panel="library">

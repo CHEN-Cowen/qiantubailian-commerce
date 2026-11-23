@@ -61,8 +61,8 @@ test('M02-wizard create 视图存在、脚本接线、三步步骤条与诚实�
   assert.ok(STATIC_FILES.includes('wizard.js'), 'STATIC_FILES 缺少 wizard.js');
   assert.match(server, /'wizard\.js'/);
   assert.match(wizard, /if \(typeof document !== 'undefined'\) initWizard\(\)/, 'wizard.js 需自启动');
-  // 步骤条三步文案
-  for (const text of ['上传商品', '确认必要信息', '风格与交付']) {
+  // 步骤条文案（与工作台六步词汇统一：上传素材/确认商品信息/选效果与场景/确认报价与生成）
+  for (const text of ['上传素材', '确认商品信息', '选效果与场景', '确认报价与生成']) {
     assert.ok(html.includes(text), `步骤条缺少「${text}」`);
   }
   // 浏览器预览与「已保存到服务端」两类状态明确区分，并写明刷新不可恢复
