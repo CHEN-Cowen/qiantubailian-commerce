@@ -146,6 +146,7 @@ const state = {
   styleTemplateId: '',  // E2/E3 预选模板（进入第 3 步且目录中存在时套用）
   styleBrandKitId: '',  // E2/E3 预选品牌（进入第 3 步且目录中存在时套用）
   reuseSpec: null,      // E1 沿用 spec 冻结快照（模板/品牌/平台），快照不随品牌 head 漂移
+  perceptionKey: '',    // M-V1 用户选定的感知方向：只用于预选背景，不改交付清单与事实
 };
 
 function showToast(message) {
@@ -892,17 +893,21 @@ const BACKGROUND_LABEL = {
   gradient_studio: '渐变影棚',
   lifestyle: '生活方式',
 };
-const PURPOSE_LABEL = { listing: '上架主图与详情', advertising: '投放素材', social: '社媒笔记' };
+const PURPOSE_LABEL = {
+  listing: '上架主图与详情', advertising: '投放素材', social: '社媒笔记', brand: '品牌形象',
+};
 const PURPOSE_REASON = {
   listing: '覆盖主图、卖点、场景与细节，适合首次上架',
   advertising: '方图/竖版/横版三件套，适合信息流与开屏',
   social: '封面与内页，适合内容种草',
+  brand: '单张品牌主视觉，强调调性与氛围',
 };
 const backgroundLabel = value => BACKGROUND_LABEL[value] ?? value ?? '未标注';
 
 /** 模板缩略图是排版示意，不是生成结果；用背景方向和文字块位置表达方案差异。 */
 function templateArt(item) {
-  const background = item.creative_direction?.background ?? 'scene';
+  // 模板投影只带 background；仍兼容完整对象（getTemplate 返回的形态）。
+  const background = item.background ?? item.creative_direction?.background ?? 'scene';
   const photo = {
     plain_white: 'diffuser-white.jpg',
     scene: 'diffuser-scene.jpg',
@@ -940,7 +945,7 @@ function templateCard(item, selected) {
     <span class="wiz-card-body">
       <b>${escapeHtml(item.name)}${state.recommendedTemplateId === item.id ? '<em class="wiz-recommend">推荐</em>' : ''}</b>
       <small>${escapeHtml(PURPOSE_LABEL[item.purpose] ?? item.purpose ?? '交付方案')} · ${item.deliverable_count ?? (item.deliverables?.length ?? 0)} 项交付</small>
-      <small class="wiz-card-bg">背景：${escapeHtml(backgroundLabel(item.creative_direction?.background))}</small>
+      <small class="wiz-card-bg">背景：${escapeHtml(backgroundLabel(item.background))}</small>
       ${reason ? `<small class="wiz-card-reason">${escapeHtml(reason)}</small>` : ''}
     </span>
   </button>`;
@@ -958,7 +963,11 @@ function recommendTemplate(templates) {
 
 function visibleTemplates() {
   const filter = state.bgFilter;
-  return filter ? state.templates.filter(item => item.creative_direction?.background === filter) : state.templates;
+  if (!filter) return state.templates;
+  // 模板投影带 background，才可能筛出结果；拿不到时宁可不过滤，也不要清空可选方案。
+  const known = state.templates.filter(item => item.background);
+  if (known.length === 0) return state.templates;
+  return known.filter(item => item.background === filter);
 }
 
 function renderTemplates() {
@@ -979,12 +988,7 @@ function renderBackgroundNote() {
   if (!note) return;
   const item = state.templates.find(template => template.id === state.templateId);
   if (!item) { note.textContent = '选一个方案后，这里会显示它的背景方向。'; return; }
-  const direction = item.creative_direction ?? {};
-  const parts = [
-    `背景：${backgroundLabel(direction.background)}`,
-    direction.lighting ? `光线：${direction.lighting}` : '',
-    direction.camera ? `视角：${direction.camera}` : '',
-  ].filter(Boolean);
+  const parts = [`背景：${backgroundLabel(item.background)}`].filter(Boolean);
   note.textContent = `${parts.join(' · ')}。不需要手写背景提示词；主图若受平台纯白要求限制，下方会给出可直接执行的处理。`;
 }
 
@@ -995,6 +999,98 @@ function applyTemplateChoice(id) {
   invalidateQuote();
   renderTemplates();
   void refreshPreview();
+}
+
+/** 背景偏好切换：chip 点击与感知方向选中共用同一段逻辑，避免两套过滤规则。 */
+function applyBackgroundFilter(value) {
+  state.bgFilter = value ?? '';
+  for (const item of $$('#wiz-bg-filter [data-bg-filter]')) {
+    item.classList.toggle('selected', (item.dataset.bgFilter ?? '') === state.bgFilter);
+  }
+  const list = visibleTemplates();
+  // 背景偏好只影响可选方案；当前方案不匹配时切到该背景下的推荐方案
+  if (state.templateId && !list.some(item => item.id === state.templateId)) {
+    const next = list.find(item => item.id === state.recommendedTemplateId) ?? list[0];
+    if (next) { applyTemplateChoice(next.id); return; }
+  }
+  renderTemplates();
+}
+
+// ---------- M-V1：感知方向（规则在服务端，前端不复制一份推荐逻辑） ----------
+let styleRefManifest = null;
+let perceptionDeck = null;
+
+async function loadStyleRefManifest() {
+  if (styleRefManifest) return styleRefManifest;
+  try {
+    const response = await fetch('assets/style-refs/manifest.json', { credentials: 'same-origin' });
+    styleRefManifest = response.ok ? await response.json() : { items: [] };
+  } catch {
+    styleRefManifest = { items: [] };
+  }
+  return styleRefManifest;
+}
+
+function perceptionArt(card, manifest) {
+  const ref = (manifest.items ?? []).find(item => item.perception === card.key);
+  if (!ref?.file) return '<span class="wiz-perception-art is-empty">参考图待补充</span>';
+  // AI 生成的参考图必须显式标「示意」，否则用户会以为自己的商品做出来就是这样。
+  const isAi = /AI\s*生成/.test(ref.source ?? '');
+  const badge = isAi ? '<span class="wiz-perception-ai">示意图</span>' : '';
+  return `<span class="wiz-perception-frame"><img class="wiz-perception-art" src="assets/style-refs/${escapeHtml(ref.file)}" alt="" loading="lazy">${badge}</span>`;
+}
+
+function perceptionCardHtml(card, manifest) {
+  const reasons = (card.reasons ?? []).slice(0, 2).map(text => `<li>${escapeHtml(text)}</li>`).join('');
+  return `<button type="button" class="wiz-perception-card${card.key === state.perceptionKey ? ' selected' : ''}" data-perception="${escapeHtml(card.key)}">
+    ${perceptionArt(card, manifest)}
+    <span class="wiz-perception-name">${escapeHtml(card.name)}</span>
+    <span class="wiz-perception-summary">${escapeHtml(card.summary)}</span>
+    <ul class="wiz-perception-reasons">${reasons || '<li class="is-muted">没有匹配到你的商品信息</li>'}</ul>
+  </button>`;
+}
+
+async function renderPerceptionPanel() {
+  const holder = $('#wiz-perception-cards');
+  if (!holder || !state.project) return;
+  const template = state.templates.find(item => item.id === state.templateId) ?? null;
+  try {
+    const [manifest, deck] = await Promise.all([
+      loadStyleRefManifest(),
+      api.recommendPerceptions({
+        // 向导里的品类是粗分类（美妆/护肤），优先用它；没有才回落到项目档案。
+        category: document.querySelector('#wiz-category')?.value?.trim() || state.project.category || '',
+        selling_points: document.querySelector('#wiz-selling-points')?.value ?? '',
+        purpose: template?.purpose ?? '',
+        limit: 3,
+      }),
+    ]);
+    perceptionDeck = deck;
+    holder.innerHTML = (deck.cards ?? []).map(card => perceptionCardHtml(card, manifest)).join('');
+    const note = $('#wiz-perception-note');
+    if (note) {
+      const missing = deck.missing_inputs ?? [];
+      // 没有可用品类时三张卡都会说「没匹配到」，必须就地告诉用户怎么改善，而不是让他猜。
+      note.textContent = missing.includes('category_unrecognized')
+        ? '还没选定商品类型，回到上一步选一个，这里会更准'
+        : missing.length > 0
+          ? '按你填的品类和卖点匹配，信息还不多，结果只能作参考'
+          : '按你填的品类和卖点匹配，不分析图片';
+    }
+  } catch {
+    perceptionDeck = null;
+    holder.innerHTML = '<p class="real-note">方向推荐暂时不可用，可以直接用下面的背景选择。</p>';
+  }
+}
+
+function choosePerception(key) {
+  const card = perceptionDeck?.cards?.find(item => item.key === key);
+  if (!card) return;
+  state.perceptionKey = key;
+  $('#wiz-perception-cards').innerHTML = (perceptionDeck.cards ?? [])
+    .map(item => perceptionCardHtml(item, styleRefManifest ?? { items: [] })).join('');
+  // 方向只把背景预选到对应项；交付清单、平台规则校验、商品事实一律不豁免。
+  if (card.strategy?.background) applyBackgroundFilter(card.strategy.background);
 }
 
 function backgroundFixList(result) {
@@ -1026,6 +1122,7 @@ async function enterStep3() {
     if (!state.templateId) state.templateId = state.recommendedTemplateId;
     renderTemplates();
     renderBrandOptions();
+    void renderPerceptionPanel();
     setStep(3);
     saveDraft({ projectId: state.project?.id, assetId: state.asset?.id, step: 3 });
     await refreshPreview();
@@ -1704,18 +1801,15 @@ export function initWizard() {
     if (!card) return;
     applyTemplateChoice(card.dataset.wizTemplate);
   });
+  $('#wiz-perception-cards')?.addEventListener('click', event => {
+    const card = event.target.closest('[data-perception]');
+    if (!card) return;
+    choosePerception(card.dataset.perception);
+  });
   $('#wiz-bg-filter')?.addEventListener('click', event => {
     const chip = event.target.closest('[data-bg-filter]');
     if (!chip) return;
-    state.bgFilter = chip.dataset.bgFilter ?? '';
-    for (const item of $$('#wiz-bg-filter [data-bg-filter]')) item.classList.toggle('selected', item === chip);
-    const list = visibleTemplates();
-    // 背景偏好只影响可选方案；当前方案不匹配时切到该背景下的推荐方案
-    if (state.templateId && !list.some(item => item.id === state.templateId)) {
-      const next = list.find(item => item.id === state.recommendedTemplateId) ?? list[0];
-      if (next) { applyTemplateChoice(next.id); return; }
-    }
-    renderTemplates();
+    applyBackgroundFilter(chip.dataset.bgFilter);
   });
   $('#wiz-bg-fixes')?.addEventListener('click', event => {
     const button = event.target.closest('[data-bg-fix]');

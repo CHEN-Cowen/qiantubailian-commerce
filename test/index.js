@@ -46,10 +46,12 @@ test('配置默认值、合法边界及非法输入', () => {
     }
   }
   for (const NODE_ENV of ['', 'staging', 'TEST']) assert.throws(() => loadConfig({ NODE_ENV }));
-  for (const HOST of ['', '0.0.0.0', '::', 'example.com', '127.0.0.2']) {
+  for (const HOST of ['', '::', 'example.com', '127.0.0.2']) {
     assert.throws(() => loadConfig({ HOST }));
     assert.throws(() => createApp({ host: HOST }));
   }
+  // fe1a1a4 起显式 0.0.0.0 是托管部署必需值，属于合法输入，不再抛错。
+  assert.equal(loadConfig({ HOST: '0.0.0.0' }).host, '0.0.0.0');
   for (const PORT of ['', '0', '-1', '65536', '1.2', ' 3000', '3e3', 'abc']) assert.throws(() => loadConfig({ PORT }));
   for (const port of [-1, 65536, NaN, 1.5, '3000']) assert.throws(() => createApp({ port }));
   assert.equal(createApp({ port: 0 }).server.listening, false);

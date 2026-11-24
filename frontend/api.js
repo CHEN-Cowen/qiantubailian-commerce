@@ -128,6 +128,8 @@ export const api = {
   startBatch: (id, preview) => call(`/api/batches/${encodeURIComponent(id)}/start`, { method: 'POST', json: { confirm_budget: true, expected_max_credits: preview.max_credits, expected_item_ids: preview.items.filter(item => item.status === 'ready').map(item => item.item_id) } }),
   exportBatch: id => call(`/api/batches/${encodeURIComponent(id)}/exports`, { method: 'POST', json: { scope: 'partial' } }),
   listTemplates: () => call('/api/catalog/templates'),
+  // M-V1：感知方向推荐是纯计算端点，不调模型、不写状态；入参为档案字段而非图片
+  recommendPerceptions: payload => call('/api/perceptions/recommend', { method: 'POST', json: payload }),
   getTemplate: id => call(`/api/catalog/templates/${encodeURIComponent(id)}`),
   listChannelRules: () => call('/api/catalog/channel-rules'),
   listBrandKits: () => call('/api/brand-kits'),

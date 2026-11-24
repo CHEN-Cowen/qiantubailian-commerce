@@ -1,0 +1,143 @@
+{
+  "version": "style-ref.1",
+  "updated_at": "2026-11-24",
+  "note": "共 14 张，覆盖七个方向各 2 张。其中 4 张来自仓库既有演示素材（按 1:1 裁切），10 张为 AI 生成示意。全部 verified 为 false：AI 生成的 10 张永久不可标为已确认商用；4 张既有素材的来源性质与授权尚未人工核实。AI 图右下角保留生成工具的「AI生成」标识，未做裁剪或抹除。",
+  "items": [
+    {
+      "perception": "quality_premium",
+      "category": "护肤",
+      "file": "quality_premium/1.jpg",
+      "source": "仓库既有演示素材 sample-cream-hero.jpg（无水印，但无法确认实拍或生成）",
+      "license": "未核实，需人工确认后方可商用",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "quality_premium",
+      "category": "香氛",
+      "file": "quality_premium/2.jpg",
+      "source": "仓库既有演示素材 diffuser-white.jpg，按 1:1 居中裁切（无水印，来源性质未确认）",
+      "license": "未核实，需人工确认后方可商用",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "natural_comfort",
+      "category": "香氛",
+      "file": "natural_comfort/1.jpg",
+      "source": "仓库既有演示素材 diffuser-scene.jpg，按 1:1 居中裁切（无水印，来源性质未确认）",
+      "license": "未核实，需人工确认后方可商用",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "natural_comfort",
+      "category": "食品",
+      "file": "natural_comfort/2.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "professional_trust",
+      "category": "护肤",
+      "file": "professional_trust/1.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "professional_trust",
+      "category": "家电",
+      "file": "professional_trust/2.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "emotion_lifestyle",
+      "category": "香氛",
+      "file": "emotion_lifestyle/1.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "emotion_lifestyle",
+      "category": "家居",
+      "file": "emotion_lifestyle/2.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "vital_innovation",
+      "category": "运动",
+      "file": "vital_innovation/1.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "vital_innovation",
+      "category": "数码",
+      "file": "vital_innovation/2.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "practical_value",
+      "category": "家居",
+      "file": "practical_value/1.jpg",
+      "source": "仓库既有演示素材 sample-lamp-hero.jpg（无水印，来源性质未确认）",
+      "license": "未核实，需人工确认后方可商用",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "practical_value",
+      "category": "日用",
+      "file": "practical_value/2.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "culture_heritage",
+      "category": "茶器",
+      "file": "culture_heritage/1.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    },
+    {
+      "perception": "culture_heritage",
+      "category": "陶瓷",
+      "file": "culture_heritage/2.jpg",
+      "source": "AI 生成示意（图像生成工具输出，右下角保留「AI生成」标识，未加工）",
+      "license": "AI 生成内容，不得作为实拍素材宣传；仅用于方向示意",
+      "verified": false,
+      "added_at": "2026-11-24"
+    }
+  ],
+  "excluded": [
+    {
+      "files": ["sample-cream-scene.jpg", "sample-cream-benefit.jpg", "sample-cream-original.jpg"],
+      "reason": "右下角带「AI生成」水印，按规范第三节「无平台水印」与第八节第 3 条不得入清单"
+    },
+    {
+      "files": ["diffuser-hero.jpg", "diffuser-autumn.jpg", "image-01.jpg", "image-02.jpg", "image-03.jpg"],
+      "reason": "比例非 1:1 或 3:4、短边 <800 或体积超 300KB；宽幅与小图裁成 1:1 会失去画面信息，故不强行入清单"
+    }
+  ]
+}

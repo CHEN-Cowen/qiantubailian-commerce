@@ -21,6 +21,14 @@ export function formatFactText(fact) {
 }
 
 export const EXECUTION_VERSION = 'r04.execution.3';
+
+/** 视觉策略在 spec 里存英文枚举，进入执行指令时翻成中文，避免中英混排。 */
+const SATURATION_LABEL = Object.freeze({ low: '低', medium: '中', high: '高' });
+const BRIGHTNESS_LABEL = Object.freeze({ low: '偏暗', medium: '适中', high: '明亮' });
+const TONE_LABEL = Object.freeze({
+  neutral: '中性', warm_neutral: '暖中性', natural: '自然', warm: '暖调', cool: '冷调', deep: '深沉',
+});
+
 export const TEXT_POLICY = Object.freeze({
   render_text_by_provider: false,
   reason: '精确文字与 Logo 由可编辑排版层叠加，避免生成模型绘制文字导致乱码或错字',
@@ -166,6 +174,17 @@ function promptSections({ project, spec, truth, brandKitVersion, deliverable, la
     lines.push(`【画面】${SHOT_GUIDANCE[deliverable.type] ?? '商品主体清晰，并与环境在透视和光线上一致。'}`);
     lines.push(`【摄影方向】背景 ${background ?? '简洁'}；光线 ${direction.lighting ?? '柔和均匀'}；${direction.whitespace ?? '保留画面呼吸空间'}；机位 ${direction.camera ?? '与参考图一致'}，若参考图缺少所需视角，沿用可见视角。`);
   }
+  // M-V2：氛围与色彩只在显式配置时追加。旧快照没有这两个字段 → 指令与执行哈希都保持原样。
+  const atmosphere = typeof direction.atmosphere === 'string' ? direction.atmosphere.trim() : '';
+  if (atmosphere) lines.push(`【氛围】${atmosphere}。`);
+  if (background !== 'plain_white' && direction.color && typeof direction.color === 'object') {
+    const color = direction.color;
+    const bits = [];
+    if (SATURATION_LABEL[color.saturation]) bits.push(`饱和度${SATURATION_LABEL[color.saturation]}`);
+    if (BRIGHTNESS_LABEL[color.brightness]) bits.push(`整体${BRIGHTNESS_LABEL[color.brightness]}`);
+    if (TONE_LABEL[color.tone]) bits.push(`${TONE_LABEL[color.tone]}色调`);
+    if (bits.length > 0) lines.push(`【色彩】${bits.join('、')}；只作用于背景与环境，不得改变商品本体颜色。`);
+  }
   if (deliverable.type === 'scene_image' && background !== 'plain_white' && sceneDirection) {
     lines.push(`【场景执行】${sceneDirection.guidance.join('')} 若与上文摄影方向冲突，按上文执行；若与文字留白冲突，以实际文字区域为准。`);
   }
@@ -215,6 +234,10 @@ export function compileExecutionPlan({ project, spec, truth, brandKitVersion = n
         whitespace: spec?.creative_direction?.whitespace ?? null,
         camera: spec?.creative_direction?.camera ?? null,
       },
+      // 条件展开：旧快照没有 atmosphere/color 时不新增键，payload 结构与 content_hash 与改动前一致。
+      ...(typeof spec?.creative_direction?.atmosphere === 'string' && spec.creative_direction.atmosphere.trim()
+        ? { atmosphere: spec.creative_direction.atmosphere.trim() } : {}),
+      ...(spec?.creative_direction?.color ? { color: { ...spec.creative_direction.color } } : {}),
       logo_allowed: item.logo_allowed === true,
       text_blocks: [...(item.text_blocks ?? [])],
       text_layers: layers,

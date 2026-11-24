@@ -785,3 +785,62 @@ test('批次4 L4：三页卡片七态与状态签成因接线（成因来自服�
   assert.match(realData, /data-reason="\$\{escapeHtml\(decisionReason\)\}"/);
   assert.match(realData, /readiness\.blockers/, '成因必须来自服务端 blockers，不得虚构');
 });
+
+test('M-V1 感知方向面板：结构、诚实文案、白名单与「规则不上前端」', async () => {
+  const [html, wizard, style] = await Promise.all([read('index.html'), read('wizard.js'), read('style.css')]);
+  assert.ok(html.includes('id="wiz-perception"'), '第 3 步缺少感知方向面板');
+  assert.ok(html.includes('id="wiz-perception-cards"'), '缺少方向卡片容器');
+  // 诚实边界：不得声称分析过图片
+  assert.match(html, /按你填的品类和卖点匹配，不分析图片/);
+  // 品类没选定（默认「其他」）时三张卡都会说「没匹配到」，必须就地给出改善路径
+  assert.match(wizard, /category_unrecognized/, '缺少品类未识别时的就地引导');
+  assert.match(wizard, /还没选定商品类型/, '缺少「回到上一步选商品类型」的具体指引');
+  assert.match(html, /不管选哪个，商品永远是主角/);
+  assert.match(wizard, /function renderPerceptionPanel/);
+  assert.match(wizard, /function choosePerception/);
+  assert.match(wizard, /function applyBackgroundFilter/);
+  assert.match(wizard, /api\.recommendPerceptions/);
+  // 推荐规则只在服务端：前端出现规则表就说明复制了一份
+  assert.ok(!wizard.includes('CATEGORY_HINTS'), '前端不得复制品类倾向规则');
+  assert.ok(!wizard.includes('KEYWORD_HINTS'), '前端不得复制卖点关键词规则');
+  assert.match(style, /\.wiz-perception-card/);
+  // AI 参考图必须带「示意图」角标，否则用户会以为自己的商品做出来就是这样
+  assert.match(wizard, /wiz-perception-ai/, '缺少 AI 参考图的示意图角标');
+  assert.match(style, /\.wiz-perception-ai\{/, '缺少示意图角标样式');
+  assert.ok(STATIC_FILES.includes('assets/style-refs/manifest.json'), 'STATIC_FILES 缺少 manifest');
+  // 白名单跟着 manifest 走：录了图却漏加白名单，线上就是 404，这里必须拦住。
+  const manifest = JSON.parse(await read('assets/style-refs/manifest.json'));
+  for (const item of manifest.items) {
+    assert.ok(STATIC_FILES.includes(`assets/style-refs/${item.file}`), `STATIC_FILES 缺少 ${item.file}`);
+  }
+});
+
+test('风格参考图清单必须满足规范：字段齐全、尺寸合规、来源如实', async () => {
+  const { default: sharp } = await import('sharp');
+  const { stat } = await import('node:fs/promises');
+  const { PERCEPTION_KEYS } = await import('../src/perception.mjs');
+  const manifest = JSON.parse(await read('assets/style-refs/manifest.json'));
+  assert.equal(manifest.version, 'style-ref.1');
+  assert.ok(Array.isArray(manifest.items) && manifest.items.length > 0);
+
+  for (const item of manifest.items) {
+    assert.ok(PERCEPTION_KEYS.includes(item.perception), `方向 key 非法：${item.perception}`);
+    for (const field of ['category', 'file', 'source', 'license', 'added_at']) {
+      assert.ok(typeof item[field] === 'string' && item[field].trim(), `${item.file} 缺少字段 ${field}`);
+    }
+    assert.equal(typeof item.verified, 'boolean', `${item.file} 的 verified 必须是布尔`);
+    // AI 生成图与来源未核实的图都不得标成已确认可商用
+    if (/AI\s*生成|未核实|未确认/.test(item.source)) {
+      assert.equal(item.verified, false, `${item.file} 来源未核实却标了 verified:true`);
+    }
+    const path = `frontend/assets/style-refs/${item.file}`;
+    const meta = await sharp(`${root}${path}`).metadata();
+    const shortSide = Math.min(meta.width, meta.height);
+    const ratio = meta.width / meta.height;
+    assert.ok(shortSide >= 800, `${item.file} 短边 ${shortSide} < 800`);
+    assert.ok(Math.abs(ratio - 1) < 0.01 || Math.abs(ratio - 0.75) < 0.01,
+      `${item.file} 比例 ${ratio.toFixed(2)} 既不是 1:1 也不是 3:4`);
+    const { size } = await stat(`${root}${path}`);
+    assert.ok(size <= 300 * 1024, `${item.file} 体积 ${Math.round(size / 1024)}KB 超过 300KB`);
+  }
+});

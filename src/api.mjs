@@ -15,6 +15,7 @@ import {
   auditProductContext, buildContextBinding, inspectAssetUsability,
 } from './product-context.mjs';
 import { createOcrFromEnv, extractionCandidates } from './ocr.mjs';
+import { PERCEPTION_KEYS, buildDirectionCards, recommendPerceptions, resolveVisualStrategy } from './perception.mjs';
 import { createVisualReviewerFromEnv } from './visual-review.mjs';
 import {
   buildRevisionRequest, createRevisionPlannerFromEnv, loadRefinerRules,
@@ -292,6 +293,41 @@ export function createApi({
     }
   }
 
+  /**
+   * M-V1：感知方向推荐（纯计算）。
+   *
+   * 边界：
+   * - 不接受图片，也不声称分析过图片；只按传入的档案字段做确定性匹配。
+   * - 不写 store、不产生账本记录、不缓存：同一入参永远同一结果。
+   * - limit 非法直接 422，不静默截断。
+   */
+  async function recommendPerceptionRoute(req, send) {
+    const body = await readJson(req).catch(() => ({}));
+    const rawLimit = body.limit === undefined ? 3 : body.limit;
+    const limit = Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > PERCEPTION_KEYS.length) {
+      throw new ApiError(422, 'INVALID_LIMIT', `limit 必须是 1 到 ${PERCEPTION_KEYS.length} 之间的整数`);
+    }
+    const text = value => (typeof value === 'string' ? value : '');
+    const recommendation = recommendPerceptions({
+      category: text(body.category),
+      selling_points: body.selling_points,
+      facts: Array.isArray(body.facts) ? body.facts : undefined,
+      price_positioning: text(body.price_positioning),
+      purpose: text(body.purpose),
+    }, { limit });
+    const deck = buildDirectionCards(recommendation, { limit });
+    send(200, {
+      ...deck,
+      // 方向 → 背景/光线只由服务端映射，前端不复制一份规则。
+      cards: deck.cards.map(card => ({
+        ...card,
+        strategy: resolveVisualStrategy(card.key)?.creative_direction ?? null,
+      })),
+      basis: recommendation.basis,
+    });
+  }
+
   async function dispatch(req, res, route, send) {
     const query = new URLSearchParams(req.url.includes('?') ? req.url.slice(req.url.indexOf('?') + 1) : '');
     const rest = route.split('/').filter(part => part !== '').slice(1);
@@ -326,6 +362,11 @@ export function createApi({
     if (resource === 'credits' && rest.length === 1) {
       requireMethod(method, ['GET', 'HEAD']);
       return getCredits(ctx, send);
+    }
+    // M-V1/V2：感知方向推荐是纯计算端点——确定性规则，不调模型、不读图片、不写任何状态。
+    if (resource === 'perceptions' && rest.length === 2 && rest[1] === 'recommend') {
+      requireMethod(method, ['POST']);
+      return recommendPerceptionRoute(req, send);
     }
     // E07：首页待办聚合（变更 / 替换 / 核对 / 问题 / 说明图 / 任务），按未知、失败、待复核、已采用分组
     if (resource === 'todos' && rest.length === 1) {
@@ -980,6 +1021,8 @@ export function createApi({
     const write = STATE_CHANGING.has(method);
     switch (resource) {
       case 'credits': return 'credits:read';
+      // M-V1：感知方向推荐只做纯计算，读项目信息即可，不需要写权限
+      case 'perceptions': return 'project:read';
       case 'quotes': return write ? 'quote:create' : 'quote:read';
       case 'runs': {
         if (second === undefined) return write ? 'run:create' : 'run:read';

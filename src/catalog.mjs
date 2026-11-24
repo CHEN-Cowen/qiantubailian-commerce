@@ -116,6 +116,29 @@ const TEMPLATES = [
     ],
   },
   {
+    id: 'tpl_brand_story',
+    name: '品牌形象图',
+    purpose: 'brand',
+    version: 1,
+    content_goal: 'brand',
+    summary: '一张品牌主视觉，强调调性与氛围，用于店铺首页与品牌介绍。',
+    allowed_variations: ['background', 'lighting', 'props', 'composition'],
+    forbidden_changes: ['商品主体形态', '包装文字与 Logo', '价格与促销信息'],
+    input_requirements: [
+      { code: 'subject_asset', label: '主体素材至少 1 张', required: true },
+    ],
+    creative_direction: { background: 'lifestyle', lighting: 'warm window light', whitespace: '上方留白 20%', camera: 'eye level' },
+    qa_profile: { id: 'qa_brand_basic', version: 1, checks: ['file', 'dimensions', 'subject_identity', 'text_logo', 'brand', 'risk'] },
+    recommended_budget: { max_credits: 6, max_attempts: 3, price_version: 'p1-draft' },
+    deliverables: [
+      {
+        id: 'hero', type: 'main_image', label: '品牌主视觉', required: true, count: 1,
+        ratio: '3:4', width: 1200, height: 1600, formats: ['jpg'],
+        text_blocks: [], note: '只做氛围与调性，不写价格与促销信息；商品主体必须完整',
+      },
+    ],
+  },
+  {
     id: 'tpl_single_white',
     name: '白底主图 · 单张试做',
     purpose: 'listing',
@@ -217,6 +240,8 @@ export const listTemplates = () => TEMPLATES.map(template => ({
   required_deliverable_count: template.deliverables.filter(item => item.required).length,
   recommended_budget: { ...template.recommended_budget },
   allowed_variations: [...template.allowed_variations],
+  // 只暴露背景这一个值：前端「背景方向」筛选需要它，但模板内部的其他视觉参数不对外。
+  background: template.creative_direction?.background ?? null,
 }));
 
 export const getTemplate = id => {
