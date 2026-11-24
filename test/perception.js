@@ -7,9 +7,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  CONFIDENCE, PERCEPTION_GOALS, PERCEPTION_KEYS, PERCEPTION_VERSION, STYLE_REF_MANIFEST_VERSION, WEIGHTS,
-  buildDirectionCards, explainDirection, getPerception, listPerceptions, needsMoreInput,
-  recommendPerceptions, styleReference,
+  BACKGROUNDS, CONFIDENCE, PERCEPTION_GOALS, PERCEPTION_KEYS, PERCEPTION_VERSION, SCHEMES,
+  STYLE_REF_MANIFEST_VERSION, WEIGHTS,
+  buildDirectionCards, explainDirection, findScheme, getPerception, listPerceptions, needsMoreInput,
+  recommendPerceptions, resolveVisualStrategy, schemesForDirection, styleReference,
 } from '../src/perception.mjs';
 
 test('七类方向完整、键唯一、二级标签非空', () => {
@@ -258,4 +259,62 @@ test('向导的粗分类品类也能命中（美妆/护肤、家居/日用）', 
   // 「其他/不确定」不是有效品类，必须如实标记，不能假装识别到了
   const other = recommendPerceptions({ category: '其他' });
   assert.ok(other.missing_inputs.includes('category_unrecognized'));
+});
+
+// ---------- M-V3 方案卡 ----------
+
+test('每个方向两个方案：id 唯一、枚举合法、A 案与方向默认策略一致', () => {
+  for (const key of PERCEPTION_KEYS) {
+    const schemes = SCHEMES[key];
+    assert.equal(schemes.length, 2, `${key} 应有 2 个方案`);
+    const defaultStrategy = resolveVisualStrategy(key).creative_direction;
+    const seen = new Set();
+    for (const scheme of schemes) {
+      assert.equal(scheme.id, `${key}.${scheme === schemes[0] ? 'a' : 'b'}`, `${key} 方案 id 命名必须是 {key}.{a|b}`);
+      assert.ok(!seen.has(scheme.id), `方案 id 重复：${scheme.id}`);
+      seen.add(scheme.id);
+      assert.equal(scheme.perception, key);
+      assert.ok(BACKGROUNDS.includes(scheme.background), `${scheme.id} 背景不在枚举内`);
+      assert.ok(scheme.name.trim() && scheme.summary.trim() && scheme.reason.trim(), `${scheme.id} 文案不能为空`);
+      assert.ok(scheme.refIndex === 1 || scheme.refIndex === 2, `${scheme.id} refIndex 只能是 1 或 2`);
+      assert.equal(typeof scheme.lighting, 'string');
+      assert.ok(scheme.lighting.trim(), `${scheme.id} lighting 不能为空`);
+      assert.ok(scheme.whitespace.trim(), `${scheme.id} whitespace 不能为空`);
+    }
+    // A 案必须就是方向默认策略，否则"方向推荐"与"方案A"两张嘴说话
+    const [a] = schemes;
+    assert.equal(a.background, defaultStrategy.background, `${key} A 案背景应与方向默认一致`);
+    assert.equal(a.lighting, defaultStrategy.lighting, `${key} A 案光线应与方向默认一致`);
+    assert.equal(a.whitespace, defaultStrategy.whitespace, `${key} A 案留白应与方向默认一致`);
+    // B 案必须与 A 案有真实差异，否则用户比较的是假选项
+    const [, b] = schemes;
+    const differs = b.background !== a.background || b.lighting !== a.lighting || b.whitespace !== a.whitespace;
+    assert.ok(differs, `${key} B 案与 A 案完全相同，没有可比性`);
+  }
+  // refIndex 覆盖：两案各占一张参考图，保证视觉上也不同
+  for (const key of PERCEPTION_KEYS) {
+    assert.deepEqual(SCHEMES[key].map(scheme => scheme.refIndex).sort(), [1, 2], `${key} 两案应分别锚定两张参考图`);
+  }
+});
+
+test('schemesForDirection 与 findScheme：未知值返回空/null，不猜默认', () => {
+  assert.deepEqual(schemesForDirection('natural_comfort').length, 2);
+  assert.deepEqual(schemesForDirection('not_a_goal'), []);
+  assert.deepEqual(schemesForDirection(''), []);
+  const found = findScheme('natural_comfort.b');
+  assert.equal(found.id, 'natural_comfort.b');
+  assert.equal(findScheme('natural_comfort.z'), null);
+  assert.equal(findScheme(''), null);
+  assert.equal(findScheme(123), null);
+});
+
+test('方向卡携带方案列表，改动返回值不影响真源', () => {
+  const deck = buildDirectionCards(recommendPerceptions({ category: '香氛' }));
+  for (const card of deck.cards) {
+    assert.equal(card.schemes.length, 2);
+    assert.equal(card.schemes[0].id, `${card.key}.a`);
+  }
+  const schemes = deck.cards[0].schemes;
+  schemes[0].name = '被改坏';
+  assert.notEqual(SCHEMES[deck.cards[0].key][0].name, '被改坏');
 });

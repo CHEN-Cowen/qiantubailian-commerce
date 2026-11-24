@@ -364,3 +364,71 @@ test('未知感知方向冻结时明确拒绝，不静默丢弃也不猜默认�
     assert.equal(response.json.error, 'INVALID_PERCEPTION');
   }
 });
+
+// ---------- M-V3 方案卡对比与冻结覆盖 ----------
+
+test('推荐端点返回方向内方案卡：A/B 两案、A 案等于方向默认策略', async t => {
+  const port = await start(t);
+  const response = await request(port, '/api/perceptions/recommend', {
+    method: 'POST', headers: as(),
+    body: { category: '香氛', selling_points: '天然植物', limit: 3 },
+  });
+  assert.equal(response.status, 200);
+  for (const card of response.json.cards) {
+    assert.equal(card.schemes.length, 2, `${card.key} 应带 2 个方案`);
+    const [a, b] = card.schemes;
+    assert.equal(a.id, `${card.key}.a`);
+    assert.equal(a.background, card.strategy.background, 'A 案背景应与方向策略一致');
+    assert.ok(b.background !== a.background || b.lighting !== a.lighting || b.whitespace !== a.whitespace,
+      `${card.key} B 案与 A 案没有真实差异`);
+    assert.equal(typeof card.color_label, 'string');
+    assert.ok(card.color_label.includes('饱和度') || card.color_label.includes('色调'), `色彩标签不可读：${card.color_label}`);
+  }
+});
+
+test('冻结 spec 时方案把 lighting/whitespace 作为用户确认值覆盖模板默认', async t => {
+  const port = await start(t);
+  const project = await readyProject(port);
+  const response = await freeze(port, project.id, {
+    template_id: 'tpl_listing_pack', base_version: 0,
+    conflict_resolutions: LISTING_RESOLUTIONS,
+    perception: 'natural_comfort', scheme: 'natural_comfort.b',
+  });
+  assert.equal(response.status, 201, JSON.stringify(response.json));
+  const spec = response.json.spec;
+  const expected = resolveVisualStrategy('natural_comfort').creative_direction;
+  assert.equal(spec.creative_direction.lighting, 'morning window light', '方案 B 的光线应覆盖模板与方向默认');
+  assert.equal(spec.creative_direction.whitespace, '下方留白 25%');
+  // 氛围/色彩仍来自方向；background 仍由模板决定
+  assert.equal(spec.creative_direction.atmosphere, expected.atmosphere);
+  assert.equal(spec.creative_direction.background, 'scene');
+  assert.equal(spec.provenance.scheme, 'natural_comfort.b');
+  assert.equal(spec.provenance.perception, 'natural_comfort');
+});
+
+test('方案校验：缺 perception、方向不匹配、未知 id 都明确拒绝', async t => {
+  const port = await start(t);
+  const project = await readyProject(port);
+  // 只有控制组会冻结成功；成功后 head 前移，后续用例必须基于最新版本，否则先撞 409 版本冲突
+  let baseVersion = 0;
+  const cases = [
+    [{ perception: 'natural_comfort', scheme: 'natural_comfort.b' }, null], // 控制组：合法
+    [{ scheme: 'natural_comfort.b' }, 'INVALID_SCHEME'],
+    [{ perception: 'natural_comfort', scheme: 'quality_premium.a' }, 'INVALID_SCHEME'],
+    [{ perception: 'natural_comfort', scheme: 'natural_comfort.z' }, 'INVALID_SCHEME'],
+    [{ perception: 'natural_comfort', scheme: 123 }, 'INVALID_SCHEME'],
+  ];
+  for (const [index, [partial, expectedError]] of cases.entries()) {
+    const response = await freeze(port, project.id, {
+      template_id: 'tpl_listing_pack', base_version: baseVersion,
+      conflict_resolutions: LISTING_RESOLUTIONS, ...partial,
+    });
+    if (expectedError === null) {
+      assert.equal(response.status, 201, `控制组应成功：${JSON.stringify(response.json)}`);
+      baseVersion = response.json.spec.version;
+    } else {
+      assert.equal(response.status, 422, `用例 ${index} 应拒绝，实际 ${response.status}：${JSON.stringify(response.json)}`);
+      assert.equal(response.json.error, expectedError);
+    }
+  }
+});

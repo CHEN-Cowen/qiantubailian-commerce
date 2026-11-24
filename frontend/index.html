@@ -383,6 +383,20 @@
                 <p class="wiz-perception-note" id="wiz-perception-note">按你填的品类和卖点匹配，不分析图片</p></div>
             </div>
             <div class="wiz-perception-cards" id="wiz-perception-cards"></div>
+            <div class="wiz-scheme" id="wiz-scheme" hidden>
+              <div class="wiz-scheme-head">
+                <h4>这个方向里，更喜欢哪种画面</h4>
+                <p class="wiz-scheme-note" id="wiz-scheme-note">选定后光影与留白按方案执行；参考图只是方向示意，不是你的商品</p>
+              </div>
+              <div class="wiz-scheme-cards" id="wiz-scheme-cards"></div>
+              <div class="wiz-scheme-reject" id="wiz-scheme-reject" hidden>
+                <p class="wiz-scheme-reject-title">这些方案主要哪里不符合你的预期？</p>
+                <div class="wiz-scheme-reject-options" id="wiz-scheme-reject-options"></div>
+                <input type="text" id="wiz-scheme-reject-note" maxlength="60" placeholder="其他想法（可选）">
+                <button type="button" class="secondary" id="wiz-scheme-reject-confirm">记录反馈，重新看方向</button>
+              </div>
+              <button type="button" class="wiz-scheme-reject-toggle" id="wiz-scheme-reject-toggle">都不喜欢</button>
+            </div>
             <p class="wiz-perception-rule">不管选哪个，商品永远是主角，第一眼就能看清</p>
           </section>
           <section class="wiz-bg" id="wiz-bg">
@@ -426,6 +440,7 @@
         <!-- 第 4 步 交付确认 + 真实报价 + 生成 -->
         <section class="wiz-panel" data-wiz-panel="4" hidden>
           <h3 class="wiz-section-title">确认报价与生成 <span>费用以服务端报价为准，点击后先锁定配置再取价</span></h3>
+          <section class="wiz-strategy" id="wiz-strategy" hidden></section>
           <div id="wiz-pay-summary"></div>
           <div id="wiz-pay-blockers"></div>
           <section class="wiz-quote" id="wiz-quote" hidden></section>

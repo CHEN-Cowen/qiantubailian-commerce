@@ -240,8 +240,11 @@ export const listTemplates = () => TEMPLATES.map(template => ({
   required_deliverable_count: template.deliverables.filter(item => item.required).length,
   recommended_budget: { ...template.recommended_budget },
   allowed_variations: [...template.allowed_variations],
-  // 只暴露背景这一个值：前端「背景方向」筛选需要它，但模板内部的其他视觉参数不对外。
+  // 暴露展示层需要的视觉参数：背景筛选（M-V1）、光线/留白（M-V3 策略确认与报价卡）。
+  // 其余模板内部参数仍不对外；执行基准以 getTemplate 的完整定义冻结进 spec。
   background: template.creative_direction?.background ?? null,
+  lighting: template.creative_direction?.lighting ?? null,
+  whitespace: template.creative_direction?.whitespace ?? null,
 }));
 
 export const getTemplate = id => {

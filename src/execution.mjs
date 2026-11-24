@@ -29,6 +29,19 @@ const TONE_LABEL = Object.freeze({
   neutral: '中性', warm_neutral: '暖中性', natural: '自然', warm: '暖调', cool: '冷调', deep: '深沉',
 });
 
+/**
+ * 色彩枚举 → 展示用中文短语（M-V3 策略确认复用；与执行指令的【色彩】行同一真源）。
+ * 未知值跳过而不是报错——展示层不该因为缺一个枚举值中断。
+ */
+export function describeVisualColor(color) {
+  if (!color || typeof color !== 'object') return '';
+  const bits = [];
+  if (SATURATION_LABEL[color.saturation]) bits.push(`饱和度${SATURATION_LABEL[color.saturation]}`);
+  if (BRIGHTNESS_LABEL[color.brightness]) bits.push(`整体${BRIGHTNESS_LABEL[color.brightness]}`);
+  if (TONE_LABEL[color.tone]) bits.push(`${TONE_LABEL[color.tone]}色调`);
+  return bits.join('、');
+}
+
 export const TEXT_POLICY = Object.freeze({
   render_text_by_provider: false,
   reason: '精确文字与 Logo 由可编辑排版层叠加，避免生成模型绘制文字导致乱码或错字',
@@ -178,12 +191,8 @@ function promptSections({ project, spec, truth, brandKitVersion, deliverable, la
   const atmosphere = typeof direction.atmosphere === 'string' ? direction.atmosphere.trim() : '';
   if (atmosphere) lines.push(`【氛围】${atmosphere}。`);
   if (background !== 'plain_white' && direction.color && typeof direction.color === 'object') {
-    const color = direction.color;
-    const bits = [];
-    if (SATURATION_LABEL[color.saturation]) bits.push(`饱和度${SATURATION_LABEL[color.saturation]}`);
-    if (BRIGHTNESS_LABEL[color.brightness]) bits.push(`整体${BRIGHTNESS_LABEL[color.brightness]}`);
-    if (TONE_LABEL[color.tone]) bits.push(`${TONE_LABEL[color.tone]}色调`);
-    if (bits.length > 0) lines.push(`【色彩】${bits.join('、')}；只作用于背景与环境，不得改变商品本体颜色。`);
+    const colorText = describeVisualColor(direction.color);
+    if (colorText) lines.push(`【色彩】${colorText}；只作用于背景与环境，不得改变商品本体颜色。`);
   }
   if (deliverable.type === 'scene_image' && background !== 'plain_white' && sceneDirection) {
     lines.push(`【场景执行】${sceneDirection.guidance.join('')} 若与上文摄影方向冲突，按上文执行；若与文字留白冲突，以实际文字区域为准。`);

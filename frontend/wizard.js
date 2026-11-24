@@ -147,6 +147,8 @@ const state = {
   styleBrandKitId: '',  // E2/E3 预选品牌（进入第 3 步且目录中存在时套用）
   reuseSpec: null,      // E1 沿用 spec 冻结快照（模板/品牌/平台），快照不随品牌 head 漂移
   perceptionKey: '',   // M-V2 用户选定的感知方向：预选背景 + 冻结 spec 时写入 atmosphere/color
+  schemeId: '',        // M-V3 用户选定的方案卡：光影/留白按方案覆盖模板默认
+  rejection: null,     // M-V3 方案全部不满意时的结构化反馈 { reasons, note }，仅本次会话参考
 };
 
 function showToast(message) {
@@ -893,6 +895,16 @@ const BACKGROUND_LABEL = {
   gradient_studio: '渐变影棚',
   lifestyle: '生活方式',
 };
+// M-V3 追问选项（方案全部不满意时）：固定六项，结构化记录，服务端画像在 M-V4 落库。
+const SCHEME_REJECT_OPTIONS = [
+  { key: 'background_complex', label: '背景太复杂' },
+  { key: 'color_mismatch', label: '色彩不喜欢' },
+  { key: 'lighting_unnatural', label: '光线不自然' },
+  { key: 'subject_not_clear', label: '商品不够突出' },
+  { key: 'not_premium', label: '整体不够高级' },
+  { key: 'other', label: '其他' },
+];
+
 const PURPOSE_LABEL = {
   listing: '上架主图与详情', advertising: '投放素材', social: '社媒笔记', brand: '品牌形象',
 };
@@ -903,6 +915,20 @@ const PURPOSE_REASON = {
   brand: '单张品牌主视觉，强调调性与氛围',
 };
 const backgroundLabel = value => BACKGROUND_LABEL[value] ?? value ?? '未标注';
+
+// 光线值来自模板/方案定义的封闭集合；这里是展示层翻译，执行指令仍用原文（同一值进 spec）。
+const LIGHTING_LABEL = {
+  'soft studio light': '柔和棚灯',
+  'soft even light': '均匀柔光',
+  'soft side light': '柔和侧光',
+  'soft daylight': '柔和日光',
+  'morning window light': '清晨窗光',
+  'warm window light': '暖调窗光',
+  'soft morning light': '清晨柔光',
+  'hard rim light': '硬朗轮廓光',
+  'cool rim light': '冷调轮廓光',
+};
+const lightingLabel = value => LIGHTING_LABEL[value] ?? value ?? '';
 
 /** 模板缩略图是排版示意，不是生成结果；用背景方向和文字块位置表达方案差异。 */
 function templateArt(item) {
@@ -1067,6 +1093,9 @@ async function renderPerceptionPanel() {
     ]);
     perceptionDeck = deck;
     holder.innerHTML = (deck.cards ?? []).map(card => perceptionCardHtml(card, manifest)).join('');
+    // 草稿恢复：之前选过的方向仍在候选里就还原选中态与方案面板
+    const restored = (deck.cards ?? []).find(card => card.key === state.perceptionKey);
+    if (restored) renderSchemePanel(restored);
     const note = $('#wiz-perception-note');
     if (note) {
       const missing = deck.missing_inputs ?? [];
@@ -1087,10 +1116,87 @@ function choosePerception(key) {
   const card = perceptionDeck?.cards?.find(item => item.key === key);
   if (!card) return;
   state.perceptionKey = key;
+  // 换方向时旧方案与旧反馈不再适用，一并清空，避免带着上一个方向的方案去冻结。
+  state.schemeId = '';
+  state.rejection = null;
   $('#wiz-perception-cards').innerHTML = (perceptionDeck.cards ?? [])
     .map(item => perceptionCardHtml(item, styleRefManifest ?? { items: [] })).join('');
+  renderSchemePanel(card);
   // 方向只把背景预选到对应项；交付清单、平台规则校验、商品事实一律不豁免。
   if (card.strategy?.background) applyBackgroundFilter(card.strategy.background);
+  saveDraft({ perceptionKey: key, schemeId: '', rejection: null });
+}
+
+// ---------- M-V3 方案卡对比与追问 ----------
+
+/** 方案参考图：按 refIndex 取 manifest 中该方向的第几张；缺图走空态，不用 SVG 冒充。 */
+function schemeArt(scheme, manifest) {
+  const files = (manifest.items ?? [])
+    .filter(item => item.perception === scheme.perception)
+    .map(item => item.file)
+    .sort();
+  const file = files[scheme.refIndex - 1];
+  if (!file) return '<span class="wiz-perception-art is-empty">参考图待补充</span>';
+  const source = (manifest.items ?? []).find(item => item.file === file)?.source ?? '';
+  const isAi = /AI\s*生成/.test(source);
+  const badge = isAi ? '<span class="wiz-perception-ai">示意图</span>' : '';
+  return `<span class="wiz-perception-frame"><img class="wiz-perception-art" src="assets/style-refs/${escapeHtml(file)}" alt="" loading="lazy">${badge}</span>`;
+}
+
+function renderSchemePanel(card) {
+  const panel = $('#wiz-scheme');
+  if (!panel) return;
+  const schemes = card?.schemes ?? [];
+  if (state.perceptionKey !== card?.key || schemes.length === 0) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  $('#wiz-scheme-reject').hidden = true;
+  $('#wiz-scheme-cards').innerHTML = schemes.map(scheme => `
+    <button type="button" class="wiz-scheme-card${scheme.id === state.schemeId ? ' selected' : ''}" data-scheme="${escapeHtml(scheme.id)}">
+      ${schemeArt(scheme, styleRefManifest ?? { items: [] })}
+      <span class="wiz-scheme-name">${escapeHtml(scheme.name)}</span>
+      <span class="wiz-scheme-summary">${escapeHtml(scheme.summary)}</span>
+      <span class="wiz-scheme-reason">${escapeHtml(scheme.reason)}</span>
+    </button>`).join('');
+}
+
+function chooseScheme(id) {
+  const card = perceptionDeck?.cards?.find(item => item.key === state.perceptionKey);
+  const scheme = (card?.schemes ?? []).find(item => item.id === id);
+  if (!scheme) return;
+  state.schemeId = id;
+  state.rejection = null;
+  renderSchemePanel(card);
+  // 方案自带背景建议：预选到对应项，背景的最终决定权仍在模板与平台规则。
+  if (scheme.background) applyBackgroundFilter(scheme.background);
+  saveDraft({ schemeId: id, rejection: null });
+}
+
+function toggleSchemeReject() {
+  const reject = $('#wiz-scheme-reject');
+  if (!reject) return;
+  reject.hidden = !reject.hidden;
+  if (reject.hidden) return;
+  const holder = $('#wiz-scheme-reject-options');
+  holder.innerHTML = SCHEME_REJECT_OPTIONS.map(option =>
+    `<button type="button" class="chip" data-reject="${escapeHtml(option.key)}">${escapeHtml(option.label)}</button>`).join('');
+}
+
+function confirmSchemeReject() {
+  const reasons = [...document.querySelectorAll('#wiz-scheme-reject-options [data-reject].selected')]
+    .map(node => node.dataset.reject);
+  const note = ($('#wiz-scheme-reject-note')?.value ?? '').trim();
+  if (reasons.length === 0 && !note) {
+    showToast('至少选一个原因，或写一句想法');
+    return;
+  }
+  state.rejection = { reasons, note };
+  state.schemeId = '';
+  renderSchemePanel(perceptionDeck?.cards?.find(item => item.key === state.perceptionKey));
+  saveDraft({ schemeId: '', rejection: state.rejection });
+  showToast('已记录反馈；可以换个方向再试，或直接用当前模板生成');
 }
 
 function backgroundFixList(result) {
@@ -1144,9 +1250,37 @@ async function enterStep4() {
   errorNode.textContent = '';
   setStep(4);
   saveDraft({ projectId: state.project?.id, assetId: state.asset?.id, step: 4 });
+  renderStrategySummary();
   renderPaySummary();
   renderPayBlockers();
   updateGenerateButton();
+}
+
+/** M-V3 策略确认：冻结前把"这次到底按什么视觉执行"摊开说清，数据全部来自已确认的选择。 */
+function renderStrategySummary() {
+  const holder = $('#wiz-strategy');
+  if (!holder) return;
+  const card = perceptionDeck?.cards?.find(item => item.key === state.perceptionKey) ?? null;
+  const scheme = (card?.schemes ?? []).find(item => item.id === state.schemeId) ?? null;
+  const template = state.templates.find(item => item.id === state.templateId) ?? null;
+  const rows = [];
+  if (!card) {
+    rows.push('<p class="wiz-strategy-line">未选视觉方向，将按模板默认风格执行（光影、留白取自模板）。</p>');
+  } else {
+    const lighting = scheme?.lighting ?? template?.lighting ?? '';
+    const whitespace = scheme?.whitespace ?? template?.whitespace ?? '';
+    rows.push(`<p class="wiz-strategy-line">视觉方向：<b>${escapeHtml(card.name)}</b>${scheme ? ` · 方案「${escapeHtml(scheme.name)}」` : '（未选方案，光影与留白按模板默认）'}</p>`);
+    rows.push(`<p class="wiz-strategy-line">氛围与色彩：${escapeHtml(card.strategy?.atmosphere ?? '')}${card.color_label ? ` · ${escapeHtml(card.color_label)}` : ''}</p>`);
+    rows.push(`<p class="wiz-strategy-line">背景：${escapeHtml(backgroundLabel(template?.background))} · 光线：${escapeHtml(lightingLabel(lighting) || '按模板')} · 留白：${escapeHtml(whitespace || '按模板')}</p>`);
+  }
+  if (state.rejection) {
+    const labels = SCHEME_REJECT_OPTIONS.filter(option => state.rejection.reasons.includes(option.key)).map(option => option.label);
+    const text = [...labels, state.rejection.note].filter(Boolean).join('、');
+    if (text) rows.push(`<p class="wiz-strategy-line is-muted">你的反馈：${escapeHtml(text)}（已记录，未自动改方案）</p>`);
+  }
+  rows.push('<p class="wiz-strategy-line is-muted">商品主体、包装与文字按已确认事实保护，不会为视觉风格改动；参考图仅示意方向，不是你的商品。</p>');
+  holder.innerHTML = rows.join('');
+  holder.hidden = false;
 }
 
 function renderBrandOptions() {
@@ -1160,6 +1294,7 @@ function renderBrandOptions() {
 function specPayload() {
   const body = { template_id: state.templateId, conflict_resolutions: state.resolutions };
   if (state.perceptionKey) body.perception = state.perceptionKey;
+  if (state.schemeId) body.scheme = state.schemeId;
   const platform = $('#wiz-platform').value.trim();
   if (platform) body.platform = platform;
   const brandId = $('#wiz-brand').value;
@@ -1331,13 +1466,12 @@ function renderPaySummary() {
   const brandId = $('#wiz-brand')?.value ?? '';
   const brandName = state.brandKits.find(kit => kit.id === brandId)?.name;
   const platform = ($('#wiz-platform')?.value ?? '').trim() || state.project?.platform || '未指定';
-  const direction = item?.creative_direction ?? {};
   holder.innerHTML = `<section class="wiz-pay-card">
     <div class="wiz-pay-main">
       <h4>${escapeHtml(item?.name ?? '交付方案')}<span>${escapeHtml(PURPOSE_LABEL[item?.purpose] ?? '')}</span></h4>
       <ul class="wiz-pay-facts">
-        <li><b>背景</b><span>${escapeHtml(backgroundLabel(direction.background))}</span></li>
-        <li><b>光线</b><span>${escapeHtml(direction.lighting ?? '跟随方案')}</span></li>
+        <li><b>背景</b><span>${escapeHtml(backgroundLabel(item?.background))}</span></li>
+        <li><b>光线</b><span>${escapeHtml(lightingLabel(item.lighting) || '跟随方案')}</span></li>
         <li><b>交付</b><span>默认制作 ${required.length} 项必需交付，约 ${imageCount} 张图${optional.length ? `；另有 ${optional.length} 项可选` : ''}</span></li>
         <li><b>品牌</b><span>${brandName ? escapeHtml(brandName) : '不使用品牌配方'}</span></li>
         <li><b>平台</b><span>${escapeHtml(platform)}</span></li>
@@ -1658,6 +1792,10 @@ async function continueDraft() {
       // 恢复上次选择：模板/品牌只在目录仍存在时预选，失效项由 applyStep3Preselect 明确回落
       state.styleTemplateId = draft.templateId ?? '';
       state.styleBrandKitId = draft.brandKitId ?? '';
+      // 感知方向/方案/反馈一并恢复；方向若已不在候选里，renderPerceptionPanel 会跳过还原
+      state.perceptionKey = typeof draft.perceptionKey === 'string' ? draft.perceptionKey : '';
+      state.schemeId = typeof draft.schemeId === 'string' ? draft.schemeId : '';
+      state.rejection = draft.rejection && typeof draft.rejection === 'object' ? draft.rejection : null;
       if (draft.platform) $('#wiz-platform').value = draft.platform;
       await enterStep3();
       if (step >= 4) await enterStep4();
@@ -1807,6 +1945,18 @@ export function initWizard() {
     if (!card) return;
     choosePerception(card.dataset.perception);
   });
+  $('#wiz-scheme-cards')?.addEventListener('click', event => {
+    const card = event.target.closest('[data-scheme]');
+    if (!card) return;
+    chooseScheme(card.dataset.scheme);
+  });
+  $('#wiz-scheme-reject-toggle')?.addEventListener('click', toggleSchemeReject);
+  $('#wiz-scheme-reject-options')?.addEventListener('click', event => {
+    const chip = event.target.closest('[data-reject]');
+    if (!chip) return;
+    chip.classList.toggle('selected');
+  });
+  $('#wiz-scheme-reject-confirm')?.addEventListener('click', confirmSchemeReject);
   $('#wiz-bg-filter')?.addEventListener('click', event => {
     const chip = event.target.closest('[data-bg-filter]');
     if (!chip) return;

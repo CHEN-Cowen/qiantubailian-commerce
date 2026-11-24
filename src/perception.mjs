@@ -305,6 +305,8 @@ export function buildDirectionCards(recommendation, { limit = 3 } = {}) {
     tags: [...candidate.tags],
     reasons: [...candidate.reasons],
     reference: candidate.reference,
+    // 方向内的两个确定性变体（M-V3）：A 案与方向默认策略一致，B 案是差异化备选。
+    schemes: schemesForDirection(candidate.key),
     // 有信号的才是"推荐"；0 分只是兜底展示（让用户有得选），不能标成推荐。
     // 用户点选后才变成 user_confirmed，三者不得混用。
     source: candidate.score > 0 ? 'recommended' : 'fallback',
@@ -398,6 +400,62 @@ const VISUAL_STRATEGY = Object.freeze({
     color: Object.freeze({ saturation: 'low', brightness: 'medium', tone: 'deep' }),
   }),
 });
+
+/**
+ * 方案卡（M-V3）：每个方向两个确定性变体，供用户在方向内二次比较。
+ * A 案 = 该方向的默认策略（与 resolveVisualStrategy 逐字段一致）；B 案 = 差异化备选。
+ * 边界：
+ * - lighting/whitespace 在用户选定方案后作为"用户明确确认值"覆盖模板默认（用户明确选择 > 模板默认）；
+ * - background 只用于预选背景 chip 与方案展示，最终背景仍由模板决定，平台纯白约束在 spec 冲突层处理；
+ * - refIndex 指向 manifest 里该方向的第几张参考图（由前端按 manifest 解析实际文件，缺图走空态）；
+ * - 不定义道具与文字排版，理由同 VISUAL_STRATEGY。
+ */
+export const SCHEMES = Object.freeze({
+  quality_premium: Object.freeze([
+    Object.freeze({ id: 'quality_premium.a', perception: 'quality_premium', name: '影棚质感', refIndex: 1, background: 'gradient_studio', lighting: 'soft studio light', whitespace: '上方留白 20%', summary: '渐变影棚背景，突出材质与轮廓', reason: '最常见的质感表达，多数商品都适用' }),
+    Object.freeze({ id: 'quality_premium.b', perception: 'quality_premium', name: '极简白底', refIndex: 2, background: 'plain_white', lighting: 'soft even light', whitespace: '居中对称', summary: '干净白底，高级感靠细节与留白', reason: '更克制，适合包装本身已经精致的商品' }),
+  ]),
+  professional_trust: Object.freeze([
+    Object.freeze({ id: 'professional_trust.a', perception: 'professional_trust', name: '标准白底', refIndex: 1, background: 'plain_white', lighting: 'soft studio light', whitespace: '居中对称', summary: '均匀棚灯，规规矩矩交代商品', reason: '检测报告式的克制，最让人放心' }),
+    Object.freeze({ id: 'professional_trust.b', perception: 'professional_trust', name: '冷静深调', refIndex: 2, background: 'gradient_studio', lighting: 'soft side light', whitespace: '居中', summary: '深色影棚渐变，突出精密与专业', reason: '适合器械、工具类，深色环境更显可靠' }),
+  ]),
+  natural_comfort: Object.freeze([
+    Object.freeze({ id: 'natural_comfort.a', perception: 'natural_comfort', name: '自然场景', refIndex: 1, background: 'scene', lighting: 'soft daylight', whitespace: '右侧留白 30%', summary: '白天自然光下的真实场景', reason: '最直接的自然感，绿植与光线都真实' }),
+    Object.freeze({ id: 'natural_comfort.b', perception: 'natural_comfort', name: '清晨桌面', refIndex: 2, background: 'lifestyle', lighting: 'morning window light', whitespace: '下方留白 25%', summary: '把产品放进生活桌面，日常可用感', reason: '生活方式场景，更贴近使用时刻' }),
+  ]),
+  emotion_lifestyle: Object.freeze([
+    Object.freeze({ id: 'emotion_lifestyle.a', perception: 'emotion_lifestyle', name: '暖光日常', refIndex: 1, background: 'lifestyle', lighting: 'warm window light', whitespace: '下方留白 25%', summary: '暖调窗光下的居家氛围', reason: '温暖治愈，适合香氛、织物质感' }),
+    Object.freeze({ id: 'emotion_lifestyle.b', perception: 'emotion_lifestyle', name: '晨光卧室', refIndex: 2, background: 'scene', lighting: 'soft morning light', whitespace: '右侧留白 30%', summary: '清晨卧室的松弛感，更清新', reason: '氛围更轻，适合清爽型商品' }),
+  ]),
+  vital_innovation: Object.freeze([
+    Object.freeze({ id: 'vital_innovation.a', perception: 'vital_innovation', name: '动感渐变', refIndex: 1, background: 'gradient_studio', lighting: 'hard rim light', whitespace: '居中', summary: '高饱和渐变加硬轮廓光，最有劲', reason: '运动、饮品类的经典张力表达' }),
+    Object.freeze({ id: 'vital_innovation.b', perception: 'vital_innovation', name: '科技冷调', refIndex: 2, background: 'gradient_studio', lighting: 'cool rim light', whitespace: '居中', summary: '冷色轮廓光，科技感更强更克制', reason: '数码、智能品类更适合冷调' }),
+  ]),
+  practical_value: Object.freeze([
+    Object.freeze({ id: 'practical_value.a', perception: 'practical_value', name: '清晰白底', refIndex: 1, background: 'plain_white', lighting: 'soft daylight', whitespace: '居中', summary: '白底均匀光，看得一清二楚', reason: '把商品交代清楚就是最大的实惠感' }),
+    Object.freeze({ id: 'practical_value.b', perception: 'practical_value', name: '场景陈列', refIndex: 2, background: 'scene', lighting: 'soft daylight', whitespace: '下方留白 25%', summary: '收纳场景陈列，容量组合看得清', reason: '套装、多件商品放场景里更显得划算' }),
+  ]),
+  culture_heritage: Object.freeze([
+    Object.freeze({ id: 'culture_heritage.a', perception: 'culture_heritage', name: '案头茶席', refIndex: 1, background: 'scene', lighting: 'soft daylight', whitespace: '右侧留白 30%', summary: '木案与茶席，沉静有年头', reason: '传统器物的经典表达' }),
+    Object.freeze({ id: 'culture_heritage.b', perception: 'culture_heritage', name: '素壁展陈', refIndex: 2, background: 'scene', lighting: 'soft side light', whitespace: '居中对称', summary: '素墙侧光，像博物馆展陈', reason: '更突出器型与釉色，适合精致工艺' }),
+  ]),
+});
+
+/** 某个方向的方案列表；未知方向返回空数组（调用方决定怎么提示），不猜默认值。 */
+export function schemesForDirection(perceptionKey) {
+  const schemes = SCHEMES[normalize(perceptionKey)];
+  return schemes ? schemes.map(scheme => ({ ...scheme })) : [];
+}
+
+/** 按方案 id 查找；找不到或方向对不上都返回 null，由调用方明确拒绝。 */
+export function findScheme(schemeId) {
+  if (typeof schemeId !== 'string') return null;
+  for (const schemes of Object.values(SCHEMES)) {
+    const found = schemes.find(scheme => scheme.id === schemeId);
+    if (found) return { ...found };
+  }
+  return null;
+}
 
 /**
  * 解析某个感知方向对应的可视化策略。

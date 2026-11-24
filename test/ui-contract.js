@@ -849,3 +849,26 @@ test('M-V2 感知方向随 spec 冻结下发：specPayload 带 perception，未�
   const wizard = await read('wizard.js');
   assert.match(wizard, /if \(state\.perceptionKey\) body\.perception = state\.perceptionKey;/);
 });
+
+test('M-V3 方案卡对比与追问：结构、诚实文案、策略确认与方案随 spec 下发', async () => {
+  const [html, wizard] = await Promise.all([read('index.html'), read('wizard.js')]);
+  // 方案面板与追问结构
+  assert.ok(html.includes('id="wiz-scheme"'), '缺少方案卡面板');
+  assert.ok(html.includes('id="wiz-scheme-cards"'), '缺少方案卡容器');
+  assert.ok(html.includes('id="wiz-scheme-reject-options"'), '缺少追问选项容器');
+  assert.ok(html.includes('id="wiz-strategy"'), '缺少第 4 步策略确认区');
+  // 诚实边界：参考图是示意不是用户的商品；反馈不冒充已执行
+  assert.match(html, /参考图只是方向示意，不是你的商品/);
+  assert.match(wizard, /未自动改方案/);
+  assert.match(wizard, /未选视觉方向，将按模板默认风格执行/);
+  // 六项追问固定选项
+  for (const label of ['背景太复杂', '色彩不喜欢', '光线不自然', '商品不够突出', '整体不够高级']) {
+    assert.ok(wizard.includes(`'${label}'`) || wizard.includes(`"${label}"`), `缺少追问选项「${label}」`);
+  }
+  // 交互函数与 spec 下发
+  assert.match(wizard, /function renderSchemePanel/);
+  assert.match(wizard, /function chooseScheme/);
+  assert.match(wizard, /function confirmSchemeReject/);
+  assert.match(wizard, /function renderStrategySummary/);
+  assert.match(wizard, /if \(state\.schemeId\) body\.scheme = state\.schemeId;/);
+});

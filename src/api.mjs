@@ -1,4 +1,4 @@
-import { compileRevisionInstruction, formatFactText } from './execution.mjs';
+import { compileRevisionInstruction, describeVisualColor, formatFactText } from './execution.mjs';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -323,6 +323,8 @@ export function createApi({
       cards: deck.cards.map(card => ({
         ...card,
         strategy: resolveVisualStrategy(card.key)?.creative_direction ?? null,
+        // 展示用中文色彩短语，与执行指令的【色彩】行同一真源（describeVisualColor）。
+        color_label: describeVisualColor(resolveVisualStrategy(card.key)?.creative_direction?.color),
       })),
       basis: recommendation.basis,
     });
@@ -4609,7 +4611,7 @@ export function createApi({
     if (resolutions !== null && typeof resolutions !== 'object') {
       throw new ApiError(422, 'INVALID_RESOLUTIONS', 'conflict_resolutions 必须为对象');
     }
-    const payload = assembleSpec({ project, truth, template, brandKit, channel, resolutions, textLayout: body.text_layout ?? null, perception: body.perception ?? null, at: clock() });
+    const payload = assembleSpec({ project, truth, template, brandKit, channel, resolutions, textLayout: body.text_layout ?? null, perception: body.perception ?? null, scheme: body.scheme ?? null, at: clock() });
 
     if (payload.conflicts.unresolvable.length > 0) {
       throw new ApiError(409, 'SPEC_CONFLICT_UNRESOLVABLE', '存在无法满足的平台硬约束，需要先修改商品事实或换模板', {
