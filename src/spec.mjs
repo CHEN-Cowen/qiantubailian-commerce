@@ -1,6 +1,7 @@
 import { ApiError } from './errors.mjs';
 import { contentHash, canonical } from './domain.mjs';
 import { CATALOG_VERSION, COVERAGE } from './catalog.mjs';
+import { PERCEPTION_VERSION, resolveVisualStrategy } from './perception.mjs';
 
 /**
  * M04 规则装配：品牌套件校验、交付清单推导、冲突检测与处理、CommerceSpec 快照。
@@ -351,8 +352,14 @@ export function deliverableHash(deliverables) {
   })));
 }
 
-/** 组装一次 spec 的内容（不落库）。调用方负责 base_version 与租户校验。 */
-export function assembleSpec({ project, truth, template, brandKit, channel, resolutions, textLayout = null, at = new Date() }) {
+/**
+ * 组装一次 spec 的内容（不落库）。调用方负责 base_version 与租户校验。
+ *
+ * perception（可选）：用户确认的感知方向 key。只把 atmosphere/color 两个模板没有的字段
+ * 写进 creative_direction；background/lighting/whitespace/camera 仍由模板决定——用户选方向
+ * 只是在前端预选对应背景的模板，真正的视觉基准始终来自被选中的模板快照，不出现第二套真源。
+ */
+export function assembleSpec({ project, truth, template, brandKit, channel, resolutions, textLayout = null, perception = null, at = new Date() }) {
   const conflicts = detectConflicts({ template, brandKit, channel, truth, at });
   const { deliverables, applied, pending, unresolvable, brandExceptions } = applyResolutions({
     template, brandKit, channel, conflicts, resolutions,
@@ -387,6 +394,22 @@ export function assembleSpec({ project, truth, template, brandKit, channel, reso
     ? 'verified'
     : 'unknown';
 
+  // 感知方向（可选）：用户确认的方向只贡献 atmosphere/color；未知 key 直接拒绝，不静默丢弃。
+  let perceptionPatch = null;
+  if (perception !== null && perception !== undefined) {
+    if (typeof perception !== 'string' || !perception.trim()) {
+      throw new ApiError(422, 'INVALID_PERCEPTION', 'perception 必须是感知方向 key 字符串');
+    }
+    const strategy = resolveVisualStrategy(perception);
+    if (!strategy) {
+      throw new ApiError(422, 'INVALID_PERCEPTION', `未知感知方向「${perception}」`);
+    }
+    perceptionPatch = {
+      atmosphere: strategy.creative_direction.atmosphere,
+      color: strategy.creative_direction.color,
+    };
+  }
+
   return {
     template: {
       id: template.id,
@@ -419,6 +442,7 @@ export function assembleSpec({ project, truth, template, brandKit, channel, reso
     creative_direction: {
       ...structuredClone(template.creative_direction),
       logo_used: (brandKit?.logo?.present ?? false) && deliverables.some(item => item.logo_allowed),
+      ...(perceptionPatch ?? {}),
     },
     deliverables,
     deliverable_hash: deliverableHash(deliverables),
@@ -437,6 +461,7 @@ export function assembleSpec({ project, truth, template, brandKit, channel, reso
       channel_rule_version: channel?.rule?.version ?? null,
       resolutions: applied,
       brand_exceptions: brandExceptions,
+      ...(perceptionPatch ? { perception, perception_version: PERCEPTION_VERSION } : {}),
     },
     conflicts: {
       total: conflicts.length,

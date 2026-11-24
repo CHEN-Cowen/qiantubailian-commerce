@@ -23,7 +23,8 @@ const as = (tenant = 'tenant_a') => ({ 'x-tenant-id': tenant, 'x-actor-id': 'tes
 
 function request(port, route, { method = 'GET', headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
-    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const payload = body === undefined ? null
+      : Buffer.isBuffer(body) ? body : Buffer.from(JSON.stringify(body));
     const req = http.request({
       host: '127.0.0.1', port, path: route, method,
       headers: {
@@ -244,5 +245,122 @@ test('模板投影必须带 background，否则前端背景筛选会恒为空', 
   const covered = new Set(templates.map(item => item.background));
   for (const value of new Set(BACKGROUNDS)) {
     assert.ok(covered.has(value), `没有模板覆盖背景「${value}」，筛选后会是空列表`);
+  }
+});
+
+// ---------- spec 冻结链路：perception 写入 creative_direction ----------
+
+function pngBuffer(width, height) {
+  const header = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(header, 0);
+  header.writeUInt32BE(13, 8);
+  header.write('IHDR', 12, 'latin1');
+  header.writeUInt32BE(width, 16);
+  header.writeUInt32BE(height, 20);
+  header[24] = 8;
+  header[25] = 6;
+  return header;
+}
+
+async function readyProject(port) {
+  const created = await request(port, '/api/projects', {
+    method: 'POST', headers: as(),
+    body: { name: '月光舒缓面霜', sku: 'MC-50', category: '面霜', platform: '天猫' },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.json));
+  const project = created.json.project;
+  const uploaded = await request(port, `/api/projects/${project.id}/assets?role=subject&filename=shot.png`, {
+    method: 'POST', headers: { ...as(), 'Content-Type': 'image/png' }, body: pngBuffer(1200, 1200),
+  });
+  assert.equal(uploaded.status, 201, JSON.stringify(uploaded.json));
+  const confirmed = await request(port, `/api/projects/${project.id}/truth-versions`, {
+    method: 'POST', headers: as(),
+    body: {
+      base_version: 0, confirm: true,
+      facts: [
+        { key: '容量', value: '50g', critical: true, confirmed: true, source_type: 'user_input' },
+        { key: '核心卖点', value: '舒缓维稳', critical: false, confirmed: true, source_type: 'user_input' },
+      ],
+      critical_text: [{ text: '月光舒缓' }],
+    },
+  });
+  assert.equal(confirmed.status, 201, JSON.stringify(confirmed.json));
+  return project;
+}
+
+const freeze = (port, projectId, body) =>
+  request(port, `/api/projects/${projectId}/specs`, { method: 'POST', headers: as(), body });
+
+const LISTING_RESOLUTIONS = {
+  'CHANNEL_PLAIN_WHITE_REQUIRED:main': 'adopt_plain_white',
+  'CHANNEL_BANS_LOGO:main': 'omit_logo_on_main',
+};
+
+test('冻结 spec 时 perception 把 atmosphere/color 写入 creative_direction，依据记入 provenance', async t => {
+  const port = await start(t);
+  const project = await readyProject(port);
+  const response = await freeze(port, project.id, {
+    template_id: 'tpl_listing_pack', base_version: 0,
+    conflict_resolutions: LISTING_RESOLUTIONS,
+    perception: 'natural_comfort',
+  });
+  assert.equal(response.status, 201, JSON.stringify(response.json));
+  const spec = response.json.spec;
+  const expected = resolveVisualStrategy('natural_comfort').creative_direction;
+  // 氛围与色彩来自感知方向
+  assert.equal(spec.creative_direction.atmosphere, expected.atmosphere);
+  assert.deepEqual(spec.creative_direction.color, expected.color);
+  // background 等其余字段仍由模板决定，感知方向不越权改写
+  assert.equal(spec.creative_direction.background, 'scene');
+  assert.equal(Object.hasOwn(spec.creative_direction, 'lighting'), true);
+  // 依据可重放：provenance 记录方向 key 与感知模块版本
+  assert.equal(spec.provenance.perception, 'natural_comfort');
+  assert.equal(spec.provenance.perception_version, 'perception.1');
+});
+
+test('不带 perception 冻结的 spec 与旧行为逐字段一致（无 atmosphere/color/provenance 键）', async t => {
+  const port = await start(t);
+  const project = await readyProject(port);
+  const response = await freeze(port, project.id, {
+    template_id: 'tpl_listing_pack', base_version: 0,
+    conflict_resolutions: LISTING_RESOLUTIONS,
+  });
+  assert.equal(response.status, 201, JSON.stringify(response.json));
+  const spec = response.json.spec;
+  assert.equal(Object.hasOwn(spec.creative_direction, 'atmosphere'), false);
+  assert.equal(Object.hasOwn(spec.creative_direction, 'color'), false);
+  assert.equal(Object.hasOwn(spec.provenance, 'perception'), false);
+});
+
+test('同一配置下带 perception 与不带的 spec 内容哈希不同', async t => {
+  const port = await start(t);
+  const project = await readyProject(port);
+  const withPerception = await freeze(port, project.id, {
+    template_id: 'tpl_listing_pack', base_version: 0,
+    conflict_resolutions: LISTING_RESOLUTIONS, perception: 'natural_comfort',
+  });
+  assert.equal(withPerception.status, 201);
+  // 第二版必须基于最新 head（首版冻结后 head 变为 v1）
+  const base = withPerception.json.spec.version;
+  const without = await freeze(port, project.id, {
+    template_id: 'tpl_listing_pack', base_version: base,
+    conflict_resolutions: LISTING_RESOLUTIONS,
+  });
+  assert.equal(without.status, 201);
+  assert.notEqual(withPerception.json.spec.content_hash, without.json.spec.content_hash);
+});
+
+test('未知感知方向冻结时明确拒绝，不静默丢弃也不猜默认值', async t => {
+  const port = await start(t);
+  const project = await readyProject(port);
+  for (const bad of ['not_a_goal', '', '   ', 123, null]) {
+    const response = await freeze(port, project.id, {
+      template_id: 'tpl_listing_pack', base_version: 0,
+      conflict_resolutions: LISTING_RESOLUTIONS, perception: bad,
+    });
+    // null 与缺省同义：不传就是不用方向，允许；其余一律 422
+    if (bad === null) continue;
+    assert.equal(response.status, 422, `perception=${JSON.stringify(bad)} 应被拒绝`);
+    assert.equal(response.json.error, 'INVALID_PERCEPTION');
   }
 });

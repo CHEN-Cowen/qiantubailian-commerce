@@ -844,3 +844,8 @@ test('风格参考图清单必须满足规范：字段齐全、尺寸合规、�
     assert.ok(size <= 300 * 1024, `${item.file} 体积 ${Math.round(size / 1024)}KB 超过 300KB`);
   }
 });
+
+test('M-V2 感知方向随 spec 冻结下发：specPayload 带 perception，未选时不发', async () => {
+  const wizard = await read('wizard.js');
+  assert.match(wizard, /if \(state\.perceptionKey\) body\.perception = state\.perceptionKey;/);
+});

@@ -4609,7 +4609,7 @@ export function createApi({
     if (resolutions !== null && typeof resolutions !== 'object') {
       throw new ApiError(422, 'INVALID_RESOLUTIONS', 'conflict_resolutions 必须为对象');
     }
-    const payload = assembleSpec({ project, truth, template, brandKit, channel, resolutions, textLayout: body.text_layout ?? null, at: clock() });
+    const payload = assembleSpec({ project, truth, template, brandKit, channel, resolutions, textLayout: body.text_layout ?? null, perception: body.perception ?? null, at: clock() });
 
     if (payload.conflicts.unresolvable.length > 0) {
       throw new ApiError(409, 'SPEC_CONFLICT_UNRESOLVABLE', '存在无法满足的平台硬约束，需要先修改商品事实或换模板', {

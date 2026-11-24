@@ -146,7 +146,7 @@ const state = {
   styleTemplateId: '',  // E2/E3 预选模板（进入第 3 步且目录中存在时套用）
   styleBrandKitId: '',  // E2/E3 预选品牌（进入第 3 步且目录中存在时套用）
   reuseSpec: null,      // E1 沿用 spec 冻结快照（模板/品牌/平台），快照不随品牌 head 漂移
-  perceptionKey: '',    // M-V1 用户选定的感知方向：只用于预选背景，不改交付清单与事实
+  perceptionKey: '',   // M-V2 用户选定的感知方向：预选背景 + 冻结 spec 时写入 atmosphere/color
 };
 
 function showToast(message) {
@@ -1159,6 +1159,7 @@ function renderBrandOptions() {
 
 function specPayload() {
   const body = { template_id: state.templateId, conflict_resolutions: state.resolutions };
+  if (state.perceptionKey) body.perception = state.perceptionKey;
   const platform = $('#wiz-platform').value.trim();
   if (platform) body.platform = platform;
   const brandId = $('#wiz-brand').value;
